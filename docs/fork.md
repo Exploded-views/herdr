@@ -41,6 +41,15 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   permissions, a schedule, a `pull_request_target` trigger, or secrets, unless its jobs are
   guarded to herdrdev/herdr. Record it in [ci.md](ci.md#repository-settings). Never edit the
   upstream workflow file.
+- **Pushing `master` (the upstream mirror merge).** Upstream workflows register with GitHub only
+  on their first trigger, and some unguarded ones fire on pushes to `master`
+  (`label-next-release-issues`, `website-deploy`, `windows-arm64`). So, before any push to
+  `master`:
+  1. Ask the fork's admin in writing, with the planned `master` SHA.
+  2. The admin turns Actions off.
+  3. Push `master`.
+  4. The admin lists the workflows, disables any newly registered one that would act in the
+     fork, and turns Actions back on.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 

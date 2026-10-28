@@ -9,8 +9,8 @@ pushes to `master` and `windows` **and on every pull request**, including pull r
 `integ/next`, so it also runs in the fork once Actions is on (useful Windows coverage, at the
 cost of duplicate minutes).
 
-**Actions is currently disabled on the fork**, so nothing runs yet. Before enabling it, apply
-the repository settings below.
+Actions is enabled on the fork, with SHA-pinned actions required and the upstream workflows
+below disabled. `fork-ci` and CodeQL run.
 
 Fork CI runs on pushes to `integ/**` and `feat/**`, on pull requests into `integ/**`, and
 on manual dispatch. It uses GitHub-hosted runners only, pinned actions (full commit SHAs),
@@ -55,11 +55,13 @@ sitting as enabling Actions, and before any push to `master`:
   - `label-next-release-issues` (issue-writing, needs an upstream secret)
   - `website-deploy` (deploy hook)
   - `build-artifacts-manual` (`actions: write`)
+  - `windows-arm64` (fires on pushes to `master`)
 - Also disable the guarded set, as defence in depth: `pr-gate`, `preview`, `release` and
   `stale-close`.
-- Keep or disable `ci.yml` (Windows coverage against minutes), and `nix`, `distribution` and
-  `windows-arm64` (path-filtered, read-only). That is the owner's call; record the choice
+- Keep or disable `ci.yml` (Windows coverage against minutes), and `nix` and `distribution`
+  (path-filtered, read-only). That is the owner's call; record the choice
   here.
 - Require SHA-pinned actions, and allow only the pinned set.
 - Disabling is keyed by the workflow path, so it survives merges. New upstream workflows
-  arrive enabled, so follow the merge checklist in [fork.md](fork.md).
+  arrive enabled, and register only on their first trigger, so pushes to `master` follow the
+  Actions-off procedure in [fork.md](fork.md).
