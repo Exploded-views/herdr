@@ -5,7 +5,8 @@
 **Exploded-views/herdr** is an unofficial stopgap fork of
 [herdrdev/herdr](https://github.com/herdrdev/herdr). It adds one feature: a pane can refuse
 input (`agent prompt`, `agent send-keys`, `pane send-text`, `pane send-keys`, `pane run`,
-`agent start`, and typing through another pane's TUI client) unless it comes from a sender
+`agent start`, and typing through a TUI client running inside another pane; attach is
+excepted, see the known bypasses) unless it comes from a sender
 on its allow-list. The allow-list is off by default.
 
 The official path is upstream discussion
@@ -33,6 +34,13 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
 - Upstream's own workflows stay as they are. The fork's checks are in
   `.github/workflows/fork-ci.yml`, whose jobs skip in upstream's repository (see
   [ci.md](ci.md)).
+- **Upstream merge checklist.** Upstream workflows arrive *enabled*. After every
+  `git merge upstream/master`, run
+  `git diff --name-status <previous upstream>..upstream/master -- .github/workflows`. Disable
+  (`gh workflow disable`) any new workflow that would act in the fork: one with write
+  permissions, a schedule, a `pull_request_target` trigger, or secrets, unless its jobs are
+  guarded to herdrdev/herdr. Record it in [ci.md](ci.md#repository-settings). Never edit the
+  upstream workflow file.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 
@@ -55,7 +63,8 @@ stop a process that sets out to get around it:
 - Any process can edit herdr's config and restart the server, or edit the protected agent's
   own files (its settings, hooks and instructions).
 - A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
-  `tmux new -d`, `ssh localhost`) and then counts as being outside every pane.
+  `tmux new -d`, any SSH login to the host) and then counts as being outside every pane.
+  Only herdr's own `--machine` route is stamped `remote`.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.
 
@@ -65,8 +74,8 @@ stop a process that sets out to get around it:
 - **Live handoff.** `herdr server live-handoff --import-exe` can swap in a build without the
   allow-list.
 - **Control requests** (close, rename, report-agent on another pane, `server stop`,
-  `server reload-config`, plugin and custom commands) aren't gated. `server stop` is a
-  denial of service, not misrouted input.
+  `server reload-config`, `server ssh-agent register`, plugin and custom commands) aren't
+  gated. `server stop` is a denial of service, not misrouted input.
 - **Reading** another pane's output isn't gated.
 - **Focus.** `pane focus` and `agent focus` can move the TUI's focus to a protected pane
   while you type.

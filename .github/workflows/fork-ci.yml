@@ -1,4 +1,5 @@
-# herdr-fork: fork-only workflow. Every job skips in upstream's repository, and upstream's
+# herdr-fork: fork-only workflow. Every job runs only in Exploded-views/herdr (not upstream,
+# not forks of this fork), and upstream's
 # own workflows are untouched. Linux builds and tests in the same image local runs use
 # (fork-ci.Dockerfile via scripts/fork/linux-test.sh); macOS runs natively, mirroring
 # upstream ci.yml. Unofficial stopgap; see FORK.md and docs/ci.md.
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   linux:
-    if: github.repository_owner != 'herdrdev'
+    if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -35,7 +36,7 @@ jobs:
         run: scripts/fork/linux-test.sh just ci
 
   macos:
-    if: github.repository_owner != 'herdrdev'
+    if: github.repository == 'Exploded-views/herdr'
     runs-on: macos-latest
     timeout-minutes: 45
     permissions:

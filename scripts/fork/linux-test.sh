@@ -13,17 +13,33 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 dockerfile="$root/.github/workflows/fork-ci.Dockerfile"
 image="herdr-fork-linux:$(git -C "$root" hash-object "$dockerfile" | cut -c1-12)"
-vols=(-v herdr-fork-cargo:/cargo -v herdr-fork-target:/target -v herdr-fork-zig:/zig)
+# Zig 0.16 unpacks dependencies into <project>/zig-pkg, inside the read-only checkout, so that
+# directory (gitignored upstream) gets its own volume. Docker can't create a mountpoint inside a
+# read-only bind, so the empty directory is made on the host first.
+zigpkg=vendor/libghostty-vt/zig-pkg
+mkdir -p "$root/$zigpkg"
+vols=(-v herdr-fork-cargo:/cargo -v herdr-fork-target:/target -v herdr-fork-zig:/zig
+      -v "herdr-fork-zigpkg:/src/$zigpkg")
 envs=(-e CARGO_HOME=/cargo -e CARGO_TARGET_DIR=/target
       -e ZIG_GLOBAL_CACHE_DIR=/zig/global -e ZIG_LOCAL_CACHE_DIR=/zig/local
-      -e CARGO_PROFILE_DEV_DEBUG=1 -e CARGO_PROFILE_TEST_DEBUG=1)
+      -e CARGO_PROFILE_DEV_DEBUG=1 -e CARGO_PROFILE_TEST_DEBUG=1
+      # git refuses a checkout owned by another uid; the bind mount's owner can differ from --user.
+      -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src)
 user=(--user "$(id -u):$(id -g)")
-run() { docker run --rm "${user[@]}" "${vols[@]}" "${envs[@]}" -v "$root:/src:ro" -w /src "$@"; }
+# --init forwards signals to the build; the trap stops the container when this script is killed
+# (for example by the heavy lock's timeout), since killing the docker CLI alone leaves it running.
+name="herdr-fork-$$"
+trap 'docker kill "$name" >/dev/null 2>&1 || true' EXIT INT TERM
+run() {
+  docker run --rm --init --name "$name" --cap-drop ALL --security-opt no-new-privileges \
+    "${user[@]}" "${vols[@]}" "${envs[@]}" -v "$root:/src:ro" -w /src "$@"
+}
 
 if [[ ${1:-} == --fetch ]]; then
   docker build -t "$image" -f "$dockerfile" "$root/.github/workflows"
   # Fresh named volumes are root-owned; hand them to the caller's uid once.
-  docker run --rm "${vols[@]}" "$image" chown -R "$(id -u):$(id -g)" /cargo /target /zig
+  docker run --rm --user 0 "${vols[@]}" -v "$root:/src:ro" "$image" \
+    chown -R "$(id -u):$(id -g)" /cargo /target /zig "/src/$zigpkg"
   run "$image" cargo fetch --locked
   # A networked build warms the Zig package cache, which cargo fetch does not touch.
   run "$image" cargo build --locked --all-targets
