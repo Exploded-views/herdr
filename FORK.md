@@ -18,6 +18,22 @@ This fork is built by AI coding agents (Claude) under its owner's supervision. I
 a `Co-Authored-By` trailer. herdr's AGENTS.md rule against AI co-author lines governs
 contributions to upstream; this fork sends none.
 
+## Build notes
+
+Native macOS builds use the same pinned tools as upstream's CI. Each one sits outside the
+system paths and goes on `PATH` only for herdr build and test commands:
+
+- Zig `0.16.0`: the official tarball, sha256-checked, unpacked into its own directory
+  (`crates/ghostty-vt/build.rs` runs `zig build`).
+- Bun `1.3.14`: the official release zip, sha256-checked against the published
+  `SHASUMS256.txt`, kept in its own directory beside any other Bun install (`just ci` runs Bun
+  suites).
+- `just` `1.58.0` and `cargo-nextest` `0.9.148`, via `cargo install --locked`.
+- Rust `1.96.1` from `rust-toolchain.toml`.
+
+Linux builds and tests use `.github/workflows/fork-ci.Dockerfile` (see
+[docs/ci.md](docs/ci.md)), the same image fork CI uses.
+
 ## Changed files
 
 Every file the fork adds or changes, with the reason. Files the fork changes carry a
