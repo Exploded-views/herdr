@@ -1,3 +1,11 @@
+> **Unofficial stopgap fork of herdr** (Exploded-views/herdr). It is adding a per-pane
+> input allow-list, so a pane can refuse prompts and keystrokes from other panes. The
+> official path is upstream discussion
+> [herdrdev/herdr#5638](https://github.com/herdrdev/herdr/discussions/5638); this fork is
+> dropped the moment upstream ships an equivalent. It is not affiliated with or endorsed
+> by herdr's maintainers. Please don't report fork issues upstream. See
+> [docs/fork.md](docs/fork.md) and [FORK.md](FORK.md).
+
 # herdr
 
 

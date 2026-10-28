@@ -15,6 +15,10 @@ __pycache__/
 !/docs/preview/**
 !/docs/versions/
 !/docs/versions/**
+# herdr-fork: fork-only docs (see FORK.md)
+!/docs/fork.md
+!/docs/ci.md
+!/docs/releases.md
 /.local/
 /backlog
 

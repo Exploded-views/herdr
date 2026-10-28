@@ -1,0 +1,75 @@
+# This fork: a per-pane input allow-list for herdr
+
+<!-- herdr-fork: fork-only file. Unofficial stopgap; see ../FORK.md. -->
+
+**Exploded-views/herdr** is an unofficial stopgap fork of
+[herdrdev/herdr](https://github.com/herdrdev/herdr). It adds one feature: a pane can refuse
+input (`agent prompt`, `agent send-keys`, `pane send-text`, `pane send-keys`, `pane run`,
+`agent start`, and typing through another pane's TUI client) unless it comes from a sender
+on its allow-list. The allow-list is off by default.
+
+The official path is upstream discussion
+[#5638](https://github.com/herdrdev/herdr/discussions/5638). herdr does not accept
+unsolicited pull requests, and this fork proposes none. It is dropped the moment upstream
+ships an equivalent.
+
+Every changed file is listed in [../FORK.md](../FORK.md). Fork CI is in [ci.md](ci.md),
+releases in [releases.md](releases.md), and user-visible changes in
+[../FORK-CHANGELOG.md](../FORK-CHANGELOG.md).
+
+## Relationship to upstream
+
+The fork is under the same **Apache License 2.0** as upstream; `LICENSE` is unchanged.
+Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes say so in a
+`herdr-fork:` note at the top, as the licence's section 4(b) asks.
+
+- `master` mirrors upstream's `master` and carries no fork changes. (Upstream's default
+  branch is `master`, so the mirror keeps that name.)
+- `integ/next` holds the fork's work. It is the repository's default branch.
+- Upstream changes come in by **merge** into `integ/next`, never by rebase or force-push.
+- Nothing is ever pushed upstream. The local `upstream` remote's push URL is
+  `DISABLED-never-push-upstream`.
+- Releases are tagged from `integ/next` as `vX.Y.Z-ev.N` (see [releases.md](releases.md)).
+- Upstream's own workflows stay as they are. The fork's checks are in
+  `.github/workflows/fork-ci.yml`, whose jobs skip in upstream's repository (see
+  [ci.md](ci.md)).
+- Self-update is disabled in fork builds, because `herdr update` would hand the running
+  server over to an upstream binary without the allow-list.
+
+### One deviation from the fork standard: FORK-CHANGELOG.md
+
+The fork standard keeps fork changes in `CHANGELOG.md`. herdr's maintainers curate and
+rewrite `CHANGELOG.md` at every release, so fork entries there would conflict on every
+upstream sync. Fork changes therefore live in [../FORK-CHANGELOG.md](../FORK-CHANGELOG.md),
+labelled *upstream candidate* or *fork-only*, and upstream's `CHANGELOG.md` is untouched.
+The label describes the change; it is not a plan to send it upstream.
+
+## Limits
+
+At one uid, this is a guardrail against **misrouted input from cooperative agents**, not a
+security boundary. Every agent runs as the same user as the herdr server, so the fork can't
+stop a process that sets out to get around it:
+
+- Any process can read a caller's token file and send input as that caller, but only to the
+  one pane that token is bound to.
+- Any process can edit herdr's config and restart the server, or edit the protected agent's
+  own files (its settings, hooks and instructions).
+- A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
+  `tmux new -d`, `ssh localhost`) and then counts as being outside every pane.
+- "The human" can't be identified. A client outside every pane is treated as the human, and
+  a daemonized process looks the same.
+
+**Known bypasses in v1.** These are scheduled for v1.1 or left to upstream:
+
+- **Attach.** `herdr agent attach` from inside a pane can still type into a protected pane.
+- **Live handoff.** `herdr server live-handoff --import-exe` can swap in a build without the
+  allow-list.
+- **Control requests** (close, rename, report-agent on another pane, `server stop`,
+  `server reload-config`, plugin and custom commands) aren't gated. `server stop` is a
+  denial of service, not misrouted input.
+- **Reading** another pane's output isn't gated.
+- **Focus.** `pane focus` and `agent focus` can move the TUI's focus to a protected pane
+  while you type.
+
+The full design, including what a real boundary would take (the bridge under its own uid),
+is kept privately.
