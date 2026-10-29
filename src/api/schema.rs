@@ -17,7 +17,7 @@ pub mod workspaces;
 pub mod worktrees;
 
 // Used by the access gate (Task 7); unused outside tests until then.
-#[allow(unused_imports)]
+#[cfg_attr(not(test), expect(unused_imports))]
 pub(crate) use operations::AccessClass;
 
 pub use agents::*;

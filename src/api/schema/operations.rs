@@ -20,7 +20,7 @@ pub(crate) struct Operation {
     pub changes_ui: bool,
     pub client_shell: bool,
     // Read by the access gate (Task 7); only tests read it until then.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub access: AccessClass,
 }
 
@@ -224,6 +224,70 @@ mod tests {
             "pane.clear_agent_authority",
             "pane.release_agent",
         ];
+        let meta = [
+            "ping",
+            "server.agent_manifests",
+            "server.reload_agent_manifests",
+            "notification.show",
+            "product_announcement.dismiss",
+            "release_notes.dismiss",
+            "client.window_title.set",
+            "client.window_title.clear",
+            "client_shell.surface.set",
+            "session.snapshot",
+            "workspace.create",
+            "workspace.list",
+            "workspace.get",
+            "workspace.focus",
+            "workspace.rename",
+            "workspace.move",
+            "workspace.move_block",
+            "workspace.report_metadata",
+            "worktree.list",
+            "worktree.create",
+            "worktree.open",
+            "tab.create",
+            "tab.list",
+            "tab.get",
+            "tab.focus",
+            "tab.rename",
+            "tab.move",
+            "agent.list",
+            "agent.get",
+            "agent.view.set",
+            "agent.view.clear",
+            "agent.focus",
+            "agent.wait",
+            "pane.split",
+            "pane.swap",
+            "pane.move",
+            "pane.zoom",
+            "pane.layout",
+            "pane.process_info",
+            "layout.export",
+            "layout.set_split_ratio",
+            "pane.neighbor",
+            "pane.edges",
+            "pane.focus_direction",
+            "pane.resize",
+            "pane.scroll",
+            "pane.list",
+            "pane.current",
+            "pane.get",
+            "pane.focus",
+            "pane.input.set",
+            "pane.link.activate",
+            "popup.close",
+            "integration.list",
+            "plugin.list",
+            "plugin.unlink",
+            "plugin.disable",
+            "plugin.action.list",
+            "plugin.log.list",
+            "plugin.pane.open",
+            "plugin.pane.focus",
+            "plugin.pane.close",
+        ];
         for operation in Method::OPERATIONS {
             let expected = if input.contains(&operation.name) {
                 AccessClass::Input
@@ -231,13 +295,18 @@ mod tests {
                 AccessClass::Read
             } else if control.contains(&operation.name) {
                 AccessClass::Control
-            } else {
+            } else if meta.contains(&operation.name) {
                 AccessClass::Meta
+            } else {
+                panic!(
+                    "{} is in no access list; it needs triage into Input, Read, Control or Meta",
+                    operation.name
+                );
             };
             assert_eq!(operation.access, expected, "{}", operation.name);
         }
         let names: BTreeSet<_> = Method::OPERATIONS.iter().map(|o| o.name).collect();
-        for listed in input.iter().chain(&read).chain(&control) {
+        for listed in input.iter().chain(&read).chain(&control).chain(&meta) {
             assert!(names.contains(listed), "unknown operation {listed}");
         }
     }
