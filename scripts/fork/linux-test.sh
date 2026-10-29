@@ -11,6 +11,11 @@
 # named volumes, so nothing is written into the checkout. Runs as the caller's uid.
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
+# A worktree's .git file points at a repo outside the mount, so git fails in the container.
+if [[ -f $root/.git ]]; then
+  echo "linux-test.sh: run from a full clone, not a git worktree" >&2
+  exit 2
+fi
 dockerfile="$root/.github/workflows/fork-ci.Dockerfile"
 image="herdr-fork-linux:$(git -C "$root" hash-object "$dockerfile" | cut -c1-12)"
 # Zig 0.16 unpacks dependencies into <project>/zig-pkg, inside the read-only checkout, so that
