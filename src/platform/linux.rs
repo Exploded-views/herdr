@@ -701,14 +701,12 @@ fn process_job_stat(pid: u32) -> Option<ProcessJobStat> {
 }
 
 fn process_job_stat_from_stat(stat: &str) -> Option<ProcessJobStat> {
-    let rest = stat.get(stat.rfind(')')? + 2..)?;
-    let fields: Vec<&str> = rest.split_whitespace().collect();
-    // After (comm): state(0) ppid(1) pgrp(2) session(3) ... starttime(19)
+    let fields = stat_fields_after_comm(stat)?;
     Some(ProcessJobStat {
         state: fields.first()?.chars().next()?,
         pgrp: fields.get(2)?.parse().ok()?,
         session: fields.get(3)?.parse().ok()?,
-        start_time: fields.get(19)?.parse().ok()?,
+        start_time: fields.get(STAT_STARTTIME)?.parse().ok()?,
     })
 }
 
@@ -740,21 +738,35 @@ pub(super) fn process_link_info(pid: u32) -> Option<super::LinkInfo> {
 fn link_info_from_stat(stat: &str) -> Option<super::LinkInfo> {
     let close = stat.rfind(')')?;
     let name = stat.get(1 + stat.find('(')?..close)?.to_string();
-    let fields: Vec<&str> = stat.get(close + 2..)?.split_whitespace().collect();
-    // After (comm): state(0) ppid(1) ... starttime(19)
+    let fields = stat_fields_after_comm(stat)?;
     Some(super::LinkInfo {
         name,
-        ppid: fields.get(1)?.parse().ok()?,
-        start_token: fields.get(19)?.parse().ok()?,
+        ppid: fields.get(STAT_PPID)?.parse().ok()?,
+        start_token: fields.get(STAT_STARTTIME)?.parse().ok()?,
         parent_ref: 0,
     })
 }
 
+/// Index of ppid and starttime in the fields after `(comm)`:
+/// state(0) ppid(1) pgrp(2) session(3) ... starttime(19).
+const STAT_PPID: usize = 1;
+const STAT_STARTTIME: usize = 19;
+
+/// The whitespace-separated fields after the last `)` of a stat line, so a
+/// comm holding spaces or parentheses can't shift them.
+fn stat_fields_after_comm(stat: &str) -> Option<Vec<&str>> {
+    Some(
+        stat.get(stat.rfind(')')? + 2..)?
+            .split_whitespace()
+            .collect(),
+    )
+}
+
 /// A parent can't have started after its child; a pid reused by a newer
-/// process fails this.
+/// process fails this. A zero start time is a failed parse, never a process.
 #[allow(dead_code)]
 pub(super) fn verify_link(parent: &super::LinkInfo, child: &super::LinkInfo) -> bool {
-    parent.start_token <= child.start_token
+    parent.start_token != 0 && child.start_token != 0 && parent.start_token <= child.start_token
 }
 
 fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {
@@ -1189,6 +1201,38 @@ fn process_session_id(pid: u32) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn link(start_token: u64) -> crate::platform::LinkInfo {
+        crate::platform::LinkInfo {
+            name: "x".into(),
+            ppid: 1,
+            start_token,
+            parent_ref: 0,
+        }
+    }
+
+    #[test]
+    fn linux_link_check_rejects_parent_started_after_child() {
+        assert!(!verify_link(&link(201), &link(200)));
+        assert!(verify_link(&link(200), &link(200)));
+        assert!(verify_link(&link(100), &link(200)));
+        // A zero start time is a failed parse, not a process.
+        assert!(!verify_link(&link(0), &link(200)));
+        assert!(!verify_link(&link(100), &link(0)));
+    }
+
+    #[test]
+    fn linux_stat_parse_reads_ppid_and_starttime() {
+        // comm holds spaces and ')'; starttime is field 22 overall.
+        let stat = "1234 (a) b (c)) S 77 1234 1234 34816 1234 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000000 200 18446744073709551615";
+        let info = link_info_from_stat(stat).expect("parse");
+        assert_eq!(info.name, "a) b (c)");
+        assert_eq!(info.ppid, 77);
+        assert_eq!(info.start_token, 987654);
+        let job = process_job_stat_from_stat(stat).expect("parse");
+        assert_eq!(job.start_time, 987654);
+        assert!(link_info_from_stat("1234 (a) S 77").is_none());
+    }
     use std::sync::{Mutex, OnceLock};
     use std::{cell::RefCell, collections::HashMap};
 

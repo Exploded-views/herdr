@@ -54,7 +54,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/api/schema.rs` | changed | Access class on every row of the operation table; re-exports `AccessClass` |
 | `src/platform/mod.rs` | changed | `ProcessIdentity`, `PeerLineage`, `LinkInfo` and the ssh-server name set; lineage entry points |
 | `src/platform/unix_common.rs` | changed | The peer lineage walk, `random_secret` |
-| `src/platform/macos.rs` | changed | `p_uniqueid` link info and link check (`proc_bsdinfowithuniqid`) |
+| `src/platform/macos.rs` | changed | `p_uniqueid` link info (proc_pidinfo flavors 13 and 17, readable on root-owned processes) and link check |
 | `src/platform/linux.rs` | changed | `/proc` ppid and start-time link info and link check |
 | `src/platform/fallback.rs` | changed | Lineage stubs |
 

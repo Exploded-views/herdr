@@ -1,4 +1,4 @@
-// herdr-fork: process_link_info/verify_link (p_uniqueid ancestry) for peer lineage. Unofficial stopgap; see FORK.md.
+// herdr-fork: process_link_info/verify_link (p_uniqueid ancestry via proc_pidinfo flavors 13 and 17) for peer lineage. Unofficial stopgap; see FORK.md.
 use std::ffi::OsStr;
 use std::io::Write;
 use std::os::fd::RawFd;
@@ -971,68 +971,91 @@ pub(super) fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
     Some((comm_from_bsdinfo(&info)?, info.pbi_ppid))
 }
 
-#[allow(dead_code)]
-const PROC_PIDT_BSDINFOWITHUNIQID: libc::c_int = 18;
+/// `PROC_PIDUNIQIDENTIFIERINFO`. Like `PROC_PIDT_SHORTBSDINFO` it is exempt
+/// from the same-user check, so it works on root-owned processes (login,
+/// sshd, launchd) where `PROC_PIDT_BSDINFOWITHUNIQID` returns nothing.
+const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
 
 /// `struct proc_uniqidentifierinfo` from <sys/proc_info.h>; the libc crate
 /// doesn't carry it.
 #[repr(C)]
 pub(super) struct ProcUniqIdentifierInfo {
     p_uuid: [u8; 16],
-    p_uniqueid: u64,
-    p_puniqueid: u64,
+    pub(super) p_uniqueid: u64,
+    pub(super) p_puniqueid: u64,
     p_idversion: i32,
     p_orig_ppidversion: i32,
     p_reserve2: u64,
     p_reserve3: u64,
 }
 
-/// `struct proc_bsdinfowithuniqid`.
-#[repr(C)]
-pub(super) struct ProcBsdInfoWithUniqId {
-    pbsd: libc::proc_bsdinfo,
-    p_uniqidentifier: ProcUniqIdentifierInfo,
-}
-
-/// Name, parent pid and the two unique ids that make a parent link
-/// verifiable: pids are reused, `p_uniqueid` is not.
-#[allow(dead_code)]
-pub(super) fn process_link_info(pid: u32) -> Option<super::LinkInfo> {
-    let mut info: ProcBsdInfoWithUniqId = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<ProcBsdInfoWithUniqId>() as libc::c_int;
+fn process_uniqinfo(pid: u32) -> Option<ProcUniqIdentifierInfo> {
+    let mut info: ProcUniqIdentifierInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<ProcUniqIdentifierInfo>() as libc::c_int;
     // SAFETY: `info` is a writable buffer of exactly `size` bytes.
     let ret = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
-            PROC_PIDT_BSDINFOWITHUNIQID,
+            PROC_PIDUNIQIDENTIFIERINFO,
             0,
             &mut info as *mut _ as *mut libc::c_void,
             size,
         )
     };
-    if ret != size {
-        // launchd is owned by root and `proc_pidinfo` refuses it for other
-        // users. Its `p_uniqueid` is always 1, so a child whose recorded
-        // parent id is 1 still verifies against this stand-in.
-        return (pid == 1).then(|| super::LinkInfo {
-            name: "launchd".to_string(),
-            ppid: 0,
-            start_token: 1,
-            parent_ref: 0,
-        });
+    (ret == size).then_some(info)
+}
+
+fn process_shortbsdinfo(pid: u32) -> Option<libc::proc_bsdshortinfo> {
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+    // SAFETY: `info` is a writable buffer of exactly `size` bytes.
+    let ret = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    (ret == size).then_some(info)
+}
+
+/// Name, parent pid and the two unique ids that make a parent link
+/// verifiable: pids are reused, `p_uniqueid` is not. Both reads work on
+/// processes of other users. The unique id is read before and after the
+/// name and parent, and a change between the two means the process was
+/// replaced mid-read, so the hop is unreadable.
+#[allow(dead_code)]
+pub(super) fn process_link_info(pid: u32) -> Option<super::LinkInfo> {
+    let before = process_uniqinfo(pid)?;
+    let short = process_shortbsdinfo(pid)?;
+    let after = process_uniqinfo(pid)?;
+    if before.p_uniqueid != after.p_uniqueid {
+        return None;
     }
+    let end = short
+        .pbsi_comm
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(short.pbsi_comm.len());
+    let name = String::from_utf8(short.pbsi_comm[..end].iter().map(|&b| b as u8).collect()).ok()?;
     Some(super::LinkInfo {
-        name: comm_from_bsdinfo(&info.pbsd).unwrap_or_default(),
-        ppid: info.pbsd.pbi_ppid,
-        start_token: info.p_uniqidentifier.p_uniqueid,
-        parent_ref: info.p_uniqidentifier.p_puniqueid,
+        name,
+        ppid: short.pbsi_ppid,
+        start_token: before.p_uniqueid,
+        parent_ref: before.p_puniqueid,
     })
 }
 
-/// A child's recorded parent unique id must be the parent's own.
+/// A child's recorded parent unique id must be the parent's own. Zero is
+/// never a real unique id, so it verifies nothing.
 #[allow(dead_code)]
 pub(super) fn verify_link(parent: &super::LinkInfo, child: &super::LinkInfo) -> bool {
-    parent.start_token == child.parent_ref
+    parent.start_token != 0
+        && child.start_token != 0
+        && child.parent_ref != 0
+        && parent.start_token == child.parent_ref
 }
 
 fn process_bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {

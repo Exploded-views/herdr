@@ -167,6 +167,11 @@ pub(crate) struct ProcessIdentity {
 /// `complete` is true only when the walk reached pid 1 with every link
 /// verified and the peer's start token unchanged after the walk. Anything
 /// less must be treated as unknown, never as "outside every pane".
+///
+/// The kernel records the peer pid at `connect()`. If that process exits and
+/// the pid is reused before the walk's first read, both reads see the
+/// newcomer and the re-read of the peer token can't notice: it only catches
+/// replacement during the walk.
 // Read by the access classifier in a later task.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -174,7 +179,11 @@ pub(crate) struct PeerLineage {
     pub chain: Vec<ProcessIdentity>,
     pub complete: bool,
     /// Some process in the chain, `chain[0]` included, is a remote-login
-    /// server or tunnel daemon (see `is_ssh_server_name`).
+    /// server or tunnel daemon (see `is_ssh_server_name`). When `complete`
+    /// is false this is a lower bound: the unread part of the chain may hold
+    /// one. Names are chosen by the process itself, so a process can make
+    /// this true; callers may use it only to restrict access, never to
+    /// grant it.
     pub via_ssh: bool,
 }
 
@@ -1346,11 +1355,34 @@ mod tests {
     fn uniqinfo_struct_size_matches_kernel() {
         assert_eq!(std::mem::size_of::<macos::ProcUniqIdentifierInfo>(), 56);
         assert_eq!(
-            std::mem::size_of::<macos::ProcBsdInfoWithUniqId>(),
-            std::mem::size_of::<libc::proc_bsdinfo>() + 56
+            std::mem::offset_of!(macos::ProcUniqIdentifierInfo, p_uniqueid),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(macos::ProcUniqIdentifierInfo, p_puniqueid),
+            24
         );
         // The kernel fills exactly this many bytes for our own pid.
-        assert!(macos::process_link_info(std::process::id()).is_some());
+        let mut info: macos::ProcUniqIdentifierInfo = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is a writable buffer of exactly 56 bytes.
+        let ret = unsafe {
+            libc::proc_pidinfo(
+                std::process::id() as libc::c_int,
+                17,
+                0,
+                &mut info as *mut _ as *mut libc::c_void,
+                56,
+            )
+        };
+        assert_eq!(ret, 56);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn lineage_reads_root_owned_launchd() {
+        let launchd = macos::process_link_info(1).expect("pid 1 readable");
+        assert_ne!(launchd.start_token, 0);
+        assert_eq!(launchd.name, "launchd");
     }
 
     #[cfg(target_os = "macos")]
@@ -1371,6 +1403,17 @@ mod tests {
         assert!(verify_link(&parent, &child));
         child.parent_ref = 101;
         assert!(!verify_link(&parent, &child));
+        // Zero tokens verify nothing, even against each other.
+        let zero = LinkInfo {
+            start_token: 0,
+            ..parent.clone()
+        };
+        let orphan = LinkInfo {
+            parent_ref: 0,
+            ..child.clone()
+        };
+        assert!(!verify_link(&zero, &orphan));
+        assert!(!verify_link(&zero, &child));
     }
 }
 
