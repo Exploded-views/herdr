@@ -1,14 +1,31 @@
+// herdr-fork: adds AccessClass and Operation.access (per-operation access class). Unofficial stopgap; see FORK.md.
 use std::sync::LazyLock;
+
+/// How much a caller can do through an operation, used to gate requests per pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessClass {
+    /// Sends input to a pane or starts an agent that receives input.
+    Input,
+    /// Reads pane or agent content, or subscribes to output.
+    Read,
+    /// Changes server, layout, plugin or pane state.
+    Control,
+    /// Everything else: listings, focus, identity and bookkeeping.
+    Meta,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Operation {
     pub name: &'static str,
     pub changes_ui: bool,
     pub client_shell: bool,
+    // Read by the access gate (Task 7); only tests read it until then.
+    #[allow(dead_code)]
+    pub access: AccessClass,
 }
 
 macro_rules! define_operations {
-    ($( $variant:ident($params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal; )*) => {
+    ($( $variant:ident($params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal, $access:ident; )*) => {
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
         #[serde(tag = "method", content = "params")]
         // Request enums are short-lived wire values; keeping variants direct preserves
@@ -24,6 +41,7 @@ macro_rules! define_operations {
                     name: $name,
                     changes_ui: $changes_ui,
                     client_shell: $client_shell,
+                    access: operations::AccessClass::$access,
                 },)*
             ];
 
@@ -33,6 +51,7 @@ macro_rules! define_operations {
                         name: $name,
                         changes_ui: $changes_ui,
                         client_shell: $client_shell,
+                        access: operations::AccessClass::$access,
                     },)*
                 }
             }
@@ -130,6 +149,14 @@ mod tests {
             .unwrap_or_else(|error| panic!("sample for {name}: {error}"));
             let operation = request.method.operation();
             assert_eq!(operation.name, name);
+            assert_eq!(
+                operation.access,
+                Method::OPERATIONS
+                    .iter()
+                    .find(|candidate| candidate.name == name)
+                    .unwrap()
+                    .access
+            );
             assert_eq!(crate::api::api_method_name(&request.method), name);
             assert_eq!(serde_json::to_value(&request).unwrap()["method"], name);
             assert_eq!(
@@ -144,6 +171,74 @@ mod tests {
                 crate::server::client_commands::supports_client_shell_method_name(name),
                 operation.client_shell
             );
+        }
+    }
+
+    #[test]
+    fn operation_access_classes_match_policy_table() {
+        use super::super::AccessClass;
+
+        let input = [
+            "agent.send_keys",
+            "agent.start",
+            "agent.prompt",
+            "pane.send_text",
+            "pane.send_keys",
+            "pane.send_input",
+        ];
+        let read = [
+            "agent.read",
+            "agent.explain",
+            "pane.read",
+            "pane.selection.read",
+            "pane.copy_motion",
+            "pane.copy_search",
+            "pane.edit_scrollback",
+            "pane.link.resolve",
+            "pane.wait_for_output",
+            "events.subscribe",
+            "events.wait",
+        ];
+        let control = [
+            "server.stop",
+            "server.live_handoff",
+            "server.reload_config",
+            "server.ssh_agent.register",
+            "command.invoke",
+            "plugin.link",
+            "plugin.enable",
+            "plugin.action.invoke",
+            "integration.install",
+            "integration.uninstall",
+            "layout.apply",
+            "worktree.remove",
+            "workspace.close",
+            "tab.close",
+            "pane.close",
+            "pane.clear",
+            "pane.rename",
+            "agent.rename",
+            "pane.report_agent",
+            "pane.report_agent_session",
+            "pane.report_metadata",
+            "pane.clear_agent_authority",
+            "pane.release_agent",
+        ];
+        for operation in Method::OPERATIONS {
+            let expected = if input.contains(&operation.name) {
+                AccessClass::Input
+            } else if read.contains(&operation.name) {
+                AccessClass::Read
+            } else if control.contains(&operation.name) {
+                AccessClass::Control
+            } else {
+                AccessClass::Meta
+            };
+            assert_eq!(operation.access, expected, "{}", operation.name);
+        }
+        let names: BTreeSet<_> = Method::OPERATIONS.iter().map(|o| o.name).collect();
+        for listed in input.iter().chain(&read).chain(&control) {
+            assert!(names.contains(listed), "unknown operation {listed}");
         }
     }
 
