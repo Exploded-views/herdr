@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/opt/cargo \
     PATH=/opt/cargo/bin:/opt/zig:/opt/bun:$PATH
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip git build-essential pkg-config python3 bsdutils \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip git build-essential pkg-config python3 bsdutils openssh-client \
  && rm -rf /var/lib/apt/lists/*
 RUN set -eu; \
     case "$TARGETARCH" in \
