@@ -50,6 +50,11 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   3. Push `master`.
   4. The admin lists the workflows, disables any newly registered one that would act in the
      fork, and turns Actions back on.
+- **The one default-on addition: the input-origin log** (lands with the v1 input-log task).
+  Every node records who sent each pane input (the path, the sender's class, the client, the
+  host kind and the byte count; never the content) to a local file, mode 0600, capped at about
+  2.5 MiB. Every other fork feature is off by default. The owner's decision, verbatim: "keep it
+  on" (2026-10-28). `[access] input_log = false` turns it off.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 
