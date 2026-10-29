@@ -1,3 +1,4 @@
+// herdr-fork: self-update and background update checks disabled (FORK_BUILD). Unofficial stopgap; see FORK.md.
 //! Self-update mechanism.
 //!
 //! Checks the hosted herdr.dev update manifest for newer versions.
@@ -30,6 +31,9 @@ const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
 const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
 const NIX_UPDATE_COMMAND: &str = "update through Nix";
 const MISE_INSTALLS_DIR_ENV: &str = "MISE_INSTALLS_DIR";
+/// Fork builds never self-update or check for updates.
+const FORK_BUILD: bool = true;
+const FORK_SELF_UPDATE_DISABLED: &str = "self-update is disabled in this fork build (Exploded-views/herdr, unofficial stopgap); install a newer fork build instead. See docs/releases.md.";
 const FAKE_UPDATE_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_VERSION";
 const FAKE_UPDATE_NOTES_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_NOTES_VERSION";
 const DEFAULT_FAKE_UPDATE_NOTES_VERSION: &str = "0.3.0";
@@ -2181,6 +2185,10 @@ fn preserve_preview_channel_for_install(
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if FORK_BUILD {
+        return Err(FORK_SELF_UPDATE_DISABLED.into());
+    }
+
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2425,6 +2433,9 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 /// Background update check: only surface availability and release notes.
 /// Runs in a background thread at startup.
 pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+    if FORK_BUILD {
+        return;
+    }
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
@@ -3076,6 +3087,31 @@ mod tests {
         let path = Path::new("/opt/mise-tools/installs/herdr/0.6.6/bin/herdr");
 
         assert!(is_mise_managed_exe_path(path));
+    }
+
+    #[test]
+    fn self_update_is_disabled_in_fork_build() {
+        let err = self_update(SelfUpdateOptions::default()).unwrap_err();
+
+        assert!(err.contains("disabled in this fork build"), "{err}");
+    }
+
+    #[test]
+    fn auto_update_sends_no_events_in_fork_build() {
+        let _guard = env_lock().lock().unwrap();
+        let previous = std::env::var_os(FAKE_UPDATE_VERSION_ENV);
+        std::env::set_var(FAKE_UPDATE_VERSION_ENV, "9.9.9");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+        auto_update(tx);
+
+        let received = rx.try_recv().is_err();
+        if let Some(previous) = previous {
+            std::env::set_var(FAKE_UPDATE_VERSION_ENV, previous);
+        } else {
+            std::env::remove_var(FAKE_UPDATE_VERSION_ENV);
+        }
+        assert!(received, "auto_update sent an event in a fork build");
     }
 
     #[test]

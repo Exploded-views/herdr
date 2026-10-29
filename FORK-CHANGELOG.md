@@ -14,3 +14,4 @@ a plan to send it upstream, and nothing has been proposed upstream.
 
 - Fork documentation, fork CI, and a Linux build and test image shared by CI and local
   runs. *fork-only*
+- Self-update is disabled. *fork-only*

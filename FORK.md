@@ -49,6 +49,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `.github/workflows/fork-ci.yml` | new | Fork CI; every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
+| `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 
 ## Limits
 
