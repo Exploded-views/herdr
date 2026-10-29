@@ -26,10 +26,15 @@ envs=(-e CARGO_HOME=/cargo -e CARGO_TARGET_DIR=/target
       # git refuses a checkout owned by another uid; the bind mount's owner can differ from --user.
       -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src)
 user=(--user "$(id -u):$(id -g)")
+# ssh refuses to run for a uid with no passwd entry, so the caller's uid gets one (home /tmp).
+ids=$(mktemp -d)
+printf 'root:x:0:0:root:/root:/bin/bash\ndev:x:%s:%s:dev:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$ids/passwd"
+printf 'root:x:0:\ndev:x:%s:\n' "$(id -g)" >"$ids/group"
+user+=(-v "$ids/passwd:/etc/passwd:ro" -v "$ids/group:/etc/group:ro" -e HOME=/tmp)
 # --init forwards signals to the build; the trap stops the container when this script is killed
 # (for example by the heavy lock's timeout), since killing the docker CLI alone leaves it running.
 name="herdr-fork-$$"
-trap 'docker kill "$name" >/dev/null 2>&1 || true' EXIT INT TERM
+trap 'docker kill "$name" >/dev/null 2>&1 || true; rm -r "$ids"' EXIT INT TERM
 run() {
   docker run --rm --init --name "$name" --cap-drop ALL --security-opt no-new-privileges \
     "${user[@]}" "${vols[@]}" "${envs[@]}" -v "$root:/src:ro" -w /src "$@"
