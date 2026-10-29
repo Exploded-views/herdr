@@ -52,9 +52,16 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 | `src/api/schema/operations.rs` | changed | `AccessClass` enum and `Operation.access`; the operation macro requires a class on every row |
 | `src/api/schema.rs` | changed | Access class on every row of the operation table; re-exports `AccessClass` |
+| `src/platform/mod.rs` | changed | `ProcessIdentity`, `PeerLineage`, `LinkInfo` and the ssh-server name set; lineage entry points |
+| `src/platform/unix_common.rs` | changed | The peer lineage walk, `random_secret` |
+| `src/platform/macos.rs` | changed | `p_uniqueid` link info and link check (`proc_bsdinfowithuniqid`) |
+| `src/platform/linux.rs` | changed | `/proc` ppid and start-time link info and link check |
+| `src/platform/fallback.rs` | changed | Lineage stubs |
 
 ## Limits
 
 At one uid, the allow-list is a guardrail against **misrouted input from cooperative
 agents**, not a security boundary. [docs/fork.md](docs/fork.md#limits) lists what it can't
 stop.
+
+An orphaned caller (parent exited, re-parented to init) gets a short lineage that still reports `complete`; see [docs/fork.md](docs/fork.md#limits).

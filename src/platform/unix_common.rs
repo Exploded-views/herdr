@@ -1,3 +1,4 @@
+// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) and random_secret. Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ChildPipe(std::fs::File);
@@ -416,6 +417,87 @@ pub(crate) fn local_stream_peer_description(stream: &crate::ipc::LocalStream) ->
         }
     }
     Some(description)
+}
+
+/// Process ancestry behind a local socket peer. Empty and incomplete when
+/// the peer can't be identified.
+// Wired in by the access classifier in a later task.
+#[allow(dead_code)]
+pub(crate) fn local_stream_peer_lineage(stream: &crate::ipc::LocalStream) -> super::PeerLineage {
+    use std::os::fd::{AsFd as _, AsRawFd as _};
+
+    let crate::ipc::LocalStream::UdSocket(socket) = stream;
+    match super::socket_peer_pid(socket.as_fd().as_raw_fd()) {
+        Some(pid) => process_lineage(pid),
+        None => super::PeerLineage::default(),
+    }
+}
+
+// Wired in by the access classifier in a later task.
+#[allow(dead_code)]
+pub(crate) fn process_lineage(pid: u32) -> super::PeerLineage {
+    walk_lineage(pid, super::process_link_info)
+}
+
+/// Walks `pid` up to pid 1 through `lookup`. `complete` needs every one of:
+/// every process read, every parent link verified, pid 1 reached within the
+/// depth limit, and the peer's start token unchanged on a second read.
+#[allow(dead_code)]
+pub(super) fn walk_lineage(
+    pid: u32,
+    lookup: impl Fn(u32) -> Option<super::LinkInfo>,
+) -> super::PeerLineage {
+    let mut lineage = super::PeerLineage::default();
+    let mut previous: Option<super::LinkInfo> = None;
+    let mut current = pid;
+    let mut reached_init = false;
+    let mut verified = true;
+    for _ in 0..super::MAX_LINEAGE_DEPTH {
+        let Some(info) = lookup(current) else {
+            verified = false;
+            break;
+        };
+        if let Some(child) = &previous {
+            if !super::verify_link(&info, child) {
+                verified = false;
+                break;
+            }
+        }
+        lineage.chain.push(super::ProcessIdentity {
+            pid: current,
+            start_token: info.start_token,
+        });
+        lineage.via_ssh |= super::is_ssh_server_name(&info.name);
+        if current == 1 {
+            reached_init = true;
+            break;
+        }
+        // A zero parent, or a process that is its own parent, can't lead to init.
+        if info.ppid == 0 || info.ppid == current {
+            verified = false;
+            break;
+        }
+        current = info.ppid;
+        previous = Some(info);
+    }
+    lineage.complete = verified
+        && reached_init
+        && match (lineage.chain.first(), lookup(pid)) {
+            (Some(peer), Some(again)) => again.start_token == peer.start_token,
+            _ => false,
+        };
+    lineage
+}
+
+/// 32 bytes from the OS random source.
+// Wired in by the access classifier in a later task.
+#[allow(dead_code)]
+pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
+    use std::io::Read as _;
+
+    let mut secret = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut secret)?;
+    Ok(secret)
 }
 
 pub(crate) fn begin_cli_output() {

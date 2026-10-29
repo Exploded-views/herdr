@@ -1,3 +1,4 @@
+// herdr-fork: stub process_link_info/verify_link for peer lineage. Unofficial stopgap; see FORK.md.
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -16,6 +17,18 @@ pub(crate) fn set_default_plugin_pane_pwd(
 #[cfg(unix)]
 pub(super) fn socket_peer_pid(_fd: std::os::fd::RawFd) -> Option<u32> {
     None
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(super) fn process_link_info(_pid: u32) -> Option<super::LinkInfo> {
+    None
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(super) fn verify_link(_parent: &super::LinkInfo, _child: &super::LinkInfo) -> bool {
+    false
 }
 
 #[cfg(unix)]

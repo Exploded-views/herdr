@@ -1,3 +1,4 @@
+// herdr-fork: process_link_info/verify_link (ppid + start time ancestry) for peer lineage. Unofficial stopgap; see FORK.md.
 use std::{
     collections::{HashSet, VecDeque},
     io::{Read, Write},
@@ -727,16 +728,33 @@ pub(super) fn socket_peer_pid(fd: RawFd) -> Option<u32> {
 }
 
 pub(super) fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    process_link_info(pid).map(|link| (link.name, link.ppid))
+}
+
+/// Name, parent pid and start time from one read of `/proc/<pid>/stat`.
+pub(super) fn process_link_info(pid: u32) -> Option<super::LinkInfo> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    link_info_from_stat(&stat)
+}
+
+fn link_info_from_stat(stat: &str) -> Option<super::LinkInfo> {
     let close = stat.rfind(')')?;
     let name = stat.get(1 + stat.find('(')?..close)?.to_string();
-    let parent = stat
-        .get(close + 2..)?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()?;
-    Some((name, parent))
+    let fields: Vec<&str> = stat.get(close + 2..)?.split_whitespace().collect();
+    // After (comm): state(0) ppid(1) ... starttime(19)
+    Some(super::LinkInfo {
+        name,
+        ppid: fields.get(1)?.parse().ok()?,
+        start_token: fields.get(19)?.parse().ok()?,
+        parent_ref: 0,
+    })
+}
+
+/// A parent can't have started after its child; a pid reused by a newer
+/// process fails this.
+#[allow(dead_code)]
+pub(super) fn verify_link(parent: &super::LinkInfo, child: &super::LinkInfo) -> bool {
+    parent.start_token <= child.start_token
 }
 
 fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {

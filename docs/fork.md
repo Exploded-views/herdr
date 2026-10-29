@@ -79,6 +79,10 @@ stop a process that sets out to get around it:
 - A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
   `tmux new -d`, any SSH login to the host) and then counts as being outside every pane.
   Only herdr's own `--machine` route is stamped `remote`.
+- **Orphaned callers look complete.** A process whose parent has exited is re-parented to
+  init, and the lineage walk then reports a short, complete chain (observed on macOS and on
+  Linux: `complete=true`, two links). Reaching init proves the chain is intact, not that the
+  caller was never inside a pane.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.
 

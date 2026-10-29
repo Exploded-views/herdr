@@ -1,3 +1,4 @@
+// herdr-fork: peer lineage (socket peer -> verified process ancestry) for access classification. Unofficial stopgap; see FORK.md.
 //! Platform-specific process and filesystem operations.
 //!
 //! Centralizes OS-dependent behavior behind a clean boundary so core
@@ -149,6 +150,85 @@ pub struct ForegroundProcess {
 pub struct ForegroundJob {
     pub process_group_id: u32,
     pub processes: Vec<ForegroundProcess>,
+}
+
+/// One process in a peer lineage. `start_token` tells it apart from a later
+/// process that reuses the pid: start time on Linux, `p_uniqueid` on macOS.
+// Read by the access classifier in a later task.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProcessIdentity {
+    pub pid: u32,
+    pub start_token: u64,
+}
+
+/// The processes behind a socket connection, `chain[0]` being the peer.
+///
+/// `complete` is true only when the walk reached pid 1 with every link
+/// verified and the peer's start token unchanged after the walk. Anything
+/// less must be treated as unknown, never as "outside every pane".
+// Read by the access classifier in a later task.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct PeerLineage {
+    pub chain: Vec<ProcessIdentity>,
+    pub complete: bool,
+    /// Some process in the chain, `chain[0]` included, is a remote-login
+    /// server or tunnel daemon (see `is_ssh_server_name`).
+    pub via_ssh: bool,
+}
+
+/// What one `/proc` or `proc_pidinfo` read says about a process: enough to
+/// name it, find its parent and verify the link between the two.
+#[cfg(unix)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkInfo {
+    pub name: String,
+    pub ppid: u32,
+    /// Start time (Linux) or `p_uniqueid` (macOS).
+    pub start_token: u64,
+    /// macOS `p_puniqueid`: the `p_uniqueid` of the parent this process was
+    /// spawned by. Unused on Linux.
+    pub parent_ref: u64,
+}
+
+/// Longest ancestry the walk follows before it gives up as incomplete.
+#[allow(dead_code)]
+pub(crate) const MAX_LINEAGE_DEPTH: usize = 64;
+
+/// Executable names of remote-login servers. Exact match only.
+#[allow(dead_code)]
+fn is_ssh_server_name(name: &str) -> bool {
+    matches!(
+        name,
+        "sshd" | "sshd-session" | "mosh-server" | "etserver" | "tailscaled" | "dropbear"
+    )
+}
+
+#[allow(dead_code)]
+fn names_include_ssh_server<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
+    names.into_iter().any(is_ssh_server_name)
+}
+
+// Called by the access classifier in a later task.
+#[allow(unused_imports)]
+#[cfg(unix)]
+pub(crate) use unix_common::{local_stream_peer_lineage, process_lineage, random_secret};
+
+#[cfg(not(unix))]
+pub(crate) fn local_stream_peer_lineage(_stream: &crate::ipc::LocalStream) -> PeerLineage {
+    PeerLineage::default()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_lineage(_pid: u32) -> PeerLineage {
+    PeerLineage::default()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
+    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 /// A request from outside the process to stop the server.
@@ -1044,6 +1124,253 @@ mod tests {
             read_limited_reader(input, 16).expect("limited read"),
             LimitedRead::Complete(b"image".to_vec())
         );
+    }
+
+    /// Every hop of the real ancestry of `pid` as the walk sees it, for
+    /// assertion messages when a platform read fails.
+    fn explain(pid: u32) -> String {
+        let mut out = String::new();
+        let mut current = pid;
+        for _ in 0..MAX_LINEAGE_DEPTH {
+            let info = process_link_info(current);
+            out.push_str(&format!("\n  {current}: {info:?}"));
+            match info {
+                Some(info) if current != 1 && info.ppid != 0 => current = info.ppid,
+                _ => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn own_lineage_starts_with_self_and_completes() {
+        let lineage = process_lineage(std::process::id());
+        assert_eq!(
+            lineage.chain.first().map(|p| p.pid),
+            Some(std::process::id())
+        );
+        assert!(
+            lineage.complete,
+            "{lineage:?}{}",
+            explain(std::process::id())
+        );
+        assert_eq!(lineage.chain.last().map(|p| p.pid), Some(1));
+        assert!(lineage.chain.len() <= MAX_LINEAGE_DEPTH);
+    }
+
+    #[test]
+    fn lineage_of_child_includes_parent() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let lineage = process_lineage(child.id());
+        let detail = explain(child.id());
+        child.kill().expect("kill child");
+        child.wait().expect("reap child");
+        assert_eq!(lineage.chain.first().map(|p| p.pid), Some(child.id()));
+        assert_eq!(
+            lineage.chain.get(1).map(|p| p.pid),
+            Some(std::process::id())
+        );
+        assert!(lineage.complete, "{lineage:?}{detail}");
+    }
+
+    #[test]
+    fn lineage_of_exited_pid_is_incomplete() {
+        let mut child = std::process::Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        let lineage = process_lineage(pid);
+        assert!(!lineage.complete, "{lineage:?}");
+        assert!(!lineage.via_ssh);
+    }
+
+    #[test]
+    fn socket_peer_lineage_matches_connecting_process() {
+        let dir = std::env::temp_dir().join(format!("herdr-lineage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("s.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        let stream = crate::ipc::connect_local_stream(&path).expect("connect");
+        // The peer of our end is the listener, which is this process.
+        let lineage = local_stream_peer_lineage(&stream);
+        drop((stream, listener));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            lineage.chain.first().map(|p| p.pid),
+            Some(std::process::id())
+        );
+        assert!(
+            lineage.complete,
+            "{lineage:?}{}",
+            explain(std::process::id())
+        );
+    }
+
+    #[test]
+    fn orphaned_grandchild_lineage_classification() {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            // sleep drops the inherited stdout so `output()` returns at once.
+            .arg("(sleep 5 >/dev/null 2>&1 & echo $!) &")
+            .output()
+            .expect("run sh");
+        let gc: u32 = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("grandchild pid");
+        let lineage = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let first = process_name_and_parent(gc).map(|(_, parent)| parent);
+            while std::time::Instant::now() < deadline
+                && process_name_and_parent(gc).map(|(_, parent)| parent) == first
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            process_lineage(gc)
+        };
+        // SAFETY: gc is the pid of the sleep this test started.
+        unsafe { libc::kill(gc as libc::pid_t, libc::SIGKILL) };
+        // Observation only: complete may be true or false per OS.
+        eprintln!(
+            "orphan observation: complete={} chain_len={}",
+            lineage.complete,
+            lineage.chain.len()
+        );
+        assert_eq!(lineage.chain.first().map(|p| p.pid), Some(gc));
+    }
+
+    #[test]
+    fn lineage_marks_ssh_server_ancestor() {
+        assert!(names_include_ssh_server(["zsh", "sshd", "launchd"]));
+        assert!(names_include_ssh_server(["tailscaled"]));
+        assert!(!names_include_ssh_server(["zsh", "herdr", "launchd"]));
+        assert!(!names_include_ssh_server([]));
+    }
+
+    #[test]
+    fn lineage_matches_ssh_names_exactly() {
+        for name in [
+            "sshd-foo",
+            "xsshd",
+            "sshd ",
+            "SSHD",
+            "ssh",
+            "mosh",
+            "sshd-session2",
+        ] {
+            assert!(!is_ssh_server_name(name), "{name}");
+        }
+        for name in [
+            "sshd",
+            "sshd-session",
+            "mosh-server",
+            "etserver",
+            "tailscaled",
+            "dropbear",
+        ] {
+            assert!(is_ssh_server_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn lineage_checks_chain_zero() {
+        // The peer itself is the ssh server; no ancestor is.
+        let lineage = unix_common::walk_lineage(10, |pid| {
+            fake_link(pid, if pid == 10 { "sshd" } else { "zsh" })
+        });
+        assert!(lineage.via_ssh, "{lineage:?}");
+        let lineage = unix_common::walk_lineage(10, |pid| fake_link(pid, "zsh"));
+        assert!(!lineage.via_ssh);
+        assert!(lineage.complete, "{lineage:?}");
+    }
+
+    #[test]
+    fn lineage_walk_rejects_broken_chains() {
+        // pid 10 -> 5 -> 1; each pid's token grows with pid.
+        assert!(unix_common::walk_lineage(10, |p| fake_link(p, "x")).complete);
+        // A vanished ancestor.
+        let l = unix_common::walk_lineage(10, |p| (p != 5).then(|| fake_link(p, "x")).flatten());
+        assert!(!l.complete);
+        // The peer's token changes between the walk and the recheck.
+        let calls = std::cell::Cell::new(0);
+        let l = unix_common::walk_lineage(10, |p| {
+            let mut link = fake_link(p, "x")?;
+            if p == 10 {
+                calls.set(calls.get() + 1);
+                if calls.get() > 1 {
+                    link.start_token += 1;
+                }
+            }
+            Some(link)
+        });
+        assert!(!l.complete);
+        // A cycle never reaches pid 1.
+        let l = unix_common::walk_lineage(10, |p| {
+            let mut link = fake_link(p, "x")?;
+            link.ppid = 10;
+            Some(link)
+        });
+        assert!(!l.complete);
+        // Too deep.
+        let l = unix_common::walk_lineage(1000, |p| {
+            let mut link = fake_link(p, "x")?;
+            link.ppid = p - 1;
+            link.parent_ref = p as u64 - 1;
+            Some(link)
+        });
+        assert!(!l.complete);
+        assert!(l.chain.len() <= MAX_LINEAGE_DEPTH);
+    }
+
+    /// A link for a fake process tree 10 -> 5 -> 1 (other pids parent to 1)
+    /// that passes `verify_link` on every OS: tokens equal the pid and a
+    /// child's `parent_ref` is its parent's token.
+    fn fake_link(pid: u32, name: &str) -> Option<LinkInfo> {
+        let ppid = match pid {
+            10 => 5,
+            1 => 0,
+            _ => 1,
+        };
+        Some(LinkInfo {
+            name: name.to_string(),
+            ppid,
+            start_token: pid as u64,
+            parent_ref: ppid as u64,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn uniqinfo_struct_size_matches_kernel() {
+        assert_eq!(std::mem::size_of::<macos::ProcUniqIdentifierInfo>(), 56);
+        assert_eq!(
+            std::mem::size_of::<macos::ProcBsdInfoWithUniqId>(),
+            std::mem::size_of::<libc::proc_bsdinfo>() + 56
+        );
+        // The kernel fills exactly this many bytes for our own pid.
+        assert!(macos::process_link_info(std::process::id()).is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn lineage_link_check_rejects_mismatched_parent() {
+        let parent = LinkInfo {
+            name: "p".into(),
+            ppid: 1,
+            start_token: 100,
+            parent_ref: 1,
+        };
+        let mut child = LinkInfo {
+            name: "c".into(),
+            ppid: 5,
+            start_token: 200,
+            parent_ref: 100,
+        };
+        assert!(verify_link(&parent, &child));
+        child.parent_ref = 101;
+        assert!(!verify_link(&parent, &child));
     }
 }
 
