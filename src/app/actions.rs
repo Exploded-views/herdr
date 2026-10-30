@@ -1,3 +1,4 @@
+// herdr-fork: bind the sticky default access policy when an agent is first detected. Unofficial stopgap; see FORK.md.
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
@@ -1760,6 +1761,7 @@ impl AppState {
                     && is_completion_transition(&change))
                 .then_some(self.next_agent_state_change_seq);
             }
+            self.bind_default_access(&terminal_id);
         }
         let seen = self.apply_pane_state_change(ws_idx, pane_id, &change, suppress_completion)?;
         let update = PaneStateUpdate {

@@ -1,3 +1,4 @@
+// herdr-fork: PaneSnapshot carries the optional per-pane access policy. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -111,6 +112,8 @@ pub struct PaneSnapshot {
     pub agent_resume: Option<PaneAgentResumeSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) access: Option<crate::access::policy::AccessPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +353,7 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let access = terminal.and_then(|terminal| terminal.access.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -388,6 +392,7 @@ fn capture_tab(
                 agent_session,
                 agent_resume,
                 launch_argv,
+                access,
             },
         );
     }
@@ -707,6 +712,7 @@ mod tests {
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
+                access: None,
             },
         );
         panes.insert(
@@ -719,6 +725,7 @@ mod tests {
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
+                access: None,
             },
         );
 
@@ -1405,6 +1412,7 @@ mod tests {
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
+                access: None,
             },
         );
         panes.insert(
@@ -1419,6 +1427,7 @@ mod tests {
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
+                access: None,
             },
         );
 

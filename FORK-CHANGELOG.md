@@ -19,3 +19,8 @@ a plan to send it upstream, and nothing has been proposed upstream.
   caller token, and a remote-origin flag) through to the app. Nothing is gated on it yet. The
   remote API bridge marks its requests as remote, and refuses a first line that is not a JSON
   request object instead of forwarding it. *fork-only*
+- New `[access]` config section: `[access.default]` and `[access.<name>]` tables with
+  `accept_from`, plus `remote_input`, `bridge_agent` and `remote_owner_tui`. A pane's access
+  policy is saved with the session, and the default binds to a pane when an agent is first
+  detected in it and stays after the agent exits. Read once at startup; `server.reload_config`
+  does not change it. Nothing is enforced yet. *fork-only*

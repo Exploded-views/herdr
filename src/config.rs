@@ -1,3 +1,4 @@
+// herdr-fork: `[access]` diagnostics join startup config diagnostics. Unofficial stopgap; see FORK.md.
 use crossterm::event::{KeyCode, KeyModifiers};
 
 mod io;
@@ -123,6 +124,7 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.access.resolve().diagnostics)
             .collect()
     }
 

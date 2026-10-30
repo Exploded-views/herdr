@@ -1,3 +1,4 @@
+// herdr-fork: restore the per-pane access policy in every restore branch. Unofficial stopgap; see FORK.md.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -451,6 +452,7 @@ fn unavailable_restored_terminal(
     if let Some(pane) = pane {
         terminal.manual_label = pane.label.clone();
         terminal.launch_argv = pane.launch_argv.clone();
+        terminal.access = pane.access.clone();
         if let Some(session) = restored_terminal_agent_session(pane.agent_session.as_ref(), false) {
             terminal.set_persisted_agent_session(session);
         }
@@ -593,6 +595,7 @@ fn restore_tab(
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            terminal.access = saved_pane.and_then(|pane| pane.access.clone());
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -688,6 +691,7 @@ fn restore_tab(
             Ok(runtime) => {
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+                terminal.access = saved_pane.and_then(|pane| pane.access.clone());
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1554,6 +1558,7 @@ mod tests {
                             }),
                             agent_resume: None,
                             launch_argv: None,
+                            access: None,
                         },
                     )]),
                     zoomed: false,
@@ -1636,6 +1641,7 @@ mod tests {
                                 agent_session: None,
                                 agent_resume: None,
                                 launch_argv: None,
+                                access: None,
                             },
                         ),
                         (
@@ -1648,6 +1654,7 @@ mod tests {
                                 agent_session: None,
                                 agent_resume: None,
                                 launch_argv: None,
+                                access: None,
                             },
                         ),
                     ]),
@@ -1702,6 +1709,7 @@ mod tests {
                     agent_session: None,
                     agent_resume: None,
                     launch_argv: None,
+                    access: None,
                 },
             )
         };
@@ -1718,6 +1726,7 @@ mod tests {
             }),
             agent_resume: None,
             launch_argv: None,
+            access: None,
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1870,6 +1879,7 @@ mod tests {
                             }),
                             agent_resume: None,
                             launch_argv: None,
+                            access: None,
                         },
                     )]),
                     zoomed: false,
@@ -2176,6 +2186,7 @@ mod tests {
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
+                access: None,
             },
         );
         let mut history = SessionHistorySnapshot {

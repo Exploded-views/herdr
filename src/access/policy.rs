@@ -88,8 +88,22 @@ pub(crate) fn is_looser(explicit: &AcceptFrom, current: Option<&[Principal]>) ->
 }
 
 /// `acc_` followed by 32 lowercase hex characters.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub(crate) struct AccessBindingId(String);
+
+impl From<AccessBindingId> for String {
+    fn from(id: AccessBindingId) -> String {
+        id.0
+    }
+}
+
+impl TryFrom<String> for AccessBindingId {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, String> {
+        Self::parse(&value).ok_or_else(|| format!("invalid access binding id {value:?}"))
+    }
+}
 
 impl AccessBindingId {
     pub(crate) fn mint() -> io::Result<Self> {
@@ -118,10 +132,27 @@ impl fmt::Display for AccessBindingId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AccessPolicy {
     pub binding: AccessBindingId,
     pub accept_from: Vec<Principal>,
+}
+
+/// Startup-resolved `[access]` sections: the sticky default for newly
+/// detected agent panes and the named sections. Read once; reload leaves it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct AccessDefaults {
+    pub default: Option<Vec<Principal>>,
+    pub by_name: std::collections::BTreeMap<String, Vec<Principal>>,
+}
+
+/// `[access] remote_owner_tui`: whether the owner's remote TUI may still type
+/// into protected panes when remote input is bridge-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RemoteOwnerTui {
+    #[default]
+    Allow,
+    Deny,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

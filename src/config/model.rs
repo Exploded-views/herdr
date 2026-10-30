@@ -1,3 +1,4 @@
+// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys). Unofficial stopgap; see FORK.md.
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use crossterm::event::KeyModifiers;
@@ -323,6 +324,7 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    pub access: AccessConfig,
 }
 
 #[derive(Debug)]
@@ -1069,6 +1071,91 @@ impl Default for RemoteConfig {
         Self {
             manage_ssh_config: true,
         }
+    }
+}
+
+/// One `[access.<name>]` table. `[access.default]` is the sticky default.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+pub struct AccessSection {
+    pub accept_from: Vec<String>,
+}
+
+/// `[access]`: scalar node keys plus `[access.<name>]` tables. Resolved once at
+/// startup; `server.reload_config` never applies it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AccessConfig {
+    /// "any" (default) or "bridge-only".
+    pub remote_input: Option<String>,
+    pub bridge_agent: Option<String>,
+    /// "allow" (default) or "deny"; only meaningful with `remote_input = "bridge-only"`.
+    pub remote_owner_tui: Option<String>,
+    #[serde(flatten)]
+    pub sections: std::collections::BTreeMap<String, AccessSection>,
+}
+
+/// What startup reads from `[access]`.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedAccess {
+    pub defaults: crate::access::policy::AccessDefaults,
+    pub remote: crate::access::policy::RemoteSettings,
+    pub remote_owner_tui: crate::access::policy::RemoteOwnerTui,
+    pub diagnostics: Vec<String>,
+}
+
+impl AccessConfig {
+    pub(crate) fn resolve(&self) -> ResolvedAccess {
+        use crate::access::policy::{parse_accept_from, AcceptFrom, RemoteInput, RemoteOwnerTui};
+        let mut out = ResolvedAccess::default();
+        match self.remote_input.as_deref() {
+            None | Some("any") => {}
+            Some("bridge-only") => out.remote.input = RemoteInput::BridgeOnly,
+            Some(other) => out.diagnostics.push(format!(
+                "access.remote_input must be \"any\" or \"bridge-only\" (got {other:?}); using \"any\""
+            )),
+        }
+        out.remote.bridge_agent = self
+            .bridge_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        match self.remote_owner_tui.as_deref() {
+            None | Some("allow") => {}
+            Some("deny") => {
+                if out.remote.input == RemoteInput::BridgeOnly {
+                    out.remote_owner_tui = RemoteOwnerTui::Deny;
+                } else {
+                    out.diagnostics.push(
+                        "access.remote_owner_tui = \"deny\" is ignored unless access.remote_input is \"bridge-only\""
+                            .to_string(),
+                    );
+                }
+            }
+            Some(other) => out.diagnostics.push(format!(
+                "access.remote_owner_tui must be \"allow\" or \"deny\" (got {other:?}); using \"allow\""
+            )),
+        }
+        for (name, section) in &self.sections {
+            match parse_accept_from(&section.accept_from) {
+                Ok(AcceptFrom::Only(list)) if name == "default" => {
+                    out.defaults.default = Some(list)
+                }
+                Ok(AcceptFrom::Only(list)) => {
+                    out.defaults.by_name.insert(name.clone(), list);
+                }
+                // An open default is the same as no default.
+                Ok(AcceptFrom::Any) if name == "default" => {}
+                Ok(AcceptFrom::Any) => out.diagnostics.push(format!(
+                    "access.{name}: \"any\" is not valid in a named section; section skipped"
+                )),
+                Err(err) => out
+                    .diagnostics
+                    .push(format!("access.{name}: {err}; section skipped")),
+            }
+        }
+        out
     }
 }
 

@@ -1,8 +1,12 @@
+// herdr-fork: resolve `[access]` once at startup and bind defaults after restore. Unofficial stopgap; see FORK.md.
 //! Application orchestration.
 //!
 //! - `state.rs` — AppState, Mode, and pure data structs
 //! - `actions.rs` — state mutations (testable without PTYs/async)
 
+mod access;
+#[cfg(test)]
+mod access_tests;
 pub(crate) mod actions;
 mod agent_resume;
 #[cfg(test)]
@@ -459,6 +463,7 @@ impl App {
             (Vec::new(), None, 0)
         };
 
+        let resolved_access = config.access.resolve();
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
 
         let worktree_directory =
@@ -577,10 +582,14 @@ impl App {
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
+            access_defaults: resolved_access.defaults,
+            remote_settings: resolved_access.remote,
+            remote_owner_tui: resolved_access.remote_owner_tui,
             terminal_runtime_shutdowns: Vec::new(),
         };
 
         state.terminals = restored_terminals;
+        state.bind_default_access_all();
 
         // Background auto-update is disabled for non-persistent test apps
         // and in debug/test builds so local development never mutates the
@@ -737,6 +746,7 @@ impl App {
         app.state.pane_id_aliases = pane_id_aliases;
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
+        app.state.bind_default_access_all();
         app.terminal_runtimes = runtimes.into();
         app.state.active = snapshot
             .active

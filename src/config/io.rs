@@ -1,3 +1,4 @@
+// herdr-fork: `access` is a known top-level section (startup-only; reload ignores it). Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
@@ -5,6 +6,7 @@ use tracing::warn;
 use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
+    "access",
     "advanced",
     "experimental",
     "keys",

@@ -67,6 +67,10 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/remote.rs` | changed | The remote api bridge stamps `caller_origin: "remote"` on the first request line and refuses (fails closed) when that line is not a JSON object |
 | `src/server/headless/endpoint_requests.rs` | changed | Shell-endpoint api requests carry an empty-lineage `Caller` |
 | `src/cli/target.rs`, `src/server/headless/tests/*.rs` | changed | Tests only: `--machine` refuses access commands; test constructors carry a `Caller` |
+| `src/terminal/state.rs`, `src/persist/snapshot.rs`, `src/persist/restore.rs` | changed | Per-pane `access` policy on terminal state, saved in snapshots (`PaneSnapshot.access`) and restored in every restore branch |
+| `src/config.rs`, `src/config/io.rs`, `src/config/model.rs` | changed | `[access]` config: `default` and named `accept_from` sections plus `remote_input`, `bridge_agent`, `remote_owner_tui`; read once at startup |
+| `src/app/access.rs`, `src/app/access_tests.rs` | new | `bind_access`, `unbind_access`, sticky `bind_default_access`; their tests |
+| `src/app/mod.rs`, `src/app/state.rs`, `src/app/actions.rs`, `src/access/policy.rs` | changed | Startup-resolved `access_defaults` and remote settings on `AppState`; default bound on first agent detection and after restore; serde for policy types |
 
 ## Limits
 

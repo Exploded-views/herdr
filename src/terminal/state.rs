@@ -1,3 +1,4 @@
+// herdr-fork: per-pane `access` policy (not cleared by agent release). Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -155,6 +156,8 @@ pub struct TerminalState {
     pub state: AgentState,
     pub last_agent_state_change_seq: Option<u64>,
     pub last_agent_completion_seq: Option<u64>,
+    /// Who may send this pane input. Sticky: agent exit or release leaves it.
+    pub(crate) access: Option<crate::access::policy::AccessPolicy>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -195,6 +198,7 @@ impl TerminalState {
             state: AgentState::Unknown,
             last_agent_state_change_seq: None,
             last_agent_completion_seq: None,
+            access: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
