@@ -154,8 +154,6 @@ pub struct ForegroundJob {
 
 /// One process in a peer lineage. `start_token` tells it apart from a later
 /// process that reuses the pid: start time on Linux, `p_uniqueid` on macOS.
-// Read by the access classifier in a later task.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProcessIdentity {
     pub pid: u32,
@@ -172,8 +170,6 @@ pub(crate) struct ProcessIdentity {
 /// the pid is reused before the walk's first read, both reads see the
 /// newcomer and the re-read of the peer token can't notice: it only catches
 /// replacement during the walk.
-// Read by the access classifier in a later task.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct PeerLineage {
     pub chain: Vec<ProcessIdentity>,
@@ -220,19 +216,25 @@ fn names_include_ssh_server<'a>(names: impl IntoIterator<Item = &'a str>) -> boo
     names.into_iter().any(is_ssh_server_name)
 }
 
-// Called by the access classifier in a later task.
-#[allow(unused_imports)]
 #[cfg(unix)]
-pub(crate) use unix_common::{local_stream_peer_lineage, process_lineage, random_secret};
+pub(crate) use unix_common::{local_stream_peer_lineage, process_identity, random_secret};
+// Only tests and the access gate benchmark walk a lineage by pid.
+#[cfg(all(test, unix))]
+pub(crate) use unix_common::process_lineage;
 
 #[cfg(not(unix))]
 pub(crate) fn local_stream_peer_lineage(_stream: &crate::ipc::LocalStream) -> PeerLineage {
     PeerLineage::default()
 }
 
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 pub(crate) fn process_lineage(_pid: u32) -> PeerLineage {
     PeerLineage::default()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn process_identity(_pid: u32) -> Option<ProcessIdentity> {
+    None
 }
 
 #[cfg(not(unix))]
@@ -1149,6 +1151,17 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn process_identity_matches_the_token_the_lineage_walk_records() {
+        // A pane shell is matched against lineage entries, so the two must use
+        // one token. On macOS `process_start_token` is a start time, the walk
+        // records `p_uniqueid`.
+        let own = process_lineage(std::process::id());
+        let identity = process_identity(std::process::id()).expect("own identity");
+        assert_eq!(own.chain.first().copied(), Some(identity));
+        assert!(process_identity(u32::MAX - 1).is_none());
     }
 
     #[test]

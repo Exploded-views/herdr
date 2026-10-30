@@ -1,3 +1,4 @@
+// herdr-fork: gate every api request through check_access before it touches a pane; reads skip the alt-screen wheel harvest when Input would be refused. Unofficial stopgap; see FORK.md.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -1859,6 +1860,7 @@ impl HeadlessServer {
                 cell_width_px,
                 cell_height_px,
                 pixel_mouse,
+                peer_lineage,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1893,6 +1895,7 @@ impl HeadlessServer {
                     Some(writer),
                 );
                 connection.pixel_mouse = pixel_mouse;
+                connection.set_peer_lineage(peer_lineage);
                 self.clients.insert(client_id, connection);
                 false
             }
@@ -1910,6 +1913,7 @@ impl HeadlessServer {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                peer_lineage,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1951,6 +1955,7 @@ impl HeadlessServer {
                     Some(writer),
                 );
                 connection.pixel_mouse = pixel_mouse && observed.is_known();
+                connection.set_peer_lineage(peer_lineage);
                 connection.direct_graphics = direct_graphics;
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
@@ -2729,8 +2734,18 @@ impl HeadlessServer {
         })
     }
 
-    fn alt_screen_read_spec(&self, request: &api::schema::Request) -> Option<AltScreenReadSpec> {
+    fn alt_screen_read_spec(
+        &self,
+        request: &api::schema::Request,
+        caller: &crate::access::caller::Caller,
+    ) -> Option<AltScreenReadSpec> {
         use api::schema::{Method, ReadFormat, ReadIntent, ReadSource};
+
+        // The wheel harvest writes bytes into the pane. A caller refused Input
+        // there gets the frozen screen snapshot instead, and no bytes.
+        if !self.app.read_may_inject_input(&request.method, caller) {
+            return None;
+        }
 
         let (target, source, lines, format) = match &request.method {
             Method::AgentRead(params) => (
@@ -2906,6 +2921,23 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
     }
 
+    fn reject_api_request_for_access(
+        msg: api::ApiRequestMessage,
+        denied: &crate::access::policy::AccessDenied,
+    ) {
+        let response = serde_json::to_string(&api::schema::ErrorResponse {
+            id: msg.request.id,
+            error: api::schema::ErrorBody {
+                code: "access_denied".into(),
+                message: denied.message(),
+            },
+        })
+        .unwrap_or_else(|_| {
+            r#"{"id":"","error":{"code":"access_denied","message":"access_denied"}}"#.to_string()
+        });
+        let _ = msg.respond_to.send(response);
+    }
+
     fn handle_api_request_with_shutdown_check_inner(
         &mut self,
         msg: api::ApiRequestMessage,
@@ -2915,6 +2947,13 @@ impl HeadlessServer {
         if self.shutting_down || self.host_shutdown_requested() {
             // During shutdown, respond with server_unavailable.
             Self::reject_api_request_for_shutdown(msg);
+            return false;
+        }
+
+        // The access gate: every request passes it before anything reads or
+        // writes a pane, including the alt-screen defer below.
+        if let Err(denied) = self.app.check_access(&msg.request.method, &msg.caller) {
+            Self::reject_api_request_for_access(msg, &denied);
             return false;
         }
 
@@ -3034,7 +3073,7 @@ impl HeadlessServer {
             let _ = msg.respond_to.send(response);
             return changed;
         }
-        let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
+        let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
         if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
             let deferred_changed = self
                 .app

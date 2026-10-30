@@ -1,3 +1,4 @@
+// herdr-fork: test-only child pid setter for access classification tests. Unofficial stopgap; see FORK.md.
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
@@ -3842,6 +3843,12 @@ impl PaneRuntime {
     pub fn child_pid(&self) -> Option<u32> {
         let pid = self.child_pid.load(Ordering::Acquire);
         (pid > 0).then_some(pid)
+    }
+
+    /// Lets an access test give a channel-backed runtime a shell pid.
+    #[cfg(test)]
+    pub(crate) fn test_set_child_pid(&self, pid: u32) {
+        self.child_pid.store(pid, Ordering::Release);
     }
 
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {

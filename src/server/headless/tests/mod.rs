@@ -1,6 +1,7 @@
-// herdr-fork: api request test constructors carry a test Caller. Unofficial stopgap; see FORK.md.
+// herdr-fork: api request test constructors carry a test Caller; connect events carry a default peer lineage; the access gate tests live in access_gate.rs. Unofficial stopgap; see FORK.md.
 use super::*;
 
+mod access_gate;
 mod event_fairness;
 mod native_graphics;
 #[path = "pane_move.rs"]
@@ -742,6 +743,7 @@ async fn client_shell_attach_seeds_workspace() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -775,6 +777,7 @@ async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
         surface_reuse: false,
         surface_delta: false,
         surface_scroll: false,
+        peer_lineage: Default::default(),
         writer,
     });
     let (_, initial) = client_shell_projection(&control_rx);
@@ -834,6 +837,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -915,6 +919,7 @@ fn terminal_client_endpoint_request_error_removes_client() {
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
 
@@ -953,6 +958,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: false,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -1056,6 +1062,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -1224,6 +1231,7 @@ fn connect_test_shell(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -1829,6 +1837,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer: local_writer,
         })
     );
@@ -1854,6 +1863,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: true,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer: endpoint_writer,
         })
     );
@@ -2781,6 +2791,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -3029,6 +3040,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );
@@ -4138,6 +4150,7 @@ fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: true,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(!server.clients[&7].pixel_mouse);
@@ -4154,6 +4167,7 @@ fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
         cell_width_px: 10,
         cell_height_px: 20,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(!server.clients[&8].pixel_mouse);
@@ -4178,6 +4192,7 @@ fn terminal_attach_rejects_missing_terminal_and_removes_client() {
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(matches!(
@@ -4240,6 +4255,7 @@ fn terminal_observers_wait_for_synchronized_output_with_or_without_baseline() {
                 cell_width_px: 0,
                 cell_height_px: 0,
                 pixel_mouse: false,
+                peer_lineage: Default::default(),
                 writer,
             }));
             assert!(
@@ -4298,6 +4314,7 @@ fn connect_pending_terminal_client_with_control_rx(
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(matches!(
@@ -4469,6 +4486,7 @@ fn backpressured_observer_skips_runtime_access_and_recovers_without_new_output()
             cell_width_px: 0,
             cell_height_px: 0,
             pixel_mouse: false,
+            peer_lineage: Default::default(),
             writer,
         });
         server.handle_server_event(ServerEvent::ClientObserveTerminal {
@@ -5363,6 +5381,7 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(
@@ -5438,6 +5457,7 @@ fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
         cell_width_px: 0,
         cell_height_px: 0,
         pixel_mouse: false,
+        peer_lineage: Default::default(),
         writer,
     }));
     assert!(
@@ -6578,6 +6598,7 @@ async fn client_shell_requests_host_pixels_for_an_unfocused_pixel_pane() {
             endpoint_keybindings: false,
             mouse_capture: true,
             surface_active: true,
+            peer_lineage: Default::default(),
             writer,
         })
     );

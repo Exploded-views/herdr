@@ -1,3 +1,4 @@
+// herdr-fork: test-only child pid setter for access classification tests. Unofficial stopgap; see FORK.md.
 use std::sync::Arc;
 
 use crate::render_signal::RenderSignal;
@@ -592,6 +593,11 @@ impl TerminalRuntime {
 
     pub fn child_pid(&self) -> Option<u32> {
         self.0.child_pid()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_child_pid(&self, pid: u32) {
+        self.0.test_set_child_pid(pid);
     }
 
     pub(crate) fn current_size(&self) -> (u16, u16) {

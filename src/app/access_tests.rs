@@ -720,3 +720,34 @@ async fn handoff_restore_binds_the_default_to_restored_agent_panes() {
         Some(vec![Principal::None])
     );
 }
+
+#[test]
+fn access_input_log_key_is_accepted_and_defaults_on() {
+    let bare = config_from("").access.resolve();
+    assert!(bare.input_log);
+
+    let off = config_from("[access]\ninput_log = false\n")
+        .access
+        .resolve();
+    assert!(!off.input_log);
+    assert!(off.diagnostics.is_empty(), "{:?}", off.diagnostics);
+
+    let on =
+        config_from("[access]\ninput_log = true\n[access.default]\naccept_from = [\"outside\"]\n")
+            .access
+            .resolve();
+    assert!(on.input_log);
+    assert!(on.diagnostics.is_empty(), "{:?}", on.diagnostics);
+    assert_eq!(on.defaults.default, Some(vec![Principal::Outside]));
+
+    // A wrong type is a soft diagnostic; the rest of the config survives.
+    let bad = config_from(
+        "[access]\ninput_log = \"yes\"\n[access.default]\naccept_from = [\"outside\"]\n",
+    )
+    .access
+    .resolve();
+    assert!(bad.input_log);
+    assert_eq!(bad.diagnostics.len(), 1, "{:?}", bad.diagnostics);
+    assert!(bad.diagnostics[0].contains("access.input_log"));
+    assert_eq!(bad.defaults.default, Some(vec![Principal::Outside]));
+}

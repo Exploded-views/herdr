@@ -1,3 +1,4 @@
+// herdr-fork: registry iteration is available on every platform for access classification. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 
 use super::{TerminalId, TerminalRuntime};
@@ -37,7 +38,6 @@ impl TerminalRuntimeRegistry {
         self.runtimes.values()
     }
 
-    #[cfg(unix)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&TerminalId, &TerminalRuntime)> {
         self.runtimes.iter()
     }

@@ -19,8 +19,6 @@ pub(crate) struct Operation {
     pub name: &'static str,
     pub changes_ui: bool,
     pub client_shell: bool,
-    // Read by the access gate (Task 7); only tests read it until then.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub access: AccessClass,
 }
 

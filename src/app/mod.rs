@@ -1,10 +1,11 @@
-// herdr-fork: resolve `[access]` once at startup and bind defaults after restore. Unofficial stopgap; see FORK.md.
+// herdr-fork: resolve `[access]` once at startup, bind defaults after restore, and gate input methods (access_gate). Unofficial stopgap; see FORK.md.
 //! Application orchestration.
 //!
 //! - `state.rs` — AppState, Mode, and pure data structs
 //! - `actions.rs` — state mutations (testable without PTYs/async)
 
 mod access;
+pub(crate) mod access_gate;
 #[cfg(test)]
 mod access_tests;
 pub(crate) mod actions;

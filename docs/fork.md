@@ -94,7 +94,9 @@ stop a process that sets out to get around it:
 - **Control requests** (close, rename, report-agent on another pane, `server stop`,
   `server reload-config`, `server ssh-agent register`, plugin and custom commands) aren't
   gated. `server stop` is a denial of service, not misrouted input.
-- **Reading** another pane's output isn't gated.
+- **Reading** another pane's output isn't gated. A read that would send wheel events into a
+  full-screen agent (to collect its scrollback) skips that and returns the screen as it is when
+  the caller may not send that pane input.
 - **Focus.** `pane focus` and `agent focus` can move the TUI's focus to a protected pane
   while you type.
 

@@ -1,4 +1,4 @@
-// herdr-fork: shell-endpoint api requests carry an empty-lineage Caller until the access gate classifies them. Unofficial stopgap; see FORK.md.
+// herdr-fork: shell-endpoint api requests carry the caller captured from their client connection. Unofficial stopgap; see FORK.md.
 use super::*;
 
 impl HeadlessServer {
@@ -121,21 +121,27 @@ impl HeadlessServer {
             client.shell_deferred_navigation_response = deferred_navigation.then(Vec::new);
         }
         let foreground_changed = self.promote_client_to_foreground(client_id);
-        foreground_changed
-            | self.handle_client_shell_api_request(
-                client_id,
-                api::ApiRequestMessage {
-                    request: *request,
-                    // The shell client is the operator's own surface, not a socket peer;
-                    // the access gate decides how to treat this caller.
-                    caller: crate::access::caller::Caller::Peer {
-                        lineage: crate::platform::PeerLineage::default(),
-                        token: None,
-                        remote: false,
-                    },
-                    respond_to,
-                    response_write_complete: None,
-                },
-            )
+        let Some(message) = self.shell_endpoint_message(client_id, *request, respond_to) else {
+            return foreground_changed;
+        };
+        foreground_changed | self.handle_client_shell_api_request(client_id, message)
+    }
+
+    /// The api request for a command from this client's shell. Its caller is the one
+    /// captured from the client's own connection when it was accepted: a client that
+    /// arrived through the remote bridge must not look like a local one.
+    pub(super) fn shell_endpoint_message(
+        &self,
+        client_id: u64,
+        request: api::schema::Request,
+        respond_to: std::sync::mpsc::Sender<String>,
+    ) -> Option<api::ApiRequestMessage> {
+        let caller = self.clients.get(&client_id)?.caller.clone();
+        Some(api::ApiRequestMessage {
+            request,
+            caller,
+            respond_to,
+            response_write_complete: None,
+        })
     }
 }

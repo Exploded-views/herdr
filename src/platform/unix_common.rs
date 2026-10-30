@@ -421,8 +421,6 @@ pub(crate) fn local_stream_peer_description(stream: &crate::ipc::LocalStream) ->
 
 /// Process ancestry behind a local socket peer. Empty and incomplete when
 /// the peer can't be identified.
-// Wired in by the access classifier in a later task.
-#[allow(dead_code)]
 pub(crate) fn local_stream_peer_lineage(stream: &crate::ipc::LocalStream) -> super::PeerLineage {
     use std::os::fd::{AsFd as _, AsRawFd as _};
 
@@ -433,10 +431,19 @@ pub(crate) fn local_stream_peer_lineage(stream: &crate::ipc::LocalStream) -> sup
     }
 }
 
-// Wired in by the access classifier in a later task.
-#[allow(dead_code)]
 pub(crate) fn process_lineage(pid: u32) -> super::PeerLineage {
     walk_lineage(pid, super::process_link_info)
+}
+
+/// `pid` with the same start token the lineage walk records for it, so a pane
+/// shell's identity and a lineage entry for the same process compare equal.
+/// (`process_start_token` is not interchangeable: on macOS it is a start time,
+/// the walk records `p_uniqueid`.) `None` when the process can't be read.
+pub(crate) fn process_identity(pid: u32) -> Option<super::ProcessIdentity> {
+    super::process_link_info(pid).map(|info| super::ProcessIdentity {
+        pid,
+        start_token: info.start_token,
+    })
 }
 
 /// Walks `pid` up to pid 1 through `lookup`. `complete` needs every one of:

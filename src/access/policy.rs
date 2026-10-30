@@ -1,4 +1,4 @@
-// herdr-fork: access policy types and the `decide` function. Unofficial stopgap; see FORK.md.
+// herdr-fork: access policy types and the `decide` function; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io;
 
@@ -75,6 +75,8 @@ pub(crate) fn parse_accept_from(values: &[String]) -> Result<AcceptFrom, String>
 
 /// True when `explicit` would let in someone the pane's current policy does
 /// not. `current == None` means no policy (open), which nothing is looser than.
+// Used by `agent.start` / `access.pane.set` (Tasks 8 and 9), which have not landed.
+#[allow(dead_code)]
 pub(crate) fn is_looser(explicit: &AcceptFrom, current: Option<&[Principal]>) -> bool {
     let Some(current) = current else {
         return false;
@@ -121,6 +123,8 @@ impl AccessBindingId {
         ok.then(|| Self(text.to_string()))
     }
 
+    // Read by the caller registry and `access.*` output (Tasks 8 and 9); tests read it now.
+    #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -188,6 +192,8 @@ pub(crate) enum GateTarget<'a> {
         policy: Option<&'a AccessPolicy>,
     },
     /// `access.pane.set`, `access.caller.*`.
+    // Built by `gate_target` once those methods exist (Task 9).
+    #[allow(dead_code)]
     AccessAdmin,
 }
 

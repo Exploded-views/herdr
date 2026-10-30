@@ -1,3 +1,4 @@
+// herdr-fork: the connection thread walks the client socket peer's lineage once and passes it in the connect events. Unofficial stopgap; see FORK.md.
 //! Blocking client socket transport for the headless server.
 //!
 //! This module owns the thin-client handshake, read loop, and writer loop.
@@ -402,6 +403,8 @@ pub(crate) enum ServerEvent {
         cell_width_px: u32,
         cell_height_px: u32,
         pixel_mouse: bool,
+        /// Who is on the other end of the socket, walked once on the connection thread.
+        peer_lineage: crate::platform::PeerLineage,
         writer: ClientWriter,
     },
     /// A client-owned shell completed its dedicated handshake.
@@ -419,6 +422,8 @@ pub(crate) enum ServerEvent {
         surface_reuse: bool,
         surface_delta: bool,
         surface_scroll: bool,
+        /// Who is on the other end of the socket, walked once on the connection thread.
+        peer_lineage: crate::platform::PeerLineage,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -677,6 +682,10 @@ pub(crate) fn handle_client_handshake(
         return Ok(());
     }
 
+    // Walk the peer's process lineage once, here on the connection thread, so the app
+    // thread never reads /proc or calls proc_pidinfo to classify this client.
+    let peer_lineage = crate::platform::local_stream_peer_lineage(&stream);
+
     // Reset to blocking mode — the accept loop sets nonblocking but
     // the handshake thread needs blocking I/O for read_message/write_message.
     stream.set_nonblocking(false)?;
@@ -900,6 +909,7 @@ pub(crate) fn handle_client_handshake(
             surface_reuse,
             surface_delta,
             surface_scroll,
+            peer_lineage,
             writer,
         }
     } else {
@@ -910,6 +920,7 @@ pub(crate) fn handle_client_handshake(
             cell_width_px,
             cell_height_px,
             pixel_mouse: terminal_pixel_mouse,
+            peer_lineage,
             writer,
         }
     };
@@ -1973,6 +1984,7 @@ mod tests {
                 cell_width_px,
                 cell_height_px,
                 pixel_mouse,
+                peer_lineage: _,
                 writer,
             } => {
                 assert_eq!(client_id, 42);
@@ -2028,6 +2040,7 @@ mod tests {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                peer_lineage: _,
                 writer,
             } => {
                 assert!(!surface_reuse);

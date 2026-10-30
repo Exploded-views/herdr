@@ -1,3 +1,4 @@
+// herdr-fork: each client connection keeps the Caller captured from its socket peer at accept. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -192,6 +193,9 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_deferred_navigation_response: Option<Vec<u8>>,
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
+    /// Who this connection is, as the access gate sees it: its own peer lineage, captured
+    /// when the connection was accepted, and whether it arrived through the remote bridge.
+    pub(crate) caller: crate::access::caller::Caller,
     /// Channels for sending framed ServerMessage data to the client writer thread.
     pub(crate) writer: Option<ClientWriter>,
 }
@@ -255,8 +259,28 @@ impl ClientConnection {
             shell_deferred_navigation_request_id: None,
             shell_deferred_navigation_response: None,
             shell_uses_endpoint_keybindings: false,
+            // Until the accept path hands over the real lineage, an empty one: it
+            // classifies as unknown, never as a trusted local caller.
+            caller: crate::access::caller::Caller::Peer {
+                lineage: crate::platform::PeerLineage::default(),
+                token: None,
+                remote: false,
+            },
             writer,
         }
+    }
+
+    /// Record the peer lineage walked when the connection was accepted. The bridge
+    /// that carries a remote client runs under a remote-login server, which the walk
+    /// sees as `via_ssh`; that is the only remote signal the server has for a client
+    /// socket, so `remote` follows it.
+    pub(crate) fn set_peer_lineage(&mut self, lineage: crate::platform::PeerLineage) {
+        let remote = lineage.via_ssh;
+        self.caller = crate::access::caller::Caller::Peer {
+            lineage,
+            token: None,
+            remote,
+        };
     }
 
     pub(crate) fn request_repaint(&mut self) {

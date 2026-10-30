@@ -1091,6 +1091,8 @@ pub struct AccessConfig {
     pub bridge_agent: Option<String>,
     /// "allow" (default) or "deny"; only meaningful with `remote_input = "bridge-only"`.
     pub remote_owner_tui: Option<String>,
+    /// Log where each Input request came from. Default true; read by a later task.
+    pub input_log: Option<bool>,
     pub sections: std::collections::BTreeMap<String, AccessSection>,
     /// Problems met while reading the table, reported by `resolve`.
     read_diagnostics: Vec<String>,
@@ -1117,6 +1119,10 @@ impl<'de> Deserialize<'de> for AccessConfig {
                         out.remote_owner_tui = Some(text);
                     }
                 }
+                ("input_log", toml::Value::Boolean(enabled)) => out.input_log = Some(enabled),
+                ("input_log", _) => out
+                    .read_diagnostics
+                    .push("access.input_log must be true or false; using true".to_string()),
                 ("bridge_agent", toml::Value::String(text)) => out.bridge_agent = Some(text),
                 ("bridge_agent", _) => out
                     .read_diagnostics
@@ -1144,6 +1150,8 @@ pub(crate) struct ResolvedAccess {
     pub defaults: crate::access::policy::AccessDefaults,
     pub remote: crate::access::policy::RemoteSettings,
     pub remote_owner_tui: crate::access::policy::RemoteOwnerTui,
+    /// `[access] input_log`, default true. Stored with the other node keys; nothing reads it yet.
+    pub input_log: bool,
     pub diagnostics: Vec<String>,
 }
 
@@ -1151,6 +1159,7 @@ impl AccessConfig {
     pub(crate) fn resolve(&self) -> ResolvedAccess {
         use crate::access::policy::{parse_accept_from, AcceptFrom, RemoteInput, RemoteOwnerTui};
         let mut out = ResolvedAccess {
+            input_log: self.input_log.unwrap_or(true),
             diagnostics: self.read_diagnostics.clone(),
             ..ResolvedAccess::default()
         };

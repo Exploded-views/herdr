@@ -1557,6 +1557,12 @@
           "type": "string",
           "default": "\"allow\"",
           "description": "Fork-only. \"deny\" refuses remote TUI input on a bridge-only node; ignored unless access.remote_input is \"bridge-only\"."
+        },
+        {
+          "key": "access.input_log",
+          "type": "boolean",
+          "default": "true",
+          "description": "Fork-only. Log the origin of input requests (no content). Read once at startup."
         }
       ]
     }

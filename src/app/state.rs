@@ -889,9 +889,8 @@ pub struct AppState {
     /// `[access]` sections, read once at startup; reload leaves them alone.
     pub(crate) access_defaults: crate::access::policy::AccessDefaults,
     /// `[access]` node keys, read once at startup. `bridge_binding` is filled later.
-    #[allow(dead_code)] // read by the gate in a later task
     pub(crate) remote_settings: crate::access::policy::RemoteSettings,
-    #[allow(dead_code)] // read by the gate in a later task
+    #[allow(dead_code)] // read by the remote TUI input check (Task 10)
     pub(crate) remote_owner_tui: crate::access::policy::RemoteOwnerTui,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.

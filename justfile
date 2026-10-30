@@ -96,6 +96,10 @@ bench-render-scale:
 bench-terminal-targets:
     cargo test --release --locked --bin herdr terminal_target_lookup_profile -- --ignored --nocapture --test-threads=1
 
+# herdr-fork: p95 budget for the access gate (off, on, lineage walk); fails when over budget.
+bench-access:
+    cargo test --release --locked --bin herdr access_gate_profile -- --ignored --nocapture --test-threads=1
+
 # Profile Windows foreground inspection of isolated idle shells, without a server.
 [windows]
 bench-process-inspection:
