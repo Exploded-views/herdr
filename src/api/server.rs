@@ -11,12 +11,12 @@ use tracing::{debug, error, info, warn};
 #[cfg(all(test, unix))]
 use std::fs;
 
+use crate::access::caller::Caller;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, Method, Request, ResponseResult, ServerCapabilities, SuccessResponse,
 };
 use crate::api::subscriptions::ActiveSubscription;
 use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_output};
-use crate::access::caller::Caller;
 use crate::api::{request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, EventHub};
 use crate::ipc::{
     bind_local_listener, is_connection_closed_error, local_stream_peer_closed,
@@ -339,7 +339,10 @@ struct RequestEnvelope {
 impl std::fmt::Debug for RequestEnvelope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RequestEnvelope")
-            .field("caller_token", &self.caller_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "caller_token",
+                &self.caller_token.as_ref().map(|_| "<redacted>"),
+            )
             .field("caller_origin", &self.caller_origin)
             .finish()
     }
@@ -531,8 +534,14 @@ fn handle_connection_with_stop(
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         Method::PaneWaitForOutput(params) => {
-            let response =
-                wait_for_output(request_id.clone(), params, &mut stream, &caller, api_tx, running)?;
+            let response = wait_for_output(
+                request_id.clone(),
+                params,
+                &mut stream,
+                &caller,
+                api_tx,
+                running,
+            )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         method_body => {
@@ -1443,9 +1452,7 @@ mod tests {
 
     #[test]
     fn old_shape_server_parses_request_with_caller_token() {
-        let line = format!(
-            r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#
-        );
+        let line = format!(r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#);
         let request: Request = serde_json::from_str(&line).expect("extra envelope fields");
         assert_eq!(request.id, "r1");
         assert!(matches!(request.method, Method::Ping(_)));
@@ -1453,9 +1460,7 @@ mod tests {
 
     #[test]
     fn envelope_reads_token_and_origin_beside_request() {
-        let line = format!(
-            r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#
-        );
+        let line = format!(r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#);
         let envelope = parse_request_envelope(&line);
         assert_eq!(envelope.caller_token.as_deref(), Some("tok-secret-7"));
         assert_eq!(envelope.caller_origin.as_deref(), Some("remote"));
@@ -1487,9 +1492,7 @@ mod tests {
             token: Some("tok-secret-7".into()),
             remote: true,
         };
-        let envelope = parse_request_envelope(&format!(
-            r#"{{"id":"x",{PROMPT_LINE_TAIL}"#
-        ));
+        let envelope = parse_request_envelope(&format!(r#"{{"id":"x",{PROMPT_LINE_TAIL}"#));
         for printed in [format!("{caller:?}"), format!("{envelope:?}")] {
             assert!(!printed.contains("tok-secret-7"), "{printed}");
             assert!(printed.contains("<redacted>"), "{printed}");
@@ -1689,7 +1692,15 @@ mod tests {
 
         let request_for_thread = request.clone();
         let thread = std::thread::spawn(move || {
-            handle_request(request_for_thread, &Caller::test_outside(), &tx, None, None, None, None)
+            handle_request(
+                request_for_thread,
+                &Caller::test_outside(),
+                &tx,
+                None,
+                None,
+                None,
+                None,
+            )
         });
 
         let msg = rx.blocking_recv().unwrap();

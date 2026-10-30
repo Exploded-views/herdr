@@ -216,7 +216,12 @@ impl ActiveSubscription {
                 agent_status,
             } => {
                 let last_sequence = event_hub.current_sequence();
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, caller, api_tx)?;
+                let probe = pane_get(
+                    format!("{request_id}:sub:{index}:probe"),
+                    &pane_id,
+                    caller,
+                    api_tx,
+                )?;
                 let last_status = probe.agent_status;
                 let last_presentation = PanePresentationSnapshot::from(&probe);
                 let initial_event = agent_status
@@ -245,7 +250,12 @@ impl ActiveSubscription {
                 )))
             }
             Subscription::PaneScrollChanged { pane_id } => {
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, caller, api_tx)?;
+                let probe = pane_get(
+                    format!("{request_id}:sub:{index}:probe"),
+                    &pane_id,
+                    caller,
+                    api_tx,
+                )?;
 
                 Ok(Self::ScrollChanged(ActiveScrollChangedSubscription {
                     pane_id: probe.pane_id,

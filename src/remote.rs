@@ -87,10 +87,9 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
             use std::io::Write as _;
 
             // Stamp before connecting: a first line we can't vouch for never reaches the API.
-            let Some(stamped) = bridge_first_line(
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
-            ) else {
+            let Some(stamped) =
+                bridge_first_line(&mut std::io::stdin().lock(), &mut std::io::stdout().lock())
+            else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "remote bridge: first line is not a JSON request object",
@@ -306,8 +305,9 @@ mod tests {
     #[test]
     fn bridge_first_line_writes_the_exact_refusal_and_no_stamp() {
         let mut out = Vec::new();
-        assert!(bridge_first_line(&mut std::io::Cursor::new(b"nope\n".to_vec()), &mut out)
-            .is_none());
+        assert!(
+            bridge_first_line(&mut std::io::Cursor::new(b"nope\n".to_vec()), &mut out).is_none()
+        );
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "{\"id\":\"\",\"error\":{\"code\":\"invalid_request\",\"message\":\"remote bridge: first line is not a JSON request object\"}}\n"
@@ -315,11 +315,15 @@ mod tests {
 
         let mut out = Vec::new();
         let line = bridge_first_line(
-            &mut std::io::Cursor::new(b"{\"id\":\"1\",\"method\":\"ping\",\"params\":{}}\n".to_vec()),
+            &mut std::io::Cursor::new(
+                b"{\"id\":\"1\",\"method\":\"ping\",\"params\":{}}\n".to_vec(),
+            ),
             &mut out,
         )
         .expect("good line");
         assert!(out.is_empty());
-        assert!(String::from_utf8(line).unwrap().contains("\"caller_origin\":\"remote\""));
+        assert!(String::from_utf8(line)
+            .unwrap()
+            .contains("\"caller_origin\":\"remote\""));
     }
 }
