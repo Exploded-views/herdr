@@ -24,10 +24,11 @@ impl From<Principal> for String {
 }
 
 fn valid_caller_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    let mut chars = name.chars();
+    let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit());
+    first_ok
+        && name.len() <= 64
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_'))
 }
 
 impl TryFrom<String> for Principal {
@@ -129,7 +130,11 @@ pub(crate) enum CallerClass {
     Outside {
         via_ssh: bool,
     },
-    Unknown,
+    /// Not shown to be outside. `remote_hint` is set when a remote stamp or an
+    /// ssh-server ancestor was seen on the way; it only ever restricts.
+    Unknown {
+        remote_hint: bool,
+    },
     Remote,
     Caller {
         name: String,
@@ -215,11 +220,28 @@ impl AccessDenied {
     }
 }
 
+/// Does one principal admit this caller on a pane bound to `binding`? `None`
+/// admits nobody; a named caller is admitted only with this pane's binding.
+fn principal_admits(
+    principal: &Principal,
+    caller: &CallerClass,
+    binding: &AccessBindingId,
+) -> bool {
+    match principal {
+        Principal::None => false,
+        Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
+        Principal::Caller(n) => matches!(
+            caller,
+            CallerClass::Caller { name, target, .. } if name == n && target == binding
+        ),
+    }
+}
+
 fn from_text(caller: &CallerClass) -> String {
     match caller {
         CallerClass::Pane(t) => format!("pane:{t}"),
         CallerClass::Outside { .. } => "outside".to_string(),
-        CallerClass::Unknown => "unknown".to_string(),
+        CallerClass::Unknown { .. } => "unknown".to_string(),
         CallerClass::Remote => "remote".to_string(),
         CallerClass::Caller { name, .. } => format!("caller:{name}"),
     }
@@ -256,12 +278,13 @@ pub(crate) fn decide(
         } => {
             // Rule 0: remote input. Only denies; never grants.
             if remote.input == RemoteInput::BridgeOnly {
-                let remote_origin = matches!(caller, CallerClass::Remote)
-                    || matches!(
-                        caller,
-                        CallerClass::Outside { via_ssh: true }
-                            | CallerClass::Caller { via_ssh: true, .. }
-                    );
+                let remote_origin = matches!(
+                    caller,
+                    CallerClass::Remote
+                        | CallerClass::Unknown { remote_hint: true }
+                        | CallerClass::Outside { via_ssh: true }
+                        | CallerClass::Caller { via_ssh: true, .. }
+                );
                 let on_own_binding = matches!(
                     (caller, policy),
                     (CallerClass::Caller { target, .. }, Some(p)) if p.binding == *target
@@ -284,14 +307,10 @@ pub(crate) fn decide(
             let Some(p) = policy else {
                 return Ok(());
             };
-            let matched = p.accept_from.iter().any(|principal| match principal {
-                Principal::None => false,
-                Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
-                Principal::Caller(n) => matches!(
-                    caller,
-                    CallerClass::Caller { name, target, .. } if name == n && *target == p.binding
-                ),
-            });
+            let matched = p
+                .accept_from
+                .iter()
+                .any(|principal| principal_admits(principal, caller, &p.binding));
             if matched {
                 Ok(())
             } else {
@@ -370,7 +389,7 @@ mod tests {
         vec![
             CallerClass::Pane(t.clone()),
             outside(),
-            CallerClass::Unknown,
+            CallerClass::Unknown { remote_hint: false },
             CallerClass::Remote,
             caller("a", 1),
         ]
@@ -390,7 +409,7 @@ mod tests {
         for c in [
             CallerClass::Pane(t.clone()),
             outside(),
-            CallerClass::Unknown,
+            CallerClass::Unknown { remote_hint: false },
             CallerClass::Remote,
         ] {
             assert!(d(&input(&t, None), &c).is_ok(), "{c:?}");
@@ -415,7 +434,7 @@ mod tests {
         let tg = input(&t, Some(&p));
         assert!(d(&tg, &outside()).is_ok());
         assert!(d(&tg, &CallerClass::Pane(t.clone())).is_err());
-        assert!(d(&tg, &CallerClass::Unknown).is_err());
+        assert!(d(&tg, &CallerClass::Unknown { remote_hint: false }).is_err());
         assert!(d(&tg, &CallerClass::Remote).is_err());
         assert!(d(&tg, &caller("a", 1)).is_err());
     }
@@ -456,7 +475,10 @@ mod tests {
                 Principal::None,
             ],
         );
-        for c in [CallerClass::Remote, CallerClass::Unknown] {
+        for c in [
+            CallerClass::Remote,
+            CallerClass::Unknown { remote_hint: false },
+        ] {
             assert!(d(&input(&t, Some(&p)), &c).is_err());
             assert!(d(&control(&t, Some(&p)), &c).is_err());
         }
@@ -472,12 +494,12 @@ mod tests {
         assert!(d(&tg, &caller("a", 1)).is_ok());
         assert!(d(&tg, &caller("a", 2)).is_err());
         assert!(d(&tg, &CallerClass::Pane(t.clone())).is_err());
-        assert!(d(&tg, &CallerClass::Unknown).is_err());
+        assert!(d(&tg, &CallerClass::Unknown { remote_hint: false }).is_err());
         assert!(d(&tg, &CallerClass::Remote).is_err());
         for c in [
             CallerClass::Pane(t.clone()),
             outside(),
-            CallerClass::Unknown,
+            CallerClass::Unknown { remote_hint: false },
             CallerClass::Remote,
         ] {
             assert!(d(&control(&t, None), &c).is_ok());
@@ -490,7 +512,7 @@ mod tests {
         assert!(d(&GateTarget::AccessAdmin, &outside()).is_ok());
         for c in [
             CallerClass::Pane(t.clone()),
-            CallerClass::Unknown,
+            CallerClass::Unknown { remote_hint: false },
             CallerClass::Remote,
             caller("a", 1),
         ] {
@@ -517,7 +539,11 @@ mod tests {
             "access_denied: pane w1-2 does not accept input from caller:a. This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator."
         );
         let p = pol(1, vec![Principal::None]);
-        let e = d(&control(&t, Some(&p)), &CallerClass::Unknown).unwrap_err();
+        let e = d(
+            &control(&t, Some(&p)),
+            &CallerClass::Unknown { remote_hint: false },
+        )
+        .unwrap_err();
         assert_eq!(
             e.message(),
             "access_denied: pane p1 does not accept control requests from unknown. This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator."
@@ -539,6 +565,21 @@ mod tests {
         assert!(parse_accept_from(&s(&["caller:*"])).is_err());
         assert!(parse_accept_from(&s(&["caller:a?"])).is_err());
         assert!(parse_accept_from(&s(&["caller:"])).is_err());
+        for bad in [
+            "caller:..x",
+            "caller:.x",
+            "caller:X",
+            "caller:a.b",
+            "caller:-a",
+            "caller:_a",
+        ] {
+            assert!(parse_accept_from(&s(&[bad])).is_err(), "{bad}");
+        }
+        let long65 = format!("caller:{}", "a".repeat(65));
+        assert!(parse_accept_from(&s(&[long65.as_str()])).is_err());
+        let long64 = format!("caller:{}", "a".repeat(64));
+        assert!(parse_accept_from(&s(&[long64.as_str()])).is_ok());
+        assert!(parse_accept_from(&s(&["caller:0a_b-c"])).is_ok());
         assert!(parse_accept_from(&s(&["*"])).is_err());
         assert!(parse_accept_from(&s(&["pane:x"])).is_err());
         assert!(parse_accept_from(&[]).is_err());
@@ -751,5 +792,76 @@ mod tests {
             assert!(e.message().contains("another host"), "{c:?}");
             assert!(!e.message().contains("caller:"));
         }
+    }
+
+    #[test]
+    fn principal_admits_cases() {
+        let t = TerminalId::alloc();
+        let b = bid(1);
+        let a = Principal::Caller("a".into());
+        assert!(principal_admits(&a, &caller("a", 1), &b));
+        assert!(!principal_admits(&a, &caller("a", 2), &b));
+        assert!(!principal_admits(&a, &caller("b", 1), &b));
+        assert!(!principal_admits(&a, &outside(), &b));
+        assert!(principal_admits(&Principal::Outside, &outside(), &b));
+        assert!(!principal_admits(&Principal::Outside, &caller("a", 1), &b));
+        for c in all_classes(&t) {
+            assert!(!principal_admits(&Principal::None, &c, &b), "{c:?}");
+        }
+        for c in [
+            CallerClass::Remote,
+            CallerClass::Unknown { remote_hint: true },
+            CallerClass::Unknown { remote_hint: false },
+            CallerClass::Pane(t.clone()),
+        ] {
+            assert!(!principal_admits(&a, &c, &b));
+            assert!(!principal_admits(&Principal::Outside, &c, &b));
+        }
+    }
+
+    #[test]
+    fn bridge_only_refuses_incomplete_stamped_walk() {
+        let t = TerminalId::alloc();
+        let rs = bridge_only();
+        let hinted = CallerClass::Unknown { remote_hint: true };
+        let e = decide(&input(&t, None), &hinted, &rs).unwrap_err();
+        assert!(matches!(e, AccessDenied::Remote { .. }));
+        let p = pol(1, vec![Principal::Outside]);
+        assert!(matches!(
+            decide(&input(&t, Some(&p)), &hinted, &rs),
+            Err(AccessDenied::Remote { .. })
+        ));
+        // Rule 0 is for Input only.
+        assert!(decide(&control(&t, None), &hinted, &rs).is_ok());
+    }
+
+    #[test]
+    fn bridge_only_refuses_incomplete_ssh_walk() {
+        // classify() sets remote_hint from via_ssh on an incomplete walk.
+        let lineage = crate::platform::PeerLineage {
+            chain: vec![crate::platform::ProcessIdentity {
+                pid: 200,
+                start_token: 1,
+            }],
+            complete: false,
+            via_ssh: true,
+        };
+        let c = crate::access::caller::classify(&lineage, false, &[], 500, None);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: true });
+        let t = TerminalId::alloc();
+        assert!(matches!(
+            decide(&input(&t, None), &c, &bridge_only()),
+            Err(AccessDenied::Remote { .. })
+        ));
+    }
+
+    #[test]
+    fn bridge_only_keeps_local_unknown_on_open_pane() {
+        let t = TerminalId::alloc();
+        let local = CallerClass::Unknown { remote_hint: false };
+        assert!(decide(&input(&t, None), &local, &bridge_only()).is_ok());
+        let p = pol(1, vec![Principal::Outside]);
+        let e = decide(&input(&t, Some(&p)), &local, &bridge_only()).unwrap_err();
+        assert!(matches!(e, AccessDenied::Input { .. }));
     }
 }

@@ -15,16 +15,20 @@ pub(crate) fn classify(
     server_pid: u32,
     token_match: Option<(String, AccessBindingId)>,
 ) -> CallerClass {
+    let unknown = CallerClass::Unknown {
+        remote_hint: remote || lineage.via_ssh,
+    };
     for ident in &lineage.chain {
         if let Some((terminal, _)) = panes.iter().find(|(_, shell)| shell == ident) {
             return CallerClass::Pane(terminal.clone());
         }
         if ident.pid == server_pid {
-            return CallerClass::Unknown;
+            return unknown;
         }
     }
-    if !lineage.complete {
-        return CallerClass::Unknown;
+    // An empty chain proves nothing, complete or not.
+    if !lineage.complete || lineage.chain.is_empty() {
+        return unknown;
     }
     if remote {
         return CallerClass::Remote;
@@ -67,11 +71,43 @@ mod tests {
         let t = TerminalId::alloc();
         let panes = vec![(t, id(100))];
         let c = classify(&lin(&[200, 300], false), false, &panes, SERVER, None);
-        assert_eq!(c, CallerClass::Unknown);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: false });
         let c = classify(&lin(&[], false), false, &panes, SERVER, None);
-        assert_eq!(c, CallerClass::Unknown);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: false });
         let c = classify(&lin(&[200, 1], true), false, &panes, SERVER, None);
         assert_eq!(c, CallerClass::Outside { via_ssh: false });
+    }
+
+    #[test]
+    fn empty_complete_chain_is_unknown() {
+        let c = classify(&lin(&[], true), false, &[], SERVER, None);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: false });
+        let c = classify(&lin(&[], true), true, &[], SERVER, None);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: true });
+    }
+
+    #[test]
+    fn unknown_keeps_the_remote_hint() {
+        let mut l = lin(&[200], false);
+        l.via_ssh = true;
+        assert_eq!(
+            classify(&l, false, &[], SERVER, None),
+            CallerClass::Unknown { remote_hint: true }
+        );
+        assert_eq!(
+            classify(&lin(&[200], false), true, &[], SERVER, None),
+            CallerClass::Unknown { remote_hint: true }
+        );
+        let mut s = lin(&[700, SERVER, 1], true);
+        s.via_ssh = true;
+        assert_eq!(
+            classify(&s, false, &[], SERVER, None),
+            CallerClass::Unknown { remote_hint: true }
+        );
+        assert_eq!(
+            classify(&lin(&[200], false), false, &[], SERVER, None),
+            CallerClass::Unknown { remote_hint: false }
+        );
     }
 
     #[test]
@@ -112,7 +148,7 @@ mod tests {
         let t = TerminalId::alloc();
         let panes = vec![(t, id(100))];
         let c = classify(&lin(&[700, SERVER, 1], true), false, &panes, SERVER, None);
-        assert_eq!(c, CallerClass::Unknown);
+        assert_eq!(c, CallerClass::Unknown { remote_hint: false });
     }
 
     #[test]
@@ -155,11 +191,11 @@ mod tests {
         );
         assert_eq!(
             classify(&lin(&[SERVER, 1], true), false, &panes, SERVER, tok()),
-            CallerClass::Unknown
+            CallerClass::Unknown { remote_hint: false }
         );
         assert_eq!(
             classify(&lin(&[200], false), false, &panes, SERVER, tok()),
-            CallerClass::Unknown
+            CallerClass::Unknown { remote_hint: false }
         );
     }
 
