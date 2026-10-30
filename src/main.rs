@@ -1,3 +1,4 @@
+// herdr-fork: declares the pure access model module (`access`). Unofficial stopgap; see FORK.md.
 use std::io;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
@@ -11,6 +12,7 @@ const NESTED_HERDR_MESSAGES: [&str; 6] = [
     "recursion detected. base case not found. aborting.",
 ];
 
+mod access;
 mod agent_resume;
 mod agent_view_eval;
 mod api;

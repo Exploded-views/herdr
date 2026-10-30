@@ -57,6 +57,8 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/platform/macos.rs` | changed | `p_uniqueid` link info (proc_pidinfo flavors 13 and 17, readable on root-owned processes) and link check |
 | `src/platform/linux.rs` | changed | `/proc` ppid and start-time link info and link check |
 | `src/platform/fallback.rs` | changed | Lineage stubs |
+| `src/access/mod.rs`, `src/access/policy.rs`, `src/access/caller.rs` | new | Pure access model: policy types, `decide`, caller classification (no wiring yet) |
+| `src/main.rs` | changed | Declares `mod access` |
 
 ## Limits
 
