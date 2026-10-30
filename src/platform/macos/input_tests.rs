@@ -1,3 +1,4 @@
+// herdr-fork: `AgentStartParams` gains `accept_from`. Unofficial stopgap; see FORK.md.
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::mpsc;
@@ -93,6 +94,7 @@ fn start_request(pane_id: &str, argument: &str) -> Request {
             pane_id: pane_id.into(),
             args: vec!["resume".into(), argument.into()],
             timeout_ms: Some(10_000),
+            accept_from: None,
         }),
     }
 }

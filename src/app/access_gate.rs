@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy is admin only. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -9,9 +9,10 @@
 
 use crate::access::caller::{classify, Caller};
 use crate::access::policy::{
-    decide, AccessDenied, AccessPolicy, CallerClass, GateTarget, RemoteInput,
+    decide, is_looser, parse_accept_from, AccessDenied, AccessPolicy, CallerClass, GateTarget,
+    RemoteInput,
 };
-use crate::api::schema::{AccessClass, Method};
+use crate::api::schema::{AccessClass, AgentStartParams, Method};
 use crate::terminal::TerminalId;
 
 use super::App;
@@ -113,7 +114,12 @@ impl App {
         caller: &Caller,
     ) -> Result<(), AccessDenied> {
         let operation = method.operation();
-        if self.access_gate_idle(caller) && !operation.name.starts_with("access.") {
+        let binds_at_start =
+            matches!(method, Method::AgentStart(params) if params.accept_from.is_some());
+        if self.access_gate_idle(caller)
+            && !operation.name.starts_with("access.")
+            && !binds_at_start
+        {
             return Ok(());
         }
         let class = self.classify_caller(caller);
@@ -216,12 +222,7 @@ impl App {
             Method::PaneSendText(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendInput(params) => self.parsed_pane_gate_target(&params.pane_id),
-            Method::AgentStart(params) => {
-                match self.parse_current_public_pane_id(&params.pane_id) {
-                    Some((ws_idx, pane_id)) => self.pane_gate_target(ws_idx, pane_id, true),
-                    None => GateTarget::Open,
-                }
-            }
+            Method::AgentStart(params) => self.agent_start_gate_target(params),
             // Open: nothing here writes caller-chosen bytes into an existing pane.
             Method::Ping(_)
             | Method::ServerStop(_)
@@ -320,6 +321,30 @@ impl App {
             | Method::PluginPaneFocus(_)
             | Method::PluginPaneClose(_) => GateTarget::Open,
         }
+    }
+
+    /// `agent.start`: control of the pane, unless an explicit `accept_from`
+    /// would let in someone the pane does not accept today (or the section or
+    /// default it would get). That loosens a policy, so it is admin only.
+    /// An `accept_from` that does not parse is the handler's error to report.
+    fn agent_start_gate_target(&self, params: &AgentStartParams) -> GateTarget<'_> {
+        let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
+            return GateTarget::Open;
+        };
+        if let Some(values) = params.accept_from.as_deref() {
+            let terminal = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|workspace| workspace.terminal_id(pane_id));
+            if let (Some(terminal), Ok(explicit)) = (terminal, parse_accept_from(values)) {
+                let baseline = self.state.start_baseline_access(terminal, &params.name);
+                if is_looser(&explicit, baseline) {
+                    return GateTarget::AccessAdmin;
+                }
+            }
+        }
+        self.pane_gate_target(ws_idx, pane_id, true)
     }
 
     fn agent_gate_target(&self, target: &str) -> GateTarget<'_> {
@@ -474,6 +499,7 @@ mod tests {
                 pane_id: public_pane_id.into(),
                 args: Vec::new(),
                 timeout_ms: None,
+                accept_from: None,
             }),
             "agent.prompt" => Method::AgentPrompt(AgentPromptParams {
                 target: agent_name.into(),
@@ -566,6 +592,7 @@ mod tests {
                 pane_id: app.public_pane_id(0, pane).unwrap(),
                 args: Vec::new(),
                 timeout_ms: None,
+                accept_from: None,
             })
         };
         assert!(matches!(
@@ -865,5 +892,86 @@ mod tests {
             lineage <= lineage_budget,
             "lineage walk p95 {lineage:?} is over {lineage_budget:?}"
         );
+    }
+
+    fn start_with(app: &App, pane: usize, accept_from: &[&str]) -> Method {
+        let panes = pane_ids(app);
+        Method::AgentStart(AgentStartParams {
+            name: "worker".into(),
+            kind: "pi".into(),
+            pane_id: app.public_pane_id(0, panes[pane]).unwrap(),
+            args: Vec::new(),
+            timeout_ms: None,
+            accept_from: Some(accept_from.iter().map(|v| v.to_string()).collect()),
+        })
+    }
+
+    #[test]
+    fn start_loosening_is_measured_against_a_bound_policy() {
+        let mut app = app_with_panes(1);
+        let terminal = terminal_of(&app, pane_ids(&app)[0]);
+        protect(&mut app, &terminal, vec![Principal::Outside]);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
+            GateTarget::AccessAdmin
+        ));
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["outside"])),
+            GateTarget::PaneControl { .. }
+        ));
+    }
+
+    #[test]
+    fn start_loosening_is_measured_against_the_section_or_default_an_unbound_pane_would_get() {
+        let mut app = app_with_panes(1);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["any"])),
+            GateTarget::Input { policy: None, .. }
+        ));
+        app.state.access_defaults.default = Some(vec![Principal::Outside]);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
+            GateTarget::AccessAdmin
+        ));
+        // A section for the agent's name replaces the default.
+        app.state
+            .access_defaults
+            .by_name
+            .insert("worker".into(), vec![Principal::Caller("ci".into())]);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
+            GateTarget::Input { .. }
+        ));
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["outside"])),
+            GateTarget::AccessAdmin
+        ));
+    }
+
+    #[test]
+    fn start_loosening_treats_an_explicitly_opened_pane_as_open() {
+        let mut app = app_with_panes(1);
+        let terminal = terminal_of(&app, pane_ids(&app)[0]);
+        app.state.access_defaults.default = Some(vec![Principal::None]);
+        app.state.unbind_access(&terminal);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["any"])),
+            GateTarget::Input { policy: None, .. }
+        ));
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
+            GateTarget::Input { policy: None, .. }
+        ));
+    }
+
+    #[test]
+    fn start_with_an_unparsable_accept_from_is_left_to_the_handler() {
+        let mut app = app_with_panes(1);
+        let terminal = terminal_of(&app, pane_ids(&app)[0]);
+        protect(&mut app, &terminal, vec![Principal::None]);
+        assert!(matches!(
+            app.gate_target(&start_with(&app, 0, &["caller:*"])),
+            GateTarget::PaneControl { .. }
+        ));
     }
 }

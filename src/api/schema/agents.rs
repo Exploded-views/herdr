@@ -1,3 +1,4 @@
+// herdr-fork: `agent start` takes `accept_from`. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -193,6 +194,9 @@ cli_params! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub timeout_ms: Option<u64> => Field::new(None).input(bindings::timeout()
             .help("Wait for interactive readiness (default: 30000; max: 300000)")),
+        /// Who the pane accepts input from once the agent is started: `any`, or a list of `none`, `outside`, `caller:<name>`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub accept_from: Option<Vec<String>> => Field::new(None).input(bindings::accept_from()),
     }
 }
 

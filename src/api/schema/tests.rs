@@ -1,3 +1,4 @@
+// herdr-fork: `AgentStartParams` gains `accept_from`. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 
 use super::*;
@@ -100,6 +101,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
             timeout_ms: Some(30_000),
+            accept_from: None,
         }),
     };
     let start_json = serde_json::to_value(&start).unwrap();

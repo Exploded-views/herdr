@@ -1,3 +1,4 @@
+// herdr-fork: tests for binding access at `agent start`. Unofficial stopgap; see FORK.md.
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -947,6 +948,283 @@ mod tests {
                 app.state.terminals[&terminal_id].manual_label.as_deref(),
                 Some("shell-pane")
             );
+        }
+    }
+
+    mod start_access {
+        use super::*;
+        use crate::access::caller::Caller;
+        use crate::access::policy::{AccessBindingId, AccessPolicy, CallerClass, Principal};
+        use crate::api::schema::{AgentStartParams, Method};
+        use crate::terminal::TerminalId;
+
+        struct Rig {
+            app: App,
+            panes: Vec<String>,
+            terminals: Vec<TerminalId>,
+            _receivers: Vec<Box<dyn std::any::Any>>,
+        }
+
+        fn rig() -> Rig {
+            let mut app = app_with_agent();
+            let mut workspace = Workspace::test_new("start-access");
+            workspace.test_split(ratatui::layout::Direction::Horizontal);
+            app.state.workspaces = vec![workspace];
+            app.state.ensure_test_terminals();
+            app.state.active = Some(0);
+            let ids = app.state.workspaces[0].tabs[0].layout.pane_ids();
+            let mut rig = Rig {
+                app,
+                panes: Vec::new(),
+                terminals: Vec::new(),
+                _receivers: Vec::new(),
+            };
+            for pane in ids {
+                let terminal = rig.app.state.workspaces[0]
+                    .terminal_id(pane)
+                    .unwrap()
+                    .clone();
+                let (runtime, rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+                rig.app.terminal_runtimes.insert(terminal.clone(), runtime);
+                rig.panes.push(rig.app.public_pane_id(0, pane).unwrap());
+                rig.terminals.push(terminal);
+                rig._receivers.push(Box::new(rx));
+            }
+            rig
+        }
+
+        fn params(pane: &str, accept_from: Option<&[&str]>) -> AgentStartParams {
+            AgentStartParams {
+                name: "worker".into(),
+                kind: "pi".into(),
+                pane_id: pane.into(),
+                args: Vec::new(),
+                timeout_ms: Some(10_000),
+                accept_from: accept_from
+                    .map(|values| values.iter().map(|value| value.to_string()).collect()),
+            }
+        }
+
+        fn start(rig: &mut Rig, pane: usize, accept_from: Option<&[&str]>) -> serde_json::Value {
+            let response = rig.app.handle_api_request(crate::api::schema::Request {
+                id: "req".into(),
+                method: Method::AgentStart(params(&rig.panes[pane], accept_from)),
+            });
+            serde_json::from_str(&response).unwrap()
+        }
+
+        fn bind(rig: &mut Rig, pane: usize, list: Vec<Principal>) -> AccessBindingId {
+            let binding = AccessBindingId::mint().unwrap();
+            rig.app
+                .state
+                .terminals
+                .get_mut(&rig.terminals[pane])
+                .unwrap()
+                .access = Some(AccessPolicy {
+                binding: binding.clone(),
+                accept_from: list,
+            });
+            binding
+        }
+
+        fn policy(rig: &Rig, pane: usize) -> Option<AccessPolicy> {
+            rig.app.state.terminals[&rig.terminals[pane]].access.clone()
+        }
+
+        fn from_pane(rig: &Rig, pane: usize) -> Caller {
+            Caller::Classified(CallerClass::Pane(rig.terminals[pane].clone()))
+        }
+
+        fn outside() -> Caller {
+            Caller::Classified(CallerClass::Outside { via_ssh: false })
+        }
+
+        fn method(rig: &Rig, pane: usize, accept_from: Option<&[&str]>) -> Method {
+            Method::AgentStart(params(&rig.panes[pane], accept_from))
+        }
+
+        #[tokio::test]
+        async fn agent_start_binds_named_section_policy() {
+            let mut rig = rig();
+            rig.app
+                .state
+                .access_defaults
+                .by_name
+                .insert("worker".into(), vec![Principal::Outside]);
+            rig.app.state.access_defaults.default = Some(vec![Principal::None]);
+            let response = start(&mut rig, 0, None);
+            assert_eq!(response["result"]["type"], "agent_started");
+            assert_eq!(
+                policy(&rig, 0).unwrap().accept_from,
+                vec![Principal::Outside]
+            );
+        }
+
+        #[tokio::test]
+        async fn agent_start_binds_the_default_when_no_section_names_the_agent() {
+            let mut rig = rig();
+            rig.app.state.access_defaults.default = Some(vec![Principal::None]);
+            start(&mut rig, 0, None);
+            assert_eq!(policy(&rig, 0).unwrap().accept_from, vec![Principal::None]);
+        }
+
+        #[tokio::test]
+        async fn agent_start_binds_an_explicit_accept_from() {
+            let mut rig = rig();
+            let response = start(&mut rig, 0, Some(&["outside", "caller:ci"]));
+            assert_eq!(response["result"]["type"], "agent_started");
+            assert_eq!(
+                policy(&rig, 0).unwrap().accept_from,
+                vec![Principal::Outside, Principal::Caller("ci".into())]
+            );
+        }
+
+        #[tokio::test]
+        async fn agent_start_into_bound_pane_keeps_binding() {
+            let mut rig = rig();
+            let binding = bind(&mut rig, 0, vec![Principal::Outside]);
+            rig.app.state.access_defaults.default = Some(vec![Principal::None]);
+            start(&mut rig, 0, None);
+            let kept = policy(&rig, 0).unwrap();
+            assert_eq!(kept.binding, binding);
+            assert_eq!(kept.accept_from, vec![Principal::Outside]);
+        }
+
+        #[tokio::test]
+        async fn agent_start_with_tighter_accept_from_keeps_the_binding_id() {
+            let mut rig = rig();
+            let binding = bind(&mut rig, 0, vec![Principal::Outside]);
+            let response = start(&mut rig, 0, Some(&["none"]));
+            assert_eq!(response["result"]["type"], "agent_started");
+            let kept = policy(&rig, 0).unwrap();
+            assert_eq!(kept.binding, binding);
+            assert_eq!(kept.accept_from, vec![Principal::None]);
+        }
+
+        #[tokio::test]
+        async fn agent_start_without_accept_from_keeps_explicitly_opened_pane_open() {
+            let mut rig = rig();
+            rig.app.state.access_defaults.default = Some(vec![Principal::None]);
+            rig.app
+                .state
+                .access_defaults
+                .by_name
+                .insert("worker".into(), vec![Principal::None]);
+            let terminal = rig.terminals[0].clone();
+            rig.app.state.unbind_access(&terminal);
+            let response = start(&mut rig, 0, None);
+            assert_eq!(response["result"]["type"], "agent_started");
+            assert!(policy(&rig, 0).is_none());
+            assert!(rig.app.state.terminals[&terminal].access_opened_explicitly);
+        }
+
+        #[tokio::test]
+        async fn agent_start_with_any_opens_the_pane_on_purpose() {
+            let mut rig = rig();
+            bind(&mut rig, 0, vec![Principal::Outside]);
+            let response = start(&mut rig, 0, Some(&["any"]));
+            assert_eq!(response["result"]["type"], "agent_started");
+            assert!(policy(&rig, 0).is_none());
+            assert!(rig.app.state.terminals[&rig.terminals[0]].access_opened_explicitly);
+        }
+
+        #[tokio::test]
+        async fn invalid_accept_from_is_refused_and_changes_nothing() {
+            let mut rig = rig();
+            let binding = bind(&mut rig, 0, vec![Principal::Outside]);
+            for bad in [&["any", "outside"][..], &["caller:*"], &[]] {
+                let response = start(&mut rig, 0, Some(bad));
+                assert_eq!(response["error"]["code"], "invalid_accept_from");
+            }
+            assert_eq!(policy(&rig, 0).unwrap().binding, binding);
+            assert_eq!(rig.app.state.terminals[&rig.terminals[0]].agent_name, None);
+        }
+
+        #[tokio::test]
+        async fn a_failed_send_puts_the_previous_policy_back() {
+            let mut rig = rig();
+            let terminal = rig.terminals[0].clone();
+            let (runtime, _rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+            runtime
+                .try_send_bytes(Bytes::from_static(b"occupied"))
+                .unwrap();
+            rig.app.terminal_runtimes.insert(terminal.clone(), runtime);
+            let response = start(&mut rig, 0, Some(&["outside"]));
+            assert_eq!(response["error"]["code"], "agent_start_input_failed");
+            assert!(policy(&rig, 0).is_none());
+            assert!(!rig.app.state.terminals[&terminal].access_opened_explicitly);
+        }
+
+        #[tokio::test]
+        async fn agent_start_into_protected_pane_from_pane_denied() {
+            let mut rig = rig();
+            bind(&mut rig, 0, vec![Principal::Outside]);
+            let denied = rig
+                .app
+                .check_access(&method(&rig, 0, None), &from_pane(&rig, 1))
+                .unwrap_err();
+            assert!(denied
+                .message()
+                .contains("does not accept control requests from pane:"));
+        }
+
+        #[tokio::test]
+        async fn agent_start_into_protected_pane_from_outside_allowed() {
+            let mut rig = rig();
+            bind(&mut rig, 0, vec![Principal::Outside]);
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, None), &outside())
+                .is_ok());
+        }
+
+        #[tokio::test]
+        async fn looser_accept_from_from_pane_is_denied() {
+            let mut rig = rig();
+            rig.app.state.access_defaults.default = Some(vec![Principal::Outside]);
+            for loose in [&["any"][..], &["caller:ci"], &["outside", "caller:ci"]] {
+                let denied = rig
+                    .app
+                    .check_access(&method(&rig, 0, Some(loose)), &from_pane(&rig, 1))
+                    .unwrap_err();
+                assert!(
+                    denied
+                        .message()
+                        .contains("does not accept control requests from pane:"),
+                    "{loose:?}"
+                );
+                assert!(
+                    rig.app
+                        .check_access(&method(&rig, 0, Some(loose)), &outside())
+                        .is_ok(),
+                    "{loose:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn looser_than_a_bound_policy_from_pane_is_denied_even_on_an_idle_looking_gate() {
+            let mut rig = rig();
+            bind(&mut rig, 0, vec![Principal::None]);
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["outside"])), &from_pane(&rig, 1))
+                .is_err());
+        }
+
+        #[tokio::test]
+        async fn tighter_accept_from_from_pane_is_allowed() {
+            let mut rig = rig();
+            rig.app.state.access_defaults.default = Some(vec![Principal::Outside]);
+            for tight in [&["none"][..], &["outside"]] {
+                assert!(
+                    rig.app
+                        .check_access(&method(&rig, 0, Some(tight)), &from_pane(&rig, 1))
+                        .is_ok(),
+                    "{tight:?}"
+                );
+            }
         }
     }
 }

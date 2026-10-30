@@ -75,8 +75,6 @@ pub(crate) fn parse_accept_from(values: &[String]) -> Result<AcceptFrom, String>
 
 /// True when `explicit` would let in someone the pane's current policy does
 /// not. `current == None` means no policy (open), which nothing is looser than.
-// Used by `agent.start` / `access.pane.set` (Tasks 8 and 9), which have not landed.
-#[allow(dead_code)]
 pub(crate) fn is_looser(explicit: &AcceptFrom, current: Option<&[Principal]>) -> bool {
     let Some(current) = current else {
         return false;
@@ -192,8 +190,7 @@ pub(crate) enum GateTarget<'a> {
         policy: Option<&'a AccessPolicy>,
     },
     /// `access.pane.set`, `access.caller.*`.
-    // Built by `gate_target` once those methods exist (Task 9).
-    #[allow(dead_code)]
+    // Built by `gate_target` for an `agent.start` that loosens a policy.
     AccessAdmin,
 }
 

@@ -35,3 +35,11 @@ a plan to send it upstream, and nothing has been proposed upstream.
   if a policy is bound mid-read. The check is made again right before a request runs, after
   queued events (such as agent detection) have been applied. The `[access]` key `input_log` is
   accepted (it has no effect yet). *fork-only*
+- `agent start` takes `--accept-from` (`accept_from` in the API): `any`, or a list of `none`,
+  `outside` and `caller:<name>`. It binds the pane's policy when the agent starts. Without it, a
+  pane that has a policy keeps it (same binding), a pane opened on purpose stays open, and any
+  other pane gets the `[access.<name>]` section for the agent's name, else `[access.default]`.
+  `--accept-from any` opens the pane on purpose. A start that would let in more than the pane
+  accepts now (or would get from its section or default) is an admin request: only a caller
+  outside every pane may make it. A malformed value fails with `invalid_accept_from` and starts
+  nothing. *fork-only*

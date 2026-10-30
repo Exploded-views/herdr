@@ -1340,6 +1340,16 @@
         },
         "AgentStartParams": {
           "properties": {
+            "accept_from": {
+              "description": "Who the pane accepts input from once the agent is started: `any`, or a list of `none`, `outside`, `caller:<name>`.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "args": {
               "items": {
                 "type": "string"

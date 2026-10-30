@@ -6,7 +6,7 @@ use std::io;
 
 use super::state::AppState;
 use crate::access::policy::AccessDefaults;
-use crate::access::policy::{AccessBindingId, AccessPolicy, Principal};
+use crate::access::policy::{AcceptFrom, AccessBindingId, AccessPolicy, Principal};
 use crate::terminal::{TerminalId, TerminalState};
 
 // bind_access and unbind_access are called by the access.* methods in a later task.
@@ -49,6 +49,62 @@ impl AppState {
             state.access_opened_explicitly = true;
             self.mark_session_dirty();
         }
+    }
+}
+
+impl AppState {
+    /// The `accept_from` a start into `terminal` is measured against: the
+    /// pane's bound policy; for an unbound pane that was not opened on
+    /// purpose, what its name's section or the default would bind; for a pane
+    /// opened on purpose, `None` (it is open).
+    pub(crate) fn start_baseline_access(
+        &self,
+        terminal: &TerminalId,
+        name: &str,
+    ) -> Option<&[Principal]> {
+        let state = self.terminals.get(terminal)?;
+        if let Some(policy) = state.access.as_ref() {
+            return Some(&policy.accept_from);
+        }
+        if state.access_opened_explicitly {
+            return None;
+        }
+        self.access_defaults
+            .by_name
+            .get(name)
+            .or(self.access_defaults.default.as_ref())
+            .map(Vec::as_slice)
+    }
+
+    /// Settle a pane's policy for `agent start`. An explicit `accept_from`
+    /// binds (or, for `any`, opens the pane on purpose). Without one, a pane
+    /// that holds a policy keeps it, a pane opened on purpose stays open, and
+    /// any other pane gets its name's section or the default.
+    pub(crate) fn bind_access_for_start(
+        &mut self,
+        terminal: &TerminalId,
+        name: &str,
+        explicit: Option<AcceptFrom>,
+    ) -> io::Result<()> {
+        match explicit {
+            Some(AcceptFrom::Any) => self.unbind_access(terminal),
+            Some(AcceptFrom::Only(list)) => {
+                self.bind_access(terminal, list)?;
+            }
+            None => {
+                let Some(state) = self.terminals.get(terminal) else {
+                    return Ok(());
+                };
+                if state.access.is_some() || state.access_opened_explicitly {
+                    return Ok(());
+                }
+                if let Some(list) = self.start_baseline_access(terminal, name) {
+                    let list = list.to_vec();
+                    self.bind_access(terminal, list)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

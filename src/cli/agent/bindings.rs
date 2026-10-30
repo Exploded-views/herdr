@@ -1,3 +1,4 @@
+// herdr-fork: `--accept-from` binding for `agent start`. Unofficial stopgap; see FORK.md.
 use clap::{ArgGroup, ArgMatches, Command};
 
 use crate::api::schema::agents::{
@@ -52,6 +53,19 @@ pub(crate) fn timeout() -> Input<Option<u64>> {
         Ok(())
     })
     .configure(|arg| arg.value_parser(clap::builder::ValueParser::new(validate_timeout)))
+}
+
+/// `--accept-from`: who the started agent's pane accepts input from. Repeat
+/// the flag or separate entries with commas. Values are checked by the server.
+pub(crate) fn accept_from() -> Input<Option<Vec<String>>> {
+    Input::<Option<Vec<String>>>::value("accept-from", "WHO", |slot, value| {
+        slot.get_or_insert_with(Vec::new).push(value.to_owned());
+        Ok(())
+    })
+    .configure(|arg| {
+        arg.value_delimiter(',')
+            .help("Who the pane accepts input from: any, or none, outside, caller:<name> (comma-separated)")
+    })
 }
 
 fn validate_timeout(value: &str) -> Result<String, String> {

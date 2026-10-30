@@ -3,6 +3,8 @@ title: CLI reference
 description: Herdr commands for sessions, workspaces, tabs, panes, notifications, agents, waits, integrations, and status.
 ---
 
+{/* herdr-fork: documents `agent start --accept-from`; see FORK.md */}
+
 Herdr’s CLI talks to the running server over the same local socket API used by integrations and agents.
 
 Most commands print JSON responses for deterministic automation in scripts.
@@ -347,7 +349,7 @@ herdr agent rename <target> <name>|--clear
 herdr agent focus <target>
 herdr agent wait <target> [--until STATUS]... [--timeout MS]
 herdr agent attach <target> [--takeover]
-herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]
+herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--accept-from WHO]... [-- <agent-args...>]
 herdr agent explain <target> [--json|--verbose]
 herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 ```
@@ -355,6 +357,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 Agent targets are either a unique live agent name or the pane ID that currently hosts the agent. Terminal IDs and bare agent-kind labels are not agent targets. Agents started through `agent start` require a name; manually launched agents remain unnamed and use their pane ID.
 
 `agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
+
+`--accept-from` (fork) sets who the pane accepts input from once the agent starts: `any`, or a comma-separated or repeated list of `none`, `outside` and `caller:<name>`. Without it, a pane that already has a policy keeps it, a pane opened on purpose stays open, and any other pane gets the `[access.<name>]` section for the agent's name, else `[access.default]`. `any` opens the pane on purpose. Asking for more access than the pane has now (or would get) is an admin request that only a caller outside every pane may make; narrowing needs no more than the usual control of the pane.
 
 A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
 

@@ -185,6 +185,7 @@ fn agent_start(pane_id: &str) -> Method {
         pane_id: pane_id.into(),
         args: Vec::new(),
         timeout_ms: None,
+        accept_from: None,
     })
 }
 

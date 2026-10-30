@@ -1,3 +1,4 @@
+// herdr-fork: `agent start` binds, keeps or opens a pane's access policy. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -160,6 +161,13 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
+        let explicit_access = match params.accept_from.as_deref() {
+            Some(values) => Some(
+                crate::access::policy::parse_accept_from(values)
+                    .map_err(AgentStartError::InvalidAcceptFrom)?,
+            ),
+            None => None,
+        };
         let persisted_agent_session =
             crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
@@ -212,6 +220,17 @@ impl App {
             .validate_input_submission(&bytes)
             .map_err(|err| AgentStartError::InputFailed(err.to_string()))?;
 
+        // Settle the policy before anything is sent, so a pane never runs an
+        // agent it could not bind. A failed send puts the previous state back.
+        let previous_access = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .map(|terminal| (terminal.access.clone(), terminal.access_opened_explicitly));
+        self.state
+            .bind_access_for_start(&terminal_id, &name, explicit_access)
+            .map_err(|err| AgentStartError::AccessBindFailed(err.to_string()))?;
+
         let now = Instant::now();
         let terminal = self
             .state
@@ -221,6 +240,10 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
+            if let Some((access, opened)) = previous_access {
+                terminal.access = access;
+                terminal.access_opened_explicitly = opened;
+            }
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
         if let Some(session) = persisted_agent_session {
@@ -255,6 +278,14 @@ impl App {
             AgentStartError::InvalidTimeout => crate::api::schema::ErrorBody {
                 code: "invalid_agent_timeout".into(),
                 message: INVALID_AGENT_TIMEOUT_MESSAGE.into(),
+            },
+            AgentStartError::InvalidAcceptFrom(message) => crate::api::schema::ErrorBody {
+                code: "invalid_accept_from".into(),
+                message,
+            },
+            AgentStartError::AccessBindFailed(message) => crate::api::schema::ErrorBody {
+                code: "access_bind_failed".into(),
+                message: format!("could not bind the pane's access policy: {message}"),
             },
             AgentStartError::TargetNotFound(target) => crate::api::schema::ErrorBody {
                 code: "agent_pane_not_found".into(),
@@ -455,6 +486,8 @@ pub(super) enum AgentStartError {
     UnsupportedKind(String),
     InvalidArgument,
     InvalidTimeout,
+    InvalidAcceptFrom(String),
+    AccessBindFailed(String),
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),
