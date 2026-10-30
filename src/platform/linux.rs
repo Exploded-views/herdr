@@ -763,10 +763,12 @@ fn stat_fields_after_comm(stat: &str) -> Option<Vec<&str>> {
 }
 
 /// A parent can't have started after its child; a pid reused by a newer
-/// process fails this. A zero start time is a failed parse, never a process.
+/// process fails this. A child's zero start time is a failed parse. A parent's
+/// may be real: init can start in the first clock tick, and a process that
+/// started at boot can't be a reused pid.
 #[allow(dead_code)]
 pub(super) fn verify_link(parent: &super::LinkInfo, child: &super::LinkInfo) -> bool {
-    parent.start_token != 0 && child.start_token != 0 && parent.start_token <= child.start_token
+    child.start_token != 0 && parent.start_token <= child.start_token
 }
 
 fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {
@@ -1216,9 +1218,10 @@ mod tests {
         assert!(!verify_link(&link(201), &link(200)));
         assert!(verify_link(&link(200), &link(200)));
         assert!(verify_link(&link(100), &link(200)));
-        // A zero start time is a failed parse, not a process.
-        assert!(!verify_link(&link(0), &link(200)));
+        // init may start in tick 0; a child's zero start time is a failed parse.
+        assert!(verify_link(&link(0), &link(200)));
         assert!(!verify_link(&link(100), &link(0)));
+        assert!(!verify_link(&link(0), &link(0)));
     }
 
     #[test]

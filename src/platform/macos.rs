@@ -1039,7 +1039,10 @@ pub(super) fn process_link_info(pid: u32) -> Option<super::LinkInfo> {
         .iter()
         .position(|&b| b == 0)
         .unwrap_or(short.pbsi_comm.len());
-    let name = String::from_utf8(short.pbsi_comm[..end].iter().map(|&b| b as u8).collect()).ok()?;
+    // A name that isn't UTF-8 still names a real process; it just can't match
+    // an ssh server name.
+    let bytes: Vec<u8> = short.pbsi_comm[..end].iter().map(|&b| b as u8).collect();
+    let name = String::from_utf8_lossy(&bytes).into_owned();
     Some(super::LinkInfo {
         name,
         ppid: short.pbsi_ppid,
