@@ -1,0 +1,4 @@
+# herdr-fork: fork-only. Denylist exemptions for unmodified vendored upstream files, pinned by sha256.
+# An entry applies only while the file hashes to its pin; any edit is scanned again. See FORK.md.
+7fb1521970dc268639ed95ab9808ef3b47aa0800fd2d0e9250b1b90be03ee75b  vendor/libghostty-vt/src/stb/stb_image.h
+6a0e75adbabb48df9031c2e39ccd97437bb226fe31e7d4a01c7bf70a18d32ec6  vendor/libghostty-vt/src/stb/stb_image_resize.h

@@ -49,6 +49,9 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `.github/workflows/fork-ci.yml` | new | Fork CI; every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
+| `scripts/fork/denylist-scan.sh` | new | Scans tracked files against the private denylist; counts only, never matched text |
+| `scripts/fork/denylist-allow.sha256` | new | Denylist exemptions for unmodified vendored upstream files, each pinned by sha256 |
+| `scripts/fork/test-denylist-scan.sh` | new | Tests that a pinned exemption lapses on any byte change or a different path |
 | `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 | `src/api/schema/operations.rs` | changed | `AccessClass` enum and `Operation.access`; the operation macro requires a class on every row |
 | `src/api/schema.rs` | changed | Access class on every row of the operation table; re-exports `AccessClass` |
