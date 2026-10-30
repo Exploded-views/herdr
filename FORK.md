@@ -59,6 +59,11 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/platform/fallback.rs` | changed | Lineage stubs |
 | `src/access/mod.rs`, `src/access/policy.rs`, `src/access/caller.rs` | new | Pure access model: policy types, `decide`, caller classification (no wiring yet) |
 | `src/main.rs` | changed | Declares `mod access` |
+| `src/access/caller.rs` | changed | Adds `Caller` (peer lineage, optional token, remote flag) that rides on every api request |
+| `src/api/mod.rs`, `src/api/server.rs`, `src/api/wait.rs`, `src/api/subscriptions.rs` | changed | Every `ApiRequestMessage` carries a `Caller`; the connection builds it from the socket peer and the request envelope (`caller_token`, `caller_origin`), and sub-requests inherit it |
+| `src/remote.rs` | changed | The remote api bridge stamps `caller_origin: "remote"` on the first request line and refuses (fails closed) when that line is not a JSON object |
+| `src/server/headless/endpoint_requests.rs` | changed | Shell-endpoint api requests carry an empty-lineage `Caller` |
+| `src/cli/target.rs`, `src/server/headless/tests/*.rs` | changed | Tests only: `--machine` refuses access commands; test constructors carry a `Caller` |
 
 ## Limits
 

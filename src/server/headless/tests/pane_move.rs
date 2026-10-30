@@ -1,3 +1,4 @@
+// herdr-fork: api request test constructors carry a test Caller. Unofficial stopgap; see FORK.md.
 use super::*;
 use crate::api::schema::{
     ErrorResponse, PaneMoveDestination, PaneMoveParams, PaneMoveResult, ResponseResult,
@@ -23,6 +24,7 @@ fn public_move(
 ) -> Result<PaneMoveResult, ErrorResponse> {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        caller: crate::access::caller::Caller::test_outside(),
         request: crate::api::schema::Request {
             id: "move-pane".into(),
             method: crate::api::schema::Method::PaneMove(params),

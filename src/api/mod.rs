@@ -1,3 +1,4 @@
+// herdr-fork: every api request message carries the caller that sent it. Unofficial stopgap; see FORK.md.
 pub mod client;
 mod event_hub;
 pub mod schema;
@@ -8,7 +9,9 @@ mod wait;
 
 pub use event_hub::EventHub;
 pub use server::ServerHandle;
-pub(crate) use server::{api_method_name, start_server_with_stop_control};
+pub(crate) use server::{
+    api_method_name, start_server_with_stop_control, MAX_INITIAL_REQUEST_BYTES,
+};
 pub use status::{read_runtime_status_at, RuntimeStatus};
 
 use std::path::PathBuf;
@@ -25,6 +28,9 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
 
 pub struct ApiRequestMessage {
     pub request: Request,
+    // Read by the access gate in a later task.
+    #[allow(dead_code)]
+    pub(crate) caller: crate::access::caller::Caller,
     pub respond_to: std::sync::mpsc::Sender<String>,
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 }

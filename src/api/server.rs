@@ -1,3 +1,4 @@
+// herdr-fork: build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +16,7 @@ use crate::api::schema::{
 };
 use crate::api::subscriptions::ActiveSubscription;
 use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_output};
+use crate::access::caller::Caller;
 use crate::api::{request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, EventHub};
 use crate::ipc::{
     bind_local_listener, is_connection_closed_error, local_stream_peer_closed,
@@ -31,7 +33,7 @@ pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100)
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 pub struct ServerHandle {
@@ -325,6 +327,20 @@ fn handle_connection(
     )
 }
 
+/// Fork fields that ride beside the request on its first line. They are read
+/// separately so `Request` keeps its upstream wire shape.
+#[derive(serde::Deserialize, Default)]
+struct RequestEnvelope {
+    #[serde(default)]
+    caller_token: Option<String>,
+    #[serde(default)]
+    caller_origin: Option<String>,
+}
+
+fn parse_request_envelope(line: &str) -> RequestEnvelope {
+    serde_json::from_str(line).unwrap_or_default()
+}
+
 fn handle_connection_with_stop(
     mut stream: LocalStream,
     api_tx: &ApiRequestSender,
@@ -374,6 +390,13 @@ fn handle_connection_with_stop(
             write_json_line_allow_disconnect(&mut stream, &response)?;
             return Ok(());
         }
+    };
+
+    let envelope = parse_request_envelope(line);
+    let caller = Caller::Peer {
+        lineage: crate::platform::local_stream_peer_lineage(&stream),
+        token: envelope.caller_token,
+        remote: envelope.caller_origin.as_deref() == Some("remote"),
     };
 
     let request_id = request.id.clone();
@@ -430,6 +453,7 @@ fn handle_connection_with_stop(
                 stream,
                 request_id.clone(),
                 params,
+                &caller,
                 api_tx,
                 event_hub,
                 running,
@@ -452,6 +476,7 @@ fn handle_connection_with_stop(
                 request_id.clone(),
                 params,
                 &mut stream,
+                &caller,
                 api_tx,
                 event_hub,
                 running,
@@ -463,6 +488,7 @@ fn handle_connection_with_stop(
                 request_id.clone(),
                 params,
                 &mut stream,
+                &caller,
                 api_tx,
                 event_hub,
                 running,
@@ -474,6 +500,7 @@ fn handle_connection_with_stop(
                 request_id.clone(),
                 params,
                 &mut stream,
+                &caller,
                 api_tx,
                 event_hub,
                 running,
@@ -482,7 +509,7 @@ fn handle_connection_with_stop(
         }
         Method::PaneWaitForOutput(params) => {
             let response =
-                wait_for_output(request_id.clone(), params, &mut stream, api_tx, running)?;
+                wait_for_output(request_id.clone(), params, &mut stream, &caller, api_tx, running)?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         method_body => {
@@ -495,6 +522,7 @@ fn handle_connection_with_stop(
                     id: request_id.clone(),
                     method: method_body,
                 },
+                &caller,
                 api_tx,
                 capabilities,
                 server_stop,
@@ -550,6 +578,7 @@ fn finish_wait_response(
 
 fn handle_request(
     request: Request,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     capabilities: Option<ServerCapabilities>,
     server_stop: Option<&ServerStop>,
@@ -598,7 +627,7 @@ fn handle_request(
         );
     }
 
-    dispatch_to_app(request, api_tx, None, response_write_complete, None)
+    dispatch_to_app(request, caller, api_tx, None, response_write_complete, None)
 }
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
@@ -812,6 +841,7 @@ fn stream_subscriptions(
     mut stream: LocalStream,
     request_id: String,
     params: crate::api::schema::EventsSubscribeParams,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
@@ -823,6 +853,7 @@ fn stream_subscriptions(
             subscription,
             &request_id,
             index,
+            caller,
             api_tx,
             event_hub,
             event_start_sequence,
@@ -934,19 +965,22 @@ pub(super) fn should_stop_connection(
 
 pub(super) fn dispatch_to_app_with_timeout(
     request: Request,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app(request, api_tx, timeout, None, None)
+    dispatch_to_app(request, caller, api_tx, timeout, None, None)
 }
 
 pub(super) fn dispatch_to_app_with_caller_timeout(
     request: Request,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
     dispatch_to_app(
         request,
+        caller,
         api_tx,
         timeout,
         None,
@@ -956,6 +990,7 @@ pub(super) fn dispatch_to_app_with_caller_timeout(
 
 fn dispatch_to_app(
     request: Request,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
@@ -965,6 +1000,7 @@ fn dispatch_to_app(
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
         request,
+        caller: caller.clone(),
         respond_to,
         response_write_complete,
     }) {
@@ -1024,6 +1060,7 @@ fn caller_timeout_dispatch_uses_timeout_error() {
                 wait: None,
             }),
         },
+        &Caller::test_outside(),
         &tx,
         Some(Duration::ZERO),
     );
@@ -1379,6 +1416,131 @@ mod tests {
         assert_eq!(response["result"]["type"], "pong");
     }
 
+    const PROMPT_LINE_TAIL: &str = r#""caller_token":"tok-secret-7","caller_origin":"remote"}"#;
+
+    #[test]
+    fn old_shape_server_parses_request_with_caller_token() {
+        let line = format!(
+            r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#
+        );
+        let request: Request = serde_json::from_str(&line).expect("extra envelope fields");
+        assert_eq!(request.id, "r1");
+        assert!(matches!(request.method, Method::Ping(_)));
+    }
+
+    #[test]
+    fn envelope_reads_token_and_origin_beside_request() {
+        let line = format!(
+            r#"{{"id":"r1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#
+        );
+        let envelope = parse_request_envelope(&line);
+        assert_eq!(envelope.caller_token.as_deref(), Some("tok-secret-7"));
+        assert_eq!(envelope.caller_origin.as_deref(), Some("remote"));
+
+        let bare = parse_request_envelope(r#"{"id":"r1","method":"ping","params":{}}"#);
+        assert_eq!(bare.caller_token, None);
+        assert_eq!(bare.caller_origin, None);
+        let garbage = parse_request_envelope("not json");
+        assert_eq!(garbage.caller_token, None);
+        assert_eq!(garbage.caller_origin, None);
+    }
+
+    #[test]
+    fn prompt_sub_requests_carry_original_caller() {
+        let mut seen = Vec::new();
+        for (name, wait) in [
+            ("prompt-caller-nowait", ""),
+            (
+                "prompt-caller-wait",
+                r#","wait":{"until":["idle"],"timeout_ms":500}"#,
+            ),
+        ] {
+            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+            let responder = std::thread::spawn(move || {
+                let mut callers = Vec::new();
+                while let Some(msg) = api_rx.blocking_recv() {
+                    callers.push((api_method_name(&msg.request.method), msg.caller.clone()));
+                    let _ = msg.respond_to.send(error_response_json(
+                        msg.request.id,
+                        "agent_not_found",
+                        "no such agent".into(),
+                    ));
+                }
+                callers
+            });
+            let (mut client, server, path) = local_stream_pair(name);
+            let expected = Caller::Peer {
+                lineage: crate::platform::local_stream_peer_lineage(&client),
+                token: Some("tok-secret-7".into()),
+                remote: true,
+            };
+            writeln!(
+                client,
+                r#"{{"id":"p1","method":"agent.prompt","params":{{"target":"reviewer","text":"hi"{wait}}},{PROMPT_LINE_TAIL}"#
+            )
+            .unwrap();
+            let running = Arc::new(AtomicBool::new(true));
+            handle_connection(server, &api_tx, &EventHub::default(), &running, None).unwrap();
+            drop(api_tx);
+            let callers = responder.join().unwrap();
+            assert!(!callers.is_empty(), "{name}: nothing reached the app");
+            for (method, caller) in &callers {
+                assert_eq!(caller, &expected, "{name}: {method}");
+            }
+            if wait.is_empty() {
+                assert_eq!(callers.last().map(|c| c.0), Some("agent.prompt"));
+            }
+            seen.push(callers);
+            let _ = fs::remove_file(path);
+        }
+        let Some((_, Caller::Peer { lineage, .. })) = seen[0].first() else {
+            panic!("expected a peer caller");
+        };
+        assert!(
+            !lineage.chain.is_empty(),
+            "the peer lineage must reach the app"
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedLog {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn caller_token_never_logged() {
+        let log = SharedLog::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (mut client, server, path) = local_stream_pair("caller-token-log");
+        writeln!(
+            client,
+            r#"{{"id":"log1","method":"ping","params":{{}},{PROMPT_LINE_TAIL}"#
+        )
+        .unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        tracing::subscriber::with_default(subscriber, || {
+            handle_connection(server, &api_tx, &EventHub::default(), &running, None).unwrap();
+        });
+        let logged = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(logged.contains("log1"), "the request was logged: {logged}");
+        assert!(!logged.contains("tok-secret-7"), "token leaked: {logged}");
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn ping_request_returns_pong() {
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -1387,6 +1549,7 @@ mod tests {
                 id: "req_1".into(),
                 method: Method::Ping(crate::api::schema::PingParams::default()),
             },
+            &Caller::test_outside(),
             &tx,
             Some(ServerCapabilities {
                 live_handoff: true,
@@ -1417,6 +1580,7 @@ mod tests {
                 id: "priority_stop".into(),
                 method: Method::ServerStop(crate::api::schema::EmptyParams::default()),
             },
+            &Caller::test_outside(),
             &tx,
             None,
             Some(&stop),
@@ -1440,6 +1604,7 @@ mod tests {
                 id: "after_stop".into(),
                 method: Method::WorkspaceList(crate::api::schema::EmptyParams::default()),
             },
+            &Caller::test_outside(),
             &tx,
             None,
             Some(&stop),
@@ -1461,7 +1626,7 @@ mod tests {
 
         let request_for_thread = request.clone();
         let thread = std::thread::spawn(move || {
-            handle_request(request_for_thread, &tx, None, None, None, None)
+            handle_request(request_for_thread, &Caller::test_outside(), &tx, None, None, None, None)
         });
 
         let msg = rx.blocking_recv().unwrap();

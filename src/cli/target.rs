@@ -1,3 +1,4 @@
+// herdr-fork: --machine refuses access commands (they act on the local server only). Unofficial stopgap; see FORK.md.
 use std::cell::RefCell;
 use std::io;
 
@@ -436,6 +437,21 @@ mod tests {
         let mut disabled = mac;
         disabled.enabled = false;
         assert!(resolve_machine(&[disabled], "mac").is_err());
+    }
+
+    #[test]
+    fn machine_rejects_access_commands() {
+        for command in [
+            &["access", "list"][..],
+            &["access", "bind", "w4:p1"],
+            &["access", "unbind", "w4:p1"],
+            &["access", "caller", "add", "ops"],
+            &["access", "status"],
+        ] {
+            let mut input = args(&["herdr"]);
+            input.extend(args(command));
+            assert!(validate_machine_command(&input).is_err(), "{input:?}");
+        }
     }
 
     #[test]

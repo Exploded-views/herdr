@@ -1,8 +1,10 @@
+// herdr-fork: thread the connection's Caller through every wait/prompt sub-request. Unofficial stopgap; see FORK.md.
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use regex::Regex;
 
+use crate::access::caller::Caller;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, EventData, EventEnvelope, EventKind, EventMatch, EventsWaitParams,
     Method, Request, ResponseResult, Subscription, SubscriptionEventData,
@@ -23,6 +25,7 @@ pub(super) fn wait_for_output(
     request_id: String,
     params: crate::api::schema::PaneWaitForOutputParams,
     stream: &mut LocalStream,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     running: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
@@ -68,7 +71,7 @@ pub(super) fn wait_for_output(
             }),
         };
         let response =
-            dispatch_to_app_with_timeout(read_request, api_tx, Some(APP_RESPONSE_TIMEOUT));
+            dispatch_to_app_with_timeout(read_request, caller, api_tx, Some(APP_RESPONSE_TIMEOUT));
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&response) else {
             return Ok(Some(response));
         };
@@ -133,12 +136,13 @@ pub(super) fn wait_for_agent(
     request_id: String,
     params: crate::api::schema::AgentWaitParams,
     stream: &mut LocalStream,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
 ) -> std::io::Result<Option<String>> {
     let last_event_sequence = event_hub.current_sequence();
-    let initial = match agent_get(&request_id, &params.target, api_tx) {
+    let initial = match agent_get(&request_id, &params.target, caller, api_tx) {
         Ok(agent) => agent,
         Err(response) => {
             return serde_json::to_string(&response)
@@ -164,6 +168,7 @@ pub(super) fn wait_for_agent(
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
+        caller,
         api_tx,
         event_hub,
         running,
@@ -178,6 +183,7 @@ pub(super) fn prompt_agent(
     request_id: String,
     mut params: crate::api::schema::AgentPromptParams,
     stream: &mut LocalStream,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
@@ -188,6 +194,7 @@ pub(super) fn prompt_agent(
                 id: request_id,
                 method: Method::AgentPrompt(params),
             },
+            caller,
             api_tx,
             None,
         )));
@@ -197,6 +204,7 @@ pub(super) fn prompt_agent(
     let before_prompt = match agent_get_for_prompt(
         &request_id,
         &params.target,
+        caller,
         api_tx,
         wait.timeout_ms,
         wait_started,
@@ -224,11 +232,12 @@ pub(super) fn prompt_agent(
     #[cfg(windows)]
     let prompt_response = dispatch_to_app_with_caller_timeout(
         prompt_request,
+        caller,
         api_tx,
         remaining_timeout_ms(wait.timeout_ms, wait_started).map(std::time::Duration::from_millis),
     );
     #[cfg(not(windows))]
-    let prompt_response = dispatch_to_app_with_timeout(prompt_request, api_tx, None);
+    let prompt_response = dispatch_to_app_with_timeout(prompt_request, caller, api_tx, None);
     let Ok(prompted) = agent_from_response(&request_id, &prompt_response) else {
         return Ok(Some(prompt_response));
     };
@@ -276,6 +285,7 @@ pub(super) fn prompt_agent(
                 timeout_kind,
             },
             stream,
+            caller,
             api_tx,
             event_hub,
             running,
@@ -307,6 +317,7 @@ pub(super) fn prompt_agent(
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
+        caller,
         api_tx,
         event_hub,
         running,
@@ -365,6 +376,7 @@ fn wait_for_resolved_agent(
     request_id: String,
     wait: ResolvedAgentWait,
     stream: &mut LocalStream,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
@@ -455,7 +467,7 @@ fn wait_for_resolved_agent(
         }
 
         if should_probe {
-            let current = match agent_get(&request_id, &wait.target, api_tx) {
+            let current = match agent_get(&request_id, &wait.target, caller, api_tx) {
                 Ok(agent) => agent,
                 Err(response) => {
                     return agent_wait_probe_error(response)
@@ -484,7 +496,7 @@ fn wait_for_resolved_agent(
         }
 
         if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
-            let current = match agent_get(&request_id, &wait.target, api_tx) {
+            let current = match agent_get(&request_id, &wait.target, caller, api_tx) {
                 Ok(agent) => agent,
                 Err(response) => {
                     return agent_wait_probe_error(response)
@@ -561,6 +573,7 @@ fn agent_wait_matches(
 fn agent_get(
     request_id: &str,
     target: &str,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
 ) -> Result<crate::api::schema::AgentInfo, ErrorResponse> {
     let response = dispatch_to_app_with_timeout(
@@ -570,6 +583,7 @@ fn agent_get(
                 target: target.to_string(),
             }),
         },
+        caller,
         api_tx,
         Some(APP_RESPONSE_TIMEOUT),
     );
@@ -579,6 +593,7 @@ fn agent_get(
 fn agent_get_for_prompt(
     request_id: &str,
     target: &str,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     total_timeout_ms: Option<u64>,
     started: std::time::Instant,
@@ -594,11 +609,12 @@ fn agent_get_for_prompt(
         Some(timeout_ms) if timeout_ms <= APP_RESPONSE_TIMEOUT.as_millis() as u64 => {
             dispatch_to_app_with_caller_timeout(
                 request,
+                caller,
                 api_tx,
                 Some(std::time::Duration::from_millis(timeout_ms)),
             )
         }
-        _ => dispatch_to_app_with_timeout(request, api_tx, Some(APP_RESPONSE_TIMEOUT)),
+        _ => dispatch_to_app_with_timeout(request, caller, api_tx, Some(APP_RESPONSE_TIMEOUT)),
     };
     agent_from_response(request_id, &response)
 }
@@ -698,6 +714,7 @@ pub(super) fn wait_for_event(
     request_id: String,
     params: EventsWaitParams,
     stream: &mut LocalStream,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
@@ -714,6 +731,7 @@ pub(super) fn wait_for_event(
         subscription,
         &request_id,
         0,
+        caller,
         api_tx,
         event_hub,
         event_hub.current_sequence(),

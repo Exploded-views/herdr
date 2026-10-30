@@ -1,3 +1,4 @@
+// herdr-fork: api request test constructors carry a test Caller. Unofficial stopgap; see FORK.md.
 use super::*;
 
 fn queue_requests(server: &mut HeadlessServer, count: usize) -> std::sync::mpsc::Receiver<String> {
@@ -7,6 +8,7 @@ fn queue_requests(server: &mut HeadlessServer, count: usize) -> std::sync::mpsc:
     for index in 0..count {
         sender
             .send(api::ApiRequestMessage {
+                caller: crate::access::caller::Caller::test_outside(),
                 request: api::schema::Request {
                     id: index.to_string(),
                     method: api::schema::Method::WorkspaceList(api::schema::EmptyParams::default()),
@@ -113,6 +115,7 @@ async fn server_loop_drains_api_backlog_and_runs_scheduled_work() {
         };
         sender
             .send(api::ApiRequestMessage {
+                caller: crate::access::caller::Caller::test_outside(),
                 request: api::schema::Request {
                     id: index.to_string(),
                     method,

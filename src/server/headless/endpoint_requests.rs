@@ -1,3 +1,4 @@
+// herdr-fork: shell-endpoint api requests carry an empty-lineage Caller until the access gate classifies them. Unofficial stopgap; see FORK.md.
 use super::*;
 
 impl HeadlessServer {
@@ -125,6 +126,13 @@ impl HeadlessServer {
                 client_id,
                 api::ApiRequestMessage {
                     request: *request,
+                    // The shell client is the operator's own surface, not a socket peer;
+                    // the access gate decides how to treat this caller.
+                    caller: crate::access::caller::Caller::Peer {
+                        lineage: crate::platform::PeerLineage::default(),
+                        token: None,
+                        remote: false,
+                    },
                     respond_to,
                     response_write_complete: None,
                 },

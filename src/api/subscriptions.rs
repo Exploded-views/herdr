@@ -1,5 +1,7 @@
+// herdr-fork: subscriptions remember the Caller that opened them and send it with every probe/poll sub-request. Unofficial stopgap; see FORK.md.
 use regex::Regex;
 
+use crate::access::caller::Caller;
 use crate::api::event_hub::EventHistoryError;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, EventKind, Method, PaneAgentStatusChangedEvent,
@@ -45,6 +47,7 @@ pub(super) struct ActiveOutputMatchedSubscription {
     strip_ansi: bool,
     currently_matching: bool,
     request_prefix: String,
+    caller: Caller,
 }
 
 pub(super) struct ActiveAgentStatusChangedSubscription {
@@ -55,12 +58,14 @@ pub(super) struct ActiveAgentStatusChangedSubscription {
     last_sequence: u64,
     initial_event: Option<PaneAgentStatusChangedEvent>,
     request_prefix: String,
+    caller: Caller,
 }
 
 pub(super) struct ActiveScrollChangedSubscription {
     pane_id: String,
     last_scroll: Option<PaneScrollInfo>,
     request_prefix: String,
+    caller: Caller,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +114,7 @@ impl ActiveSubscription {
         subscription: Subscription,
         request_id: &str,
         index: usize,
+        caller: &Caller,
         api_tx: &ApiRequestSender,
         event_hub: &EventHub,
         event_start_sequence: u64,
@@ -188,6 +194,7 @@ impl ActiveSubscription {
                     source,
                     lines,
                     strip_ansi,
+                    caller,
                     api_tx,
                 );
                 probe?;
@@ -201,6 +208,7 @@ impl ActiveSubscription {
                     strip_ansi,
                     currently_matching: false,
                     request_prefix: format!("{request_id}:sub:{index}"),
+                    caller: caller.clone(),
                 }))
             }
             Subscription::PaneAgentStatusChanged {
@@ -208,7 +216,7 @@ impl ActiveSubscription {
                 agent_status,
             } => {
                 let last_sequence = event_hub.current_sequence();
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
+                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, caller, api_tx)?;
                 let last_status = probe.agent_status;
                 let last_presentation = PanePresentationSnapshot::from(&probe);
                 let initial_event = agent_status
@@ -232,16 +240,18 @@ impl ActiveSubscription {
                         last_sequence,
                         initial_event,
                         request_prefix: format!("{request_id}:sub:{index}"),
+                        caller: caller.clone(),
                     },
                 )))
             }
             Subscription::PaneScrollChanged { pane_id } => {
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
+                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, caller, api_tx)?;
 
                 Ok(Self::ScrollChanged(ActiveScrollChangedSubscription {
                     pane_id: probe.pane_id,
                     last_scroll: probe.scroll,
                     request_prefix: format!("{request_id}:sub:{index}"),
+                    caller: caller.clone(),
                 }))
             }
         }
@@ -366,6 +376,7 @@ impl ActiveOutputMatchedSubscription {
             output_match_read_source(&self.source),
             self.lines,
             self.strip_ansi,
+            &self.caller,
             api_tx,
         )
         .ok()?;
@@ -486,6 +497,7 @@ impl ActiveAgentStatusChangedSubscription {
         let pane = pane_get(
             format!("{}:pane", self.request_prefix),
             &self.pane_id,
+            &self.caller,
             api_tx,
         );
         let after_snapshot_sequence = event_hub.current_sequence();
@@ -543,6 +555,7 @@ impl ActiveScrollChangedSubscription {
         let pane = pane_get(
             format!("{}:pane", self.request_prefix),
             &self.pane_id,
+            &self.caller,
             api_tx,
         )
         .ok()?;
@@ -577,6 +590,7 @@ fn pane_read(
     source: crate::api::schema::ReadSource,
     lines: Option<u32>,
     strip_ansi: bool,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
 ) -> Result<crate::api::schema::PaneReadResult, ErrorResponse> {
     let response = dispatch_to_app_with_timeout(
@@ -591,6 +605,7 @@ fn pane_read(
                 intent: crate::api::schema::ReadIntent::Passive,
             }),
         },
+        caller,
         api_tx,
         Some(APP_RESPONSE_TIMEOUT),
     );
@@ -622,6 +637,7 @@ fn pane_read(
 fn pane_get(
     request_id: String,
     pane_id: &str,
+    caller: &Caller,
     api_tx: &ApiRequestSender,
 ) -> Result<crate::api::schema::PaneInfo, ErrorResponse> {
     let response = dispatch_to_app_with_timeout(
@@ -631,6 +647,7 @@ fn pane_get(
                 pane_id: pane_id.to_string(),
             }),
         },
+        caller,
         api_tx,
         Some(APP_RESPONSE_TIMEOUT),
     );
@@ -729,6 +746,7 @@ mod tests {
             Subscription::WorkspaceFocused {},
             "test",
             0,
+            &Caller::test_outside(),
             &api_tx,
             &event_hub,
             event_start_sequence,
@@ -754,6 +772,7 @@ mod tests {
             Subscription::WorkspaceMetadataUpdated {},
             "test",
             0,
+            &Caller::test_outside(),
             &api_tx,
             &event_hub,
             event_hub.current_sequence(),
@@ -780,6 +799,7 @@ mod tests {
             Subscription::WorkspaceFocused {},
             "batch",
             0,
+            &Caller::test_outside(),
             &api_tx,
             &event_hub,
             start,
@@ -822,6 +842,7 @@ mod tests {
                         state_labels: HashMap::new(),
                     }),
                     request_prefix: "batch".into(),
+                    caller: Caller::test_outside(),
                 },
             ));
             for (status, title) in [
@@ -875,6 +896,7 @@ mod tests {
             pane_id: "pane_1".into(),
             last_scroll: Some(at_bottom),
             request_prefix: "test".into(),
+            caller: Caller::test_outside(),
         };
 
         assert!(subscription
@@ -908,6 +930,7 @@ mod tests {
             last_sequence: event_hub.current_sequence(),
             initial_event: None,
             request_prefix: "test".into(),
+            caller: Caller::test_outside(),
         };
 
         event_hub.push(presentation_event(Some("short lived")));
@@ -953,6 +976,7 @@ mod tests {
                 state_labels: HashMap::new(),
             }),
             request_prefix: "test".into(),
+            caller: Caller::test_outside(),
         };
 
         event_hub.push(presentation_event(Some("short lived")));
@@ -998,6 +1022,7 @@ mod tests {
                 state_labels: HashMap::new(),
             }),
             request_prefix: "test".into(),
+            caller: Caller::test_outside(),
         };
 
         event_hub.push(presentation_event(Some("short lived")));
