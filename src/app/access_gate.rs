@@ -1,6 +1,7 @@
 // herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
-//! only entry point; the server calls it right after the shutdown check.
+//! only entry point; the server calls it right after the shutdown check and
+//! again right before it dispatches, once queued events have been applied.
 //!
 //! The gate does nothing until something asks for it: with no bound policy,
 //! no caller token and remote input left at `any`, it returns before it
@@ -162,6 +163,10 @@ impl App {
     /// alt-screen wheel harvest) and `caller` would be refused Input there.
     /// Resolves the target exactly as `alt_screen_read_spec` does.
     pub(crate) fn read_may_inject_input(&self, method: &Method, caller: &Caller) -> bool {
+        // Nothing is protected: resolve nothing, allocate nothing.
+        if self.access_gate_idle(caller) {
+            return true;
+        }
         let target = match method {
             Method::AgentRead(params) => self.resolve_agent_target(&params.target),
             Method::PaneRead(params) => self.resolve_terminal_target(&params.pane_id),
@@ -170,6 +175,19 @@ impl App {
         match target {
             Ok(target) => self.input_allowed_on(target.ws_idx, target.pane_id, caller),
             // An unresolved target has no pane to inject into.
+            Err(_) => true,
+        }
+    }
+
+    /// Would an Input request from `caller` be allowed on this terminal right
+    /// now? A running wheel harvest asks before each step. A terminal that no
+    /// longer resolves has nothing to inject into.
+    pub(crate) fn terminal_input_allowed(&self, terminal: &TerminalId, caller: &Caller) -> bool {
+        if self.access_gate_idle(caller) {
+            return true;
+        }
+        match self.resolve_terminal_target(terminal.as_str()) {
+            Ok(target) => self.input_allowed_on(target.ws_idx, target.pane_id, caller),
             Err(_) => true,
         }
     }

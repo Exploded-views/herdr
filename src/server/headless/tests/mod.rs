@@ -4668,6 +4668,7 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
         server.pending_alt_screen_reads.push(
             crate::server::alt_screen_read::PendingAltScreenRead::start(
                 terminal_id,
+                crate::access::caller::Caller::test_outside(),
                 "read".into(),
                 respond_to,
                 "fallback".into(),

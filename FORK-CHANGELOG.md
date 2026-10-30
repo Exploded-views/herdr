@@ -31,5 +31,7 @@ a plan to send it upstream, and nothing has been proposed upstream.
   written to the pane. With no policy, no caller token and `remote_input = "any"`, the check
   does no work and behaviour is as before; `remote_input = "bridge-only"` turns it on for
   every pane. A read that would send wheel events into a full-screen agent returns the screen
-  as it is when the caller may not send that pane input. The `[access]` key `input_log` is
+  as it is when the caller may not send that pane input, and a harvest already running stops
+  if a policy is bound mid-read. The check is made again right before a request runs, after
+  queued events (such as agent detection) have been applied. The `[access]` key `input_log` is
   accepted (it has no effect yet). *fork-only*

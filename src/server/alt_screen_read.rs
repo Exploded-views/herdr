@@ -1,3 +1,4 @@
+// herdr-fork: a pending harvest remembers its caller so the server can stop it when Input stops being allowed. Unofficial stopgap; see FORK.md.
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,7 @@ enum Phase {
 
 pub(crate) struct PendingAltScreenRead {
     pub(crate) terminal_id: TerminalId,
+    pub(crate) caller: crate::access::caller::Caller,
     request_id: String,
     respond_to: mpsc::Sender<String>,
     fallback_response: String,
@@ -52,6 +54,7 @@ pub(crate) struct PendingAltScreenRead {
 impl PendingAltScreenRead {
     pub(crate) fn start(
         terminal_id: TerminalId,
+        caller: crate::access::caller::Caller,
         request_id: String,
         respond_to: mpsc::Sender<String>,
         fallback_response: String,
@@ -64,6 +67,7 @@ impl PendingAltScreenRead {
     ) -> Self {
         Self {
             terminal_id,
+            caller,
             request_id,
             respond_to,
             fallback_response,
@@ -490,6 +494,7 @@ mod tests {
         let (respond_to, response_rx) = mpsc::channel();
         let pending = PendingAltScreenRead::start(
             TerminalId::alloc(),
+            crate::access::caller::Caller::test_outside(),
             "read".into(),
             respond_to,
             "fallback".into(),

@@ -1562,7 +1562,7 @@
           "key": "access.input_log",
           "type": "boolean",
           "default": "true",
-          "description": "Fork-only. Log the origin of input requests (no content). Read once at startup."
+          "description": "Reserved; no effect yet (used by the input-origin log in a later release). Read once at startup."
         }
       ]
     }

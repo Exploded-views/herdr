@@ -1,4 +1,4 @@
-// herdr-fork: gate every api request through check_access before it touches a pane; reads skip the alt-screen wheel harvest when Input would be refused. Unofficial stopgap; see FORK.md.
+// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes. Unofficial stopgap; see FORK.md.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -2820,7 +2820,12 @@ impl HeadlessServer {
             let attached = self
                 .terminal_attach_owners
                 .contains_key(read.terminal_id.as_str());
-            let outcome = if remains_idle && !attached {
+            // A policy bound mid-harvest (agent detection) ends the harvest:
+            // no more wheel bytes, the caller gets the frozen snapshot.
+            let may_inject = self
+                .app
+                .terminal_input_allowed(&read.terminal_id, &read.caller);
+            let outcome = if remains_idle && !attached && may_inject {
                 read.poll(runtime, now)
             } else {
                 read.abort(runtime, now)
@@ -3073,6 +3078,14 @@ impl HeadlessServer {
             let _ = msg.respond_to.send(response);
             return changed;
         }
+        // The drain above can bind a policy (agent detection), shift positional
+        // ids (a closed workspace) or make a target resolvable, so decide again
+        // on the state the handler will resolve against. Nothing between here
+        // and the handler mutates it.
+        if let Err(denied) = self.app.check_access(&msg.request.method, &msg.caller) {
+            Self::reject_api_request_for_access(msg, &denied);
+            return changed;
+        }
         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
         if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
             let deferred_changed = self
@@ -3146,6 +3159,7 @@ impl HeadlessServer {
                 if let api::schema::ResponseResult::PaneRead { read } = success.result {
                     let pending = crate::server::alt_screen_read::PendingAltScreenRead::start(
                         spec.terminal_id,
+                        msg.caller.clone(),
                         success.id,
                         msg.respond_to,
                         response,

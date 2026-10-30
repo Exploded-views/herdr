@@ -835,3 +835,137 @@ async fn a_client_with_no_lineage_is_never_a_trusted_local_caller() {
     );
     shutdown_test_runtimes(&mut server);
 }
+
+// The gate decides again right before dispatch.
+
+#[tokio::test]
+async fn policy_bound_during_drain_is_enforced_before_dispatch() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.access_defaults.default = Some(vec![Principal::Outside]);
+    let target = f.public(0);
+    let caller = f.pane_caller(1);
+    // Pane 0 runs no agent yet, so at the early check the target does not
+    // resolve and nothing is protected. The detection is still queued.
+    f.server
+        .app
+        .event_tx
+        .try_send(AppEvent::AgentProcessDetected {
+            pane_id: f.panes[0],
+            agent: Agent::Pi,
+            observed_at: Instant::now(),
+        })
+        .unwrap();
+
+    let response = f.call(caller, agent_prompt(&target));
+
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert!(error_message(&response).contains("does not accept input"));
+    assert!(f.server.app.state.terminals[&f.terminals[0]]
+        .access
+        .is_some());
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn positional_pane_id_shift_during_drain_is_rechecked() {
+    let mut server = test_headless_server();
+    // Four single-pane workspaces: A, B (about to die), C (open), D (protected).
+    server.app.state.workspaces = ["a", "b", "c", "d"]
+        .iter()
+        .map(|name| crate::workspace::Workspace::test_new(name))
+        .collect();
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let mut panes = Vec::new();
+    let mut terminals = Vec::new();
+    let mut inputs = Vec::new();
+    for ws in &server.app.state.workspaces {
+        let pane = ws.tabs[0].layout.pane_ids()[0];
+        panes.push(pane);
+        terminals.push(ws.terminal_id(pane).unwrap().clone());
+    }
+    for terminal in &terminals {
+        let (runtime, input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        server
+            .app
+            .terminal_runtimes
+            .insert(terminal.clone(), runtime);
+        inputs.push(input);
+    }
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminals[3])
+        .unwrap()
+        .access = Some(AccessPolicy {
+        binding: AccessBindingId::mint().unwrap(),
+        accept_from: vec![Principal::Outside],
+    });
+    // "3-1" is the open workspace C at the early check. B's death closes its
+    // workspace, so after the drain "3-1" names D.
+    server
+        .app
+        .event_tx
+        .try_send(AppEvent::PaneDied {
+            pane_id: panes[1],
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        })
+        .unwrap();
+
+    let response = send_as(
+        &mut server,
+        Caller::Classified(CallerClass::Pane(terminals[0].clone())),
+        send_text("3-1"),
+    );
+
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert_eq!(server.app.state.workspaces.len(), 3);
+    for (index, input) in inputs.iter_mut().enumerate() {
+        assert!(input.try_recv().is_err(), "bytes reached workspace {index}");
+    }
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn a_policy_bound_mid_harvest_stops_the_wheel_bytes() {
+    let mut f = alt_screen_fixture();
+    let target = f.public(0);
+    let caller = f.pane_caller(1);
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    f.server
+        .handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            caller,
+            request: api::schema::Request {
+                id: "read".into(),
+                method: interactive_read(&target),
+            },
+            respond_to,
+            response_write_complete: None,
+        });
+    assert_eq!(f.server.pending_alt_screen_reads.len(), 1);
+    let start = Instant::now();
+    f.server
+        .poll_pending_alt_screen_reads(start + Duration::from_millis(50));
+    assert!(
+        f.inputs[0].try_recv().is_ok(),
+        "the harvest sends wheel bytes while it is allowed"
+    );
+    while f.inputs[0].try_recv().is_ok() {}
+
+    // Agent detection binds a policy that refuses the reader, mid-harvest.
+    f.protect(0, vec![Principal::Outside]);
+    f.server
+        .poll_pending_alt_screen_reads(start + Duration::from_millis(500));
+
+    assert!(f.server.pending_alt_screen_reads.is_empty());
+    f.assert_no_bytes(0);
+    assert!(
+        response_rx.try_recv().is_ok(),
+        "the reader still gets the frozen snapshot"
+    );
+    shutdown_test_runtimes(&mut f.server);
+}

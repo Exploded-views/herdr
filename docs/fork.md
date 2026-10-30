@@ -78,7 +78,16 @@ stop a process that sets out to get around it:
   own files (its settings, hooks and instructions).
 - A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
   `tmux new -d`, any SSH login to the host) and then counts as being outside every pane.
-  Only herdr's own `--machine` route is stamped `remote`.
+  A caller is stamped `remote` when its lineage passes through an SSH server, and for
+  herdr's own `--machine` route.
+- **Remote client bridge.** The server can't tell at accept that a TUI came in through the
+  remote client bridge, so `remote` comes from `via_ssh` only. A bridge launched under
+  something other than an SSH server looks local. This matches the decision that remote TUIs
+  keep typing in v1.
+- **Reused pane pid.** If a pane's shell dies and its pid is reused before herdr processes the
+  exit, a descendant of the new process can briefly classify as that pane.
+- **Windows.** The caller lineage is unavailable there, so once any policy is bound every
+  caller classifies as Unknown and is refused (fail closed). The Windows build is unverified.
 - **Orphaned callers look complete.** A process whose parent has exited is re-parented to
   init, and the lineage walk then reports a short, complete chain (observed on macOS and on
   Linux: `complete=true`, two links). Reaching init proves the chain is intact, not that the
@@ -96,7 +105,8 @@ stop a process that sets out to get around it:
   gated. `server stop` is a denial of service, not misrouted input.
 - **Reading** another pane's output isn't gated. A read that would send wheel events into a
   full-screen agent (to collect its scrollback) skips that and returns the screen as it is when
-  the caller may not send that pane input.
+  the caller may not send that pane input, and a harvest already running stops the same way if
+  a policy is bound mid-read (it still sends the wheel events that undo its own scrolling).
 - **Focus.** `pane focus` and `agent focus` can move the TUI's focus to a protected pane
   while you type.
 
