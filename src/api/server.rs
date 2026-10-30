@@ -329,16 +329,39 @@ fn handle_connection(
 
 /// Fork fields that ride beside the request on its first line. They are read
 /// separately so `Request` keeps its upstream wire shape.
-#[derive(serde::Deserialize, Default)]
+#[derive(Default)]
 struct RequestEnvelope {
-    #[serde(default)]
     caller_token: Option<String>,
-    #[serde(default)]
     caller_origin: Option<String>,
 }
 
+// Not derived: Debug must never print the token.
+impl std::fmt::Debug for RequestEnvelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestEnvelope")
+            .field("caller_token", &self.caller_token.as_ref().map(|_| "<redacted>"))
+            .field("caller_origin", &self.caller_origin)
+            .finish()
+    }
+}
+
+/// Each field is read on its own, so a mistyped one (say a numeric
+/// `caller_token`) becomes `None` without costing the other. In particular the
+/// bridge's `caller_origin` stamp survives whatever the token holds.
 fn parse_request_envelope(line: &str) -> RequestEnvelope {
-    serde_json::from_str(line).unwrap_or_default()
+    let Ok(serde_json::Value::Object(fields)) = serde_json::from_str(line) else {
+        return RequestEnvelope::default();
+    };
+    let text = |key: &str| {
+        fields
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    RequestEnvelope {
+        caller_token: text("caller_token"),
+        caller_origin: text("caller_origin"),
+    }
 }
 
 fn handle_connection_with_stop(
@@ -1446,13 +1469,41 @@ mod tests {
     }
 
     #[test]
+    fn mistyped_token_keeps_the_remote_stamp() {
+        for token in ["1", "{}", "[]", "true", "null"] {
+            let line = format!(
+                r#"{{"id":"x","method":"ping","params":{{}},"caller_token":{token},"caller_origin":"remote"}}"#
+            );
+            let envelope = parse_request_envelope(&line);
+            assert_eq!(envelope.caller_origin.as_deref(), Some("remote"), "{token}");
+            assert_eq!(envelope.caller_token, None, "{token}");
+        }
+    }
+
+    #[test]
+    fn caller_and_envelope_debug_redact_the_token() {
+        let caller = Caller::Peer {
+            lineage: Default::default(),
+            token: Some("tok-secret-7".into()),
+            remote: true,
+        };
+        let envelope = parse_request_envelope(&format!(
+            r#"{{"id":"x",{PROMPT_LINE_TAIL}"#
+        ));
+        for printed in [format!("{caller:?}"), format!("{envelope:?}")] {
+            assert!(!printed.contains("tok-secret-7"), "{printed}");
+            assert!(printed.contains("<redacted>"), "{printed}");
+        }
+    }
+
+    #[test]
     fn prompt_sub_requests_carry_original_caller() {
         let mut seen = Vec::new();
         for (name, wait) in [
             ("prompt-caller-nowait", ""),
             (
                 "prompt-caller-wait",
-                r#","wait":{"until":["idle"],"timeout_ms":500}"#,
+                r#","wait":{"until":["idle"],"timeout_ms":300}"#,
             ),
         ] {
             let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
@@ -1460,11 +1511,18 @@ mod tests {
                 let mut callers = Vec::new();
                 while let Some(msg) = api_rx.blocking_recv() {
                     callers.push((api_method_name(&msg.request.method), msg.caller.clone()));
-                    let _ = msg.respond_to.send(error_response_json(
-                        msg.request.id,
-                        "agent_not_found",
-                        "no such agent".into(),
-                    ));
+                    let agent = serde_json::json!({
+                        "terminal_id": "term_1", "agent_status": "working",
+                        "workspace_id": "ws_1", "tab_id": "tab_1", "pane_id": "pane_1",
+                        "focused": true, "revision": 1, "state_change_seq": 1
+                    });
+                    let _ = msg.respond_to.send(
+                        serde_json::json!({
+                            "id": msg.request.id,
+                            "result": {"type": "agent_info", "agent": agent}
+                        })
+                        .to_string(),
+                    );
                 }
                 callers
             });
@@ -1489,6 +1547,11 @@ mod tests {
             }
             if wait.is_empty() {
                 assert_eq!(callers.last().map(|c| c.0), Some("agent.prompt"));
+            } else {
+                // Initial get, the prompt itself, and at least one wait probe.
+                let methods: Vec<_> = callers.iter().map(|c| c.0).collect();
+                assert_eq!(methods[..2], ["agent.get", "agent.prompt"], "{methods:?}");
+                assert!(methods.len() >= 3, "{methods:?}");
             }
             seen.push(callers);
             let _ = fs::remove_file(path);

@@ -7,7 +7,7 @@ use super::policy::{AccessBindingId, CallerClass};
 /// Who sent an API request, as seen by the connection that carried it. It is
 /// captured once per connection and handed to every sub-request that
 /// connection makes, so the app thread can classify without re-walking.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Caller {
     Peer {
         lineage: PeerLineage,
@@ -17,6 +17,26 @@ pub(crate) enum Caller {
     /// Tests that don't care how a caller was derived pick a class directly.
     #[cfg(test)]
     Classified(CallerClass),
+}
+
+// Not derived: the token is a credential and must never reach a log line.
+impl std::fmt::Debug for Caller {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Peer {
+                lineage,
+                token,
+                remote,
+            } => f
+                .debug_struct("Peer")
+                .field("lineage", lineage)
+                .field("token", &token.as_ref().map(|_| "<redacted>"))
+                .field("remote", remote)
+                .finish(),
+            #[cfg(test)]
+            Self::Classified(class) => f.debug_tuple("Classified").field(class).finish(),
+        }
+    }
 }
 
 #[cfg(test)]

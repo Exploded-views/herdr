@@ -20,24 +20,32 @@ const REMOTE_STAMP_HEADROOM: usize = 64;
 const REMOTE_BRIDGE_REFUSAL: &str = r#"{"id":"","error":{"code":"invalid_request","message":"remote bridge: first line is not a JSON request object"}}"#;
 
 /// Set `"caller_origin":"remote"` on a JSON-object request line and return it
-/// with its trailing newline. The caller has already checked the line is an
-/// object (`read_remote_first_line`); anything else comes back unchanged.
-fn stamp_remote_origin(line: &[u8]) -> Vec<u8> {
-    let Ok(serde_json::Value::Object(mut object)) = serde_json::from_slice(line) else {
-        return line.to_vec();
+/// with its trailing newline. `None` (refuse) when the line is not an object,
+/// when its `caller_token` is present and neither a string nor null (the server
+/// would drop it), when it can't be re-encoded, or when the stamped line no
+/// longer fits the server's first-line cap (re-encoding can grow numbers).
+fn stamp_remote_origin(line: &[u8]) -> Option<Vec<u8>> {
+    let serde_json::Value::Object(mut object) = serde_json::from_slice(line).ok()? else {
+        return None;
     };
+    if !matches!(
+        object.get("caller_token"),
+        None | Some(serde_json::Value::Null | serde_json::Value::String(_))
+    ) {
+        return None;
+    }
     object.insert(
         "caller_origin".into(),
         serde_json::Value::String("remote".into()),
     );
-    let mut stamped = serde_json::to_vec(&object).unwrap_or_else(|_| line.to_vec());
+    let mut stamped = serde_json::to_vec(&object).ok()?;
     stamped.push(b'\n');
-    stamped
+    (stamped.len() <= crate::api::MAX_INITIAL_REQUEST_BYTES).then_some(stamped)
 }
 
 /// Read the first line one byte at a time, so nothing past it is consumed, and
 /// return it stamped. `None` means the line can't be trusted: no `\n` before
-/// EOF or the cap, a read error, or not a JSON object.
+/// EOF or the cap, a read error, or `stamp_remote_origin` refused it.
 fn read_remote_first_line(input: &mut impl std::io::Read) -> Option<Vec<u8>> {
     let cap = crate::api::MAX_INITIAL_REQUEST_BYTES.saturating_sub(REMOTE_STAMP_HEADROOM);
     let mut line = Vec::new();
@@ -56,10 +64,21 @@ fn read_remote_first_line(input: &mut impl std::io::Read) -> Option<Vec<u8>> {
             Err(_) => return None,
         }
     }
-    match serde_json::from_slice::<serde_json::Value>(&line) {
-        Ok(serde_json::Value::Object(_)) => Some(stamp_remote_origin(&line)),
-        _ => None,
+    stamp_remote_origin(&line)
+}
+
+/// The bridge's whole first-line step: the stamped line, or `None` after
+/// writing the refusal line to `out`. `None` means the caller must not connect.
+fn bridge_first_line(
+    input: &mut impl std::io::Read,
+    out: &mut impl std::io::Write,
+) -> Option<Vec<u8>> {
+    let stamped = read_remote_first_line(input);
+    if stamped.is_none() {
+        let _ = writeln!(out, "{REMOTE_BRIDGE_REFUSAL}");
+        let _ = out.flush();
     }
+    stamped
 }
 
 pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
@@ -68,10 +87,10 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
             use std::io::Write as _;
 
             // Stamp before connecting: a first line we can't vouch for never reaches the API.
-            let Some(stamped) = read_remote_first_line(&mut std::io::stdin().lock()) else {
-                let mut stdout = std::io::stdout().lock();
-                writeln!(stdout, "{REMOTE_BRIDGE_REFUSAL}")?;
-                stdout.flush()?;
+            let Some(stamped) = bridge_first_line(
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+            ) else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "remote bridge: first line is not a JSON request object",
@@ -209,7 +228,8 @@ mod tests {
     fn remote_bridge_stamps_origin_on_first_line() {
         let stamped = stamp_remote_origin(
             br#"{"id":"1","method":"ping","params":{},"caller_origin":"local","caller_token":"t"}"#,
-        );
+        )
+        .expect("object line is stamped");
         assert_eq!(stamped.last(), Some(&b'\n'));
         let value: serde_json::Value = serde_json::from_slice(&stamped).unwrap();
         assert_eq!(value["caller_origin"], "remote");
@@ -254,5 +274,52 @@ mod tests {
         assert!(read_remote_first_line(&mut over).is_none());
         let mut fits = std::io::Cursor::new(pad(cap));
         assert!(read_remote_first_line(&mut fits).is_some());
+    }
+
+    #[test]
+    fn remote_bridge_refuses_non_string_caller_token() {
+        for token in ["1", "{}", "[]", "true"] {
+            let line = format!(r#"{{"id":"1","method":"ping","caller_token":{token}}}"#);
+            assert!(stamp_remote_origin(line.as_bytes()).is_none(), "{token}");
+        }
+        for token in ["null", r#""abc""#] {
+            let line = format!(r#"{{"id":"1","method":"ping","caller_token":{token}}}"#);
+            assert!(stamp_remote_origin(line.as_bytes()).is_some(), "{token}");
+        }
+    }
+
+    #[test]
+    fn remote_bridge_refuses_line_that_grows_past_the_cap_when_stamped() {
+        // `1E9` re-encodes as `1000000000.0`: a line under the read cap grows past the server's.
+        let cap = crate::api::MAX_INITIAL_REQUEST_BYTES - REMOTE_STAMP_HEADROOM;
+        let mut line = br#"{"id":"1","a":["#.to_vec();
+        while line.len() + 10 < cap {
+            line.extend_from_slice(b"1E9,");
+        }
+        line.extend_from_slice(b"1E9]}\n");
+        assert!(line.len() <= cap);
+        let mut out = Vec::new();
+        assert!(bridge_first_line(&mut std::io::Cursor::new(line), &mut out).is_none());
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn bridge_first_line_writes_the_exact_refusal_and_no_stamp() {
+        let mut out = Vec::new();
+        assert!(bridge_first_line(&mut std::io::Cursor::new(b"nope\n".to_vec()), &mut out)
+            .is_none());
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "{\"id\":\"\",\"error\":{\"code\":\"invalid_request\",\"message\":\"remote bridge: first line is not a JSON request object\"}}\n"
+        );
+
+        let mut out = Vec::new();
+        let line = bridge_first_line(
+            &mut std::io::Cursor::new(b"{\"id\":\"1\",\"method\":\"ping\",\"params\":{}}\n".to_vec()),
+            &mut out,
+        )
+        .expect("good line");
+        assert!(out.is_empty());
+        assert!(String::from_utf8(line).unwrap().contains("\"caller_origin\":\"remote\""));
     }
 }
