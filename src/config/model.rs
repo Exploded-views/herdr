@@ -1075,28 +1075,71 @@ impl Default for RemoteConfig {
 }
 
 /// One `[access.<name>]` table. `[access.default]` is the sticky default.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct AccessSection {
     pub accept_from: Vec<String>,
 }
 
 /// `[access]`: scalar node keys plus `[access.<name>]` tables. Resolved once at
-/// startup; `server.reload_config` never applies it.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+/// startup; `server.reload_config` never applies it. Read by hand so an unknown
+/// scalar key is a soft diagnostic and never costs the rest of the config.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct AccessConfig {
     /// "any" (default) or "bridge-only".
     pub remote_input: Option<String>,
     pub bridge_agent: Option<String>,
     /// "allow" (default) or "deny"; only meaningful with `remote_input = "bridge-only"`.
     pub remote_owner_tui: Option<String>,
-    #[serde(flatten)]
     pub sections: std::collections::BTreeMap<String, AccessSection>,
+    /// Problems met while reading the table, reported by `resolve`.
+    read_diagnostics: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for AccessConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let table = std::collections::BTreeMap::<String, toml::Value>::deserialize(deserializer)?;
+        let mut out = Self::default();
+        for (key, value) in table {
+            match (key.as_str(), value) {
+                ("remote_input" | "remote_owner_tui", value) => {
+                    // A non-string value is kept as text so `resolve` rejects it.
+                    let text = match value {
+                        toml::Value::String(text) => text,
+                        other => other.to_string(),
+                    };
+                    if key == "remote_input" {
+                        out.remote_input = Some(text);
+                    } else {
+                        out.remote_owner_tui = Some(text);
+                    }
+                }
+                ("bridge_agent", toml::Value::String(text)) => out.bridge_agent = Some(text),
+                ("bridge_agent", _) => out
+                    .read_diagnostics
+                    .push("access.bridge_agent must be a string; ignored".to_string()),
+                (_, table @ toml::Value::Table(_)) => match table.try_into::<AccessSection>() {
+                    Ok(section) => {
+                        out.sections.insert(key, section);
+                    }
+                    Err(err) => out
+                        .read_diagnostics
+                        .push(format!("access.{key}: {err}; section skipped")),
+                },
+                _ => out
+                    .read_diagnostics
+                    .push(format!("unknown config key access.{key}")),
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// What startup reads from `[access]`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct ResolvedAccess {
     pub defaults: crate::access::policy::AccessDefaults,
     pub remote: crate::access::policy::RemoteSettings,
@@ -1107,13 +1150,20 @@ pub(crate) struct ResolvedAccess {
 impl AccessConfig {
     pub(crate) fn resolve(&self) -> ResolvedAccess {
         use crate::access::policy::{parse_accept_from, AcceptFrom, RemoteInput, RemoteOwnerTui};
-        let mut out = ResolvedAccess::default();
+        let mut out = ResolvedAccess {
+            diagnostics: self.read_diagnostics.clone(),
+            ..ResolvedAccess::default()
+        };
         match self.remote_input.as_deref() {
             None | Some("any") => {}
             Some("bridge-only") => out.remote.input = RemoteInput::BridgeOnly,
-            Some(other) => out.diagnostics.push(format!(
-                "access.remote_input must be \"any\" or \"bridge-only\" (got {other:?}); using \"any\""
-            )),
+            // The user plainly meant to restrict, so a bad value restricts.
+            Some(other) => {
+                out.remote.input = RemoteInput::BridgeOnly;
+                out.diagnostics.push(format!(
+                    "access.remote_input must be \"any\" or \"bridge-only\" (got {other:?}); treating it as \"bridge-only\""
+                ));
+            }
         }
         out.remote.bridge_agent = self
             .bridge_agent

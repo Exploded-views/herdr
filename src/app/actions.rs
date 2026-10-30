@@ -1712,6 +1712,11 @@ impl AppState {
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
             let mutation = update(terminal);
+            // Any mutation that leaves an agent here (a detection, a label switch at
+            // the same state, a name) can be the first sight of it.
+            if super::access::apply_default_access(&self.access_defaults, terminal) {
+                self.session_dirty = true;
+            }
             terminal.reconcile_reported_resume();
             // Resume-only changes return no mutation but must still be saved.
             if terminal.reported_resume_revision() != resume_revision {
@@ -1761,7 +1766,6 @@ impl AppState {
                     && is_completion_transition(&change))
                 .then_some(self.next_agent_state_change_seq);
             }
-            self.bind_default_access(&terminal_id);
         }
         let seen = self.apply_pane_state_change(ws_idx, pane_id, &change, suppress_completion)?;
         let update = PaneStateUpdate {

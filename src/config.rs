@@ -11,6 +11,8 @@ mod theme;
 mod window_title;
 mod write;
 
+pub(crate) use self::model::ResolvedAccess;
+
 pub use self::{
     io::{
         config_diagnostic_summary, config_dir, config_path, load_live_config,

@@ -201,7 +201,9 @@ fn remote_owner_tui_ignored_when_remote_input_any() {
     assert!(resolved.diagnostics[0].contains("remote_owner_tui"));
 }
 
-fn reload_with(app: &mut App, content: &str) {
+const RESTART_HINT: &str = "[access] changes need a restart";
+
+fn reload_with(app: &mut App, content: &str) -> crate::config::ConfigReloadReport {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let dir = std::env::temp_dir().join(format!(
         "herdr-access-reload-{}-{}",
@@ -218,7 +220,7 @@ fn reload_with(app: &mut App, content: &str) {
     let report = app.reload_config();
     std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+    report
 }
 
 #[test]
@@ -227,8 +229,9 @@ fn reload_config_does_not_loosen_access_defaults() {
     let before = app.state.access_defaults.clone();
     assert_eq!(before.default, Some(vec![Principal::None]));
 
-    reload_with(&mut app, "[access.default]\naccept_from = [\"outside\"]\n");
+    let report = reload_with(&mut app, "[access.default]\naccept_from = [\"outside\"]\n");
     assert_eq!(app.state.access_defaults, before);
+    assert!(report.diagnostics.iter().any(|d| d == RESTART_HINT));
 
     reload_with(&mut app, "");
     assert_eq!(app.state.access_defaults, before);
@@ -239,8 +242,9 @@ fn reload_config_does_not_change_remote_input() {
     let mut app = test_app(&config_from("[access]\nremote_input = \"bridge-only\"\n"));
     assert_eq!(app.state.remote_settings.input, RemoteInput::BridgeOnly);
 
-    reload_with(&mut app, "[access]\nremote_input = \"any\"\n");
+    let report = reload_with(&mut app, "[access]\nremote_input = \"any\"\n");
     assert_eq!(app.state.remote_settings.input, RemoteInput::BridgeOnly);
+    assert!(report.diagnostics.iter().any(|d| d == RESTART_HINT));
 
     reload_with(&mut app, "");
     assert_eq!(app.state.remote_settings.input, RemoteInput::BridgeOnly);
@@ -358,4 +362,361 @@ fn plain_shell_pane_stays_open_with_default() {
     state.bind_default_access(&terminal_id);
 
     assert!(state.terminals[&terminal_id].access.is_none());
+}
+
+#[test]
+fn reload_config_notes_access_changes_need_a_restart() {
+    let startup =
+        "[access]\nremote_input = \"bridge-only\"\n[access.default]\naccept_from = [\"none\"]\n";
+    let mut app = test_app(&config_from(startup));
+
+    let same = reload_with(&mut app, startup);
+    assert!(!same.diagnostics.iter().any(|d| d == RESTART_HINT));
+    assert_eq!(same.status, crate::config::ConfigReloadStatus::Applied);
+
+    let changed = reload_with(&mut app, "[access.default]\naccept_from = [\"outside\"]\n");
+    assert!(changed.diagnostics.iter().any(|d| d == RESTART_HINT));
+
+    let dropped = reload_with(&mut app, "");
+    assert!(dropped.diagnostics.iter().any(|d| d == RESTART_HINT));
+
+    let unrelated = test_app(&Config::default());
+    let mut unrelated = unrelated;
+    let none = reload_with(&mut unrelated, "[ui]\nagent_panel_sort = \"priority\"\n");
+    assert!(!none.diagnostics.iter().any(|d| d == RESTART_HINT));
+}
+
+#[test]
+fn access_config_unknown_scalar_is_soft_and_keeps_the_rest() {
+    let config = config_from(
+        "[ui]\nagent_panel_sort = \"priority\"\n[access]\nremote_input = \"bridge-only\"\nfoo = 1\n[access.default]\naccept_from=[\"none\"]\n",
+    );
+    let resolved = config.access.resolve();
+
+    assert_eq!(resolved.remote.input, RemoteInput::BridgeOnly);
+    assert_eq!(resolved.defaults.default, Some(vec![Principal::None]));
+    assert_eq!(
+        resolved.diagnostics,
+        vec!["unknown config key access.foo".to_string()]
+    );
+    assert_eq!(
+        config.ui.agent_panel_sort,
+        crate::config::AgentPanelSortConfig::Priority
+    );
+    assert_eq!(
+        config
+            .collect_diagnostics()
+            .iter()
+            .filter(|d| d.contains("access.foo"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn access_config_invalid_remote_input_fails_closed() {
+    let resolved = config_from("[access]\nremote_input = \"bridge_only\"\n")
+        .access
+        .resolve();
+    assert_eq!(resolved.remote.input, RemoteInput::BridgeOnly);
+    assert_eq!(resolved.diagnostics.len(), 1);
+    assert!(resolved.diagnostics[0].contains("treating it as \"bridge-only\""));
+
+    let wrong_type = config_from("[access]\nremote_input = 3\n").access.resolve();
+    assert_eq!(wrong_type.remote.input, RemoteInput::BridgeOnly);
+}
+
+fn state_with_default() -> (AppState, crate::layout::PaneId, TerminalId) {
+    let (mut state, pane_id, terminal_id) = state_with_pane();
+    state.access_defaults.default = Some(vec![Principal::None]);
+    (state, pane_id, terminal_id)
+}
+
+fn agent_state(state: &mut AppState, pane_id: crate::layout::PaneId, agent_state: AgentState) {
+    state.handle_app_event(AppEvent::StateChanged {
+        pane_id,
+        agent: Some(Agent::Pi),
+        state: agent_state,
+        visible_blocker: false,
+        visible_working: false,
+        process_exited: false,
+        observed_at: Instant::now(),
+    });
+}
+
+#[test]
+fn explicit_open_survives_the_next_detection() {
+    let (mut state, pane_id, terminal_id) = state_with_default();
+    agent_state(&mut state, pane_id, AgentState::Working);
+    assert!(state.terminals[&terminal_id].access.is_some());
+
+    state.unbind_access(&terminal_id);
+    assert!(state.terminals[&terminal_id].access.is_none());
+    assert!(state.terminals[&terminal_id].access_opened_explicitly);
+
+    agent_state(&mut state, pane_id, AgentState::Idle);
+    agent_state(&mut state, pane_id, AgentState::Working);
+    assert!(state.terminals[&terminal_id].access.is_none());
+
+    // Binding on purpose clears the mark again.
+    state
+        .bind_access(&terminal_id, vec![Principal::Outside])
+        .unwrap();
+    assert!(!state.terminals[&terminal_id].access_opened_explicitly);
+}
+
+#[test]
+fn explicit_open_survives_bind_default_access_all() {
+    let (mut state, pane_id, terminal_id) = state_with_default();
+    agent_state(&mut state, pane_id, AgentState::Working);
+    state.unbind_access(&terminal_id);
+
+    state.bind_default_access_all();
+    assert!(state.terminals[&terminal_id].access.is_none());
+
+    // Without the mark the same pane would have been bound.
+    state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .access_opened_explicitly = false;
+    state.bind_default_access_all();
+    assert!(state.terminals[&terminal_id].access.is_some());
+}
+
+#[tokio::test]
+async fn explicit_open_survives_a_snapshot_round_trip() {
+    let (mut state, pane_id, terminal_id) = state_with_default();
+    agent_state(&mut state, pane_id, AgentState::Working);
+    state.unbind_access(&terminal_id);
+    state.terminals.get_mut(&terminal_id).unwrap().cwd = std::env::current_dir().unwrap();
+
+    let json = serde_json::to_string(&snapshot_of(&state)).unwrap();
+    assert!(json.contains("access_opened_explicitly"));
+    let snapshot: SessionSnapshot = serde_json::from_str(&json).unwrap();
+    let mut terminals = restore_terminals(&snapshot);
+    let restored = terminals.values_mut().next().unwrap();
+    assert!(restored.access.is_none());
+    assert!(restored.access_opened_explicitly);
+
+    // Make the restored pane look like an agent pane and apply the default.
+    restored.set_agent_name("worker".into());
+    let defaults = crate::access::policy::AccessDefaults {
+        default: Some(vec![Principal::None]),
+        ..Default::default()
+    };
+    assert!(!super::access::apply_default_access(&defaults, restored));
+    assert!(restored.access.is_none());
+}
+
+#[test]
+fn default_binds_on_label_switch_without_a_transition() {
+    let (mut state, pane_id, terminal_id) = state_with_pane();
+    agent_state(&mut state, pane_id, AgentState::Working);
+    assert!(state.terminals[&terminal_id].access.is_none());
+
+    state.access_defaults.default = Some(vec![Principal::None]);
+    state.session_dirty = false;
+    // Same agent, same state: no effective transition, still first sight under a default.
+    agent_state(&mut state, pane_id, AgentState::Working);
+    assert!(state.terminals[&terminal_id].access.is_some());
+    assert!(state.session_dirty);
+}
+
+#[test]
+fn no_default_means_no_binding_and_no_dirty_flag() {
+    let (mut state, pane_id, terminal_id) = state_with_pane();
+    state.session_dirty = false;
+    agent_state(&mut state, pane_id, AgentState::Working);
+    agent_state(&mut state, pane_id, AgentState::Idle);
+    assert!(state.terminals[&terminal_id].access.is_none());
+    assert!(!state.terminals[&terminal_id].access_opened_explicitly);
+}
+
+fn snapshot_json_with_two_policies() -> serde_json::Value {
+    let (mut state, _pane, terminal_id) = state_with_pane();
+    let cwd = std::env::current_dir().unwrap();
+    state.terminals.get_mut(&terminal_id).unwrap().cwd = cwd;
+    state.terminals.get_mut(&terminal_id).unwrap().access = Some(policy(vec![Principal::Outside]));
+    serde_json::to_value(snapshot_of(&state)).unwrap()
+}
+
+fn only_pane_access(json: &mut serde_json::Value) -> &mut serde_json::Value {
+    let panes = json["workspaces"][0]["tabs"][0]["panes"]
+        .as_object_mut()
+        .unwrap();
+    let key = panes.keys().next().unwrap().clone();
+    &mut panes.get_mut(&key).unwrap()["access"]
+}
+
+#[tokio::test]
+async fn malformed_pane_access_restores_that_pane_closed() {
+    for corrupt in ["binding", "principal", "shape"] {
+        let mut json = snapshot_json_with_two_policies();
+        let access = only_pane_access(&mut json);
+        match corrupt {
+            "binding" => access["binding"] = serde_json::json!("not-a-binding"),
+            "principal" => access["accept_from"] = serde_json::json!(["caller:Bad Name"]),
+            _ => *access = serde_json::json!(7),
+        }
+        let snapshot: SessionSnapshot = serde_json::from_value(json)
+            .unwrap_or_else(|err| panic!("{corrupt}: the session must still parse: {err}"));
+        let terminals = restore_terminals(&snapshot);
+
+        let restored = terminals.values().next().unwrap().access.clone().unwrap();
+        assert_eq!(restored.accept_from, vec![Principal::None], "{corrupt}");
+    }
+}
+
+#[tokio::test]
+async fn malformed_pane_access_leaves_other_panes_alone() {
+    let mut state = AppState::test_new();
+    let mut ws = Workspace::test_new("w");
+    let second = ws.test_split(ratatui::layout::Direction::Horizontal);
+    state.workspaces.push(ws);
+    state.ensure_test_terminals();
+    let cwd = std::env::current_dir().unwrap();
+    let mut ids = Vec::new();
+    for pane in state.workspaces[0].panes.values() {
+        ids.push(pane.attached_terminal_id.clone());
+    }
+    assert_eq!(ids.len(), 2, "{second:?}");
+    let good = policy(vec![Principal::Caller("ops".into())]);
+    for id in &ids {
+        state.terminals.get_mut(id).unwrap().cwd = cwd.clone();
+    }
+    state.terminals.get_mut(&ids[0]).unwrap().access = Some(good.clone());
+    state.terminals.get_mut(&ids[1]).unwrap().access = Some(policy(vec![Principal::Outside]));
+    let mut json = serde_json::to_value(snapshot_of(&state)).unwrap();
+    let panes = json["workspaces"][0]["tabs"][0]["panes"]
+        .as_object_mut()
+        .unwrap();
+    let mut bad_done = false;
+    for pane in panes.values_mut() {
+        if !bad_done && pane["access"]["accept_from"] == serde_json::json!(["outside"]) {
+            pane["access"]["binding"] = serde_json::json!("junk");
+            bad_done = true;
+        }
+    }
+    assert!(bad_done);
+
+    let snapshot: SessionSnapshot = serde_json::from_value(json).unwrap();
+    let terminals = restore_terminals(&snapshot);
+
+    let mut lists: Vec<_> = terminals
+        .values()
+        .map(|t| t.access.clone().unwrap())
+        .collect();
+    lists.sort_by_key(|p| format!("{:?}", p.accept_from));
+    assert_eq!(lists.len(), 2);
+    assert!(lists.contains(&good));
+    assert!(lists.iter().any(|p| p.accept_from == vec![Principal::None]));
+}
+
+/// A snapshot with one pane that holds a resumable pi session, which restores
+/// without spawning a shell and looks like an agent pane.
+fn agent_pane_snapshot() -> SessionSnapshot {
+    let (mut state, _pane, terminal_id) = state_with_pane();
+    state.terminals.get_mut(&terminal_id).unwrap().cwd = std::env::current_dir().unwrap();
+    let mut json = serde_json::to_value(snapshot_of(&state)).unwrap();
+    let pane = json["workspaces"][0]["tabs"][0]["panes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    pane["agent_session"] = serde_json::json!({
+        "source": "herdr:pi",
+        "agent": "pi",
+        "kind": "path",
+        "value": std::env::current_dir().unwrap().join("pi-session.jsonl").display().to_string(),
+    });
+    serde_json::from_value(json).unwrap()
+}
+
+fn default_none_config() -> Config {
+    config_from("[access.default]\naccept_from = [\"none\"]\n")
+}
+
+fn scratch_dirs(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "herdr-access-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
+    std::env::set_var("XDG_STATE_HOME", dir.join("state"));
+    dir
+}
+
+#[tokio::test]
+async fn startup_restore_binds_the_default_to_restored_agent_panes() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("startup");
+    std::fs::create_dir_all(crate::config::config_dir()).unwrap();
+    let snapshot = agent_pane_snapshot();
+    std::fs::write(
+        crate::config::config_dir().join("session.json"),
+        serde_json::to_string(&snapshot).unwrap(),
+    )
+    .unwrap();
+
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let policy = crate::app::AppPolicy {
+        restore_session: true,
+        ..crate::app::AppPolicy::TEST
+    };
+    let app = App::try_new(
+        &default_none_config(),
+        policy,
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert_eq!(app.state.terminals.len(), 1);
+    let terminal = app.state.terminals.values().next().unwrap();
+    assert!(terminal.is_agent_terminal());
+    assert_eq!(
+        terminal.access.as_ref().map(|p| p.accept_from.clone()),
+        Some(vec![Principal::None])
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn handoff_restore_binds_the_default_to_restored_agent_panes() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("handoff");
+    let snapshot = agent_pane_snapshot();
+
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new_from_handoff(
+        &default_none_config(),
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+        &snapshot,
+        &mut HashMap::new(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert_eq!(app.state.terminals.len(), 1);
+    let terminal = app.state.terminals.values().next().unwrap();
+    assert!(terminal.is_agent_terminal());
+    assert_eq!(
+        terminal.access.as_ref().map(|p| p.accept_from.clone()),
+        Some(vec![Principal::None])
+    );
 }

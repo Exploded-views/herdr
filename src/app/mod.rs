@@ -879,6 +879,12 @@ impl App {
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
 
+        if !invalid_section("access")
+            && !self.state.access_matches_startup(&config.access.resolve())
+        {
+            diagnostics.push("[access] changes need a restart".to_string());
+        }
+
         if !invalid_section("keys") {
             match config.live_keybinds_with_diagnostics() {
                 Ok((live, keybind_diagnostics)) => {

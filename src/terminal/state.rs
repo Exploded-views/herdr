@@ -158,6 +158,8 @@ pub struct TerminalState {
     pub last_agent_completion_seq: Option<u64>,
     /// Who may send this pane input. Sticky: agent exit or release leaves it.
     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
+    /// Set when a pane was opened on purpose (`unbind_access`); the default never rebinds it.
+    pub(crate) access_opened_explicitly: bool,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -199,6 +201,7 @@ impl TerminalState {
             last_agent_state_change_seq: None,
             last_agent_completion_seq: None,
             access: None,
+            access_opened_explicitly: false,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,

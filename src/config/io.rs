@@ -371,6 +371,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
     load_live_section(
         table,
+        "access",
+        "access config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.access = section,
+    );
+    load_live_section(
+        table,
         "remote",
         "remote config",
         &mut diagnostics,

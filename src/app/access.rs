@@ -5,8 +5,9 @@
 use std::io;
 
 use super::state::AppState;
+use crate::access::policy::AccessDefaults;
 use crate::access::policy::{AccessBindingId, AccessPolicy, Principal};
-use crate::terminal::TerminalId;
+use crate::terminal::{TerminalId, TerminalState};
 
 // bind_access and unbind_access are called by the access.* methods in a later task.
 #[allow(dead_code)]
@@ -34,45 +35,63 @@ impl AppState {
                 binding: binding.clone(),
                 accept_from,
             });
+            state.access_opened_explicitly = false;
         }
         self.mark_session_dirty();
         Ok(binding)
     }
 
-    /// Open a pane again.
+    /// Open a pane on purpose. The pane is remembered as opened, so the
+    /// sticky default does not bind it again on the next detection or restart.
     pub(crate) fn unbind_access(&mut self, terminal: &TerminalId) {
         if let Some(state) = self.terminals.get_mut(terminal) {
             state.access = None;
+            state.access_opened_explicitly = true;
             self.mark_session_dirty();
         }
     }
+}
+
+/// Bind `[access.default]` to a terminal that is an agent, holds no policy
+/// and was not opened on purpose. Returns true when it bound. One `Option`
+/// check when no default is configured.
+pub(crate) fn apply_default_access(
+    defaults: &AccessDefaults,
+    terminal: &mut TerminalState,
+) -> bool {
+    let Some(default) = defaults.default.as_ref() else {
+        return false;
+    };
+    if terminal.access.is_some()
+        || terminal.access_opened_explicitly
+        || !terminal.is_agent_terminal()
+    {
+        return false;
+    }
+    let binding = match AccessBindingId::mint() {
+        Ok(binding) => binding,
+        Err(err) => {
+            tracing::error!(%err, "could not mint an access binding; pane left open");
+            return false;
+        }
+    };
+    terminal.access = Some(AccessPolicy {
+        binding,
+        accept_from: default.clone(),
+    });
+    true
 }
 
 impl AppState {
     /// Sticky default: bind `[access.default]` to a pane the first time an
     /// agent is seen in it. A no-op, and free, when no default is configured.
     pub(crate) fn bind_default_access(&mut self, terminal: &TerminalId) {
-        let Some(default) = self.access_defaults.default.as_ref() else {
-            return;
-        };
         let Some(state) = self.terminals.get_mut(terminal) else {
             return;
         };
-        if state.access.is_some() || !state.is_agent_terminal() {
-            return;
+        if apply_default_access(&self.access_defaults, state) {
+            self.mark_session_dirty();
         }
-        let binding = match AccessBindingId::mint() {
-            Ok(binding) => binding,
-            Err(err) => {
-                tracing::error!(%err, "could not mint an access binding; pane left open");
-                return;
-            }
-        };
-        state.access = Some(AccessPolicy {
-            binding,
-            accept_from: default.clone(),
-        });
-        self.mark_session_dirty();
     }
 
     /// After a restore: panes that already hold agents get the default too.
@@ -84,5 +103,14 @@ impl AppState {
         for id in ids {
             self.bind_default_access(&id);
         }
+    }
+
+    /// True when `resolved` (a freshly read `[access]`) matches what startup
+    /// applied. `bridge_binding` is filled at runtime and not compared.
+    pub(crate) fn access_matches_startup(&self, resolved: &crate::config::ResolvedAccess) -> bool {
+        resolved.defaults == self.access_defaults
+            && resolved.remote.input == self.remote_settings.input
+            && resolved.remote.bridge_agent == self.remote_settings.bridge_agent
+            && resolved.remote_owner_tui == self.remote_owner_tui
     }
 }

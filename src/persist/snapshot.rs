@@ -112,8 +112,39 @@ pub struct PaneSnapshot {
     pub agent_resume: Option<PaneAgentResumeSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_access"
+    )]
     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) access_opened_explicitly: bool,
+}
+
+/// A malformed `access` field must not cost the whole session. The pane comes
+/// back closed (`accept_from = [none]`, fresh binding) and a warning is logged.
+fn lenient_access<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::access::policy::AccessPolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use crate::access::policy::{AccessBindingId, AccessPolicy, Principal};
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match serde_json::from_value::<AccessPolicy>(value) {
+        Ok(policy) => Ok(Some(policy)),
+        Err(err) => {
+            tracing::warn!(%err, "saved pane access policy is malformed; restoring the pane closed");
+            let binding = AccessBindingId::mint().map_err(serde::de::Error::custom)?;
+            Ok(Some(AccessPolicy {
+                binding,
+                accept_from: vec![Principal::None],
+            }))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,6 +385,8 @@ fn capture_tab(
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let access = terminal.and_then(|terminal| terminal.access.clone());
+        let access_opened_explicitly =
+            terminal.is_some_and(|terminal| terminal.access_opened_explicitly);
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -393,6 +426,7 @@ fn capture_tab(
                 agent_resume,
                 launch_argv,
                 access,
+                access_opened_explicitly,
             },
         );
     }
@@ -713,6 +747,7 @@ mod tests {
                 agent_resume: None,
                 launch_argv: None,
                 access: None,
+                access_opened_explicitly: false,
             },
         );
         panes.insert(
@@ -726,6 +761,7 @@ mod tests {
                 agent_resume: None,
                 launch_argv: None,
                 access: None,
+                access_opened_explicitly: false,
             },
         );
 
@@ -1413,6 +1449,7 @@ mod tests {
                 agent_resume: None,
                 launch_argv: None,
                 access: None,
+                access_opened_explicitly: false,
             },
         );
         panes.insert(
@@ -1428,6 +1465,7 @@ mod tests {
                 agent_resume: None,
                 launch_argv: None,
                 access: None,
+                access_opened_explicitly: false,
             },
         );
 
