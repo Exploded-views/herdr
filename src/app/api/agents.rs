@@ -1203,14 +1203,139 @@ mod tests {
             }
         }
 
+        fn from_token(rig: &Rig, pane: usize) -> Caller {
+            let binding = rig.app.state.terminals[&rig.terminals[pane]]
+                .access
+                .as_ref()
+                .unwrap()
+                .binding
+                .clone();
+            Caller::Classified(CallerClass::Caller {
+                name: "ci".into(),
+                target: binding,
+                via_ssh: false,
+            })
+        }
+
         #[tokio::test]
-        async fn looser_than_a_bound_policy_from_pane_is_denied_even_on_an_idle_looking_gate() {
+        async fn caller_token_on_its_own_binding_may_tighten_but_not_loosen() {
+            let mut rig = rig();
+            bind(&mut rig, 0, vec![Principal::Outside]);
+            let own = from_token(&rig, 0);
+            for ok in [&["none"][..], &["outside"]] {
+                assert!(
+                    rig.app
+                        .check_access(&method(&rig, 0, Some(ok)), &own)
+                        .is_ok(),
+                    "{ok:?}"
+                );
+            }
+            assert!(rig.app.check_access(&method(&rig, 0, None), &own).is_ok());
+            for loose in [&["any"][..], &["caller:ci"]] {
+                let denied = rig
+                    .app
+                    .check_access(&method(&rig, 0, Some(loose)), &own)
+                    .unwrap_err();
+                assert!(denied
+                    .message()
+                    .contains("does not accept control requests from caller:ci"));
+            }
+            // A token that is not this pane's binding is refused outright.
+            bind(&mut rig, 1, vec![Principal::Outside]);
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 1, Some(&["none"])), &own)
+                .is_err());
+        }
+
+        #[tokio::test]
+        async fn looser_than_a_bound_policy_needs_admin_beyond_control_of_the_pane() {
             let mut rig = rig();
             bind(&mut rig, 0, vec![Principal::None]);
             assert!(rig
                 .app
-                .check_access(&method(&rig, 0, Some(&["outside"])), &from_pane(&rig, 1))
+                .check_access(&method(&rig, 0, Some(&["outside"])), &outside())
+                .is_ok());
+            let own = from_token(&rig, 0);
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["outside"])), &own)
                 .is_err());
+        }
+
+        #[tokio::test]
+        async fn loosening_start_must_pass_the_pane_check_as_well_as_admin() {
+            use crate::access::policy::{RemoteInput, RemoteSettings};
+            let mut rig = rig();
+            rig.app.state.remote_settings = RemoteSettings {
+                input: RemoteInput::BridgeOnly,
+                ..Default::default()
+            };
+            rig.app.state.access_defaults.default = Some(vec![Principal::Outside]);
+            let via_ssh = Caller::Classified(CallerClass::Outside { via_ssh: true });
+            // A plain start into the unbound pane is refused by the remote rule.
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, None), &via_ssh)
+                .is_err());
+            for loose in [&["any"][..], &["caller:ci"]] {
+                assert!(
+                    rig.app
+                        .check_access(&method(&rig, 0, Some(loose)), &via_ssh)
+                        .is_err(),
+                    "{loose:?}"
+                );
+            }
+            // A local outside caller is still admitted.
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["any"])), &outside())
+                .is_ok());
+        }
+
+        #[tokio::test]
+        async fn any_without_a_default_needs_admin_and_only_admin_sets_the_flag() {
+            let mut rig = rig();
+            let terminal = rig.terminals[0].clone();
+            let denied = rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["any"])), &from_pane(&rig, 1))
+                .unwrap_err();
+            assert!(denied
+                .message()
+                .contains("does not accept control requests from pane:"));
+            assert!(!rig.app.state.terminals[&terminal].access_opened_explicitly);
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["any"])), &outside())
+                .is_ok());
+            let response = start(&mut rig, 0, Some(&["any"]));
+            assert_eq!(response["result"]["type"], "agent_started");
+            assert!(rig.app.state.terminals[&terminal].access_opened_explicitly);
+            // Already opened on purpose: `any` is no longer a loosening.
+            assert!(rig
+                .app
+                .check_access(&method(&rig, 0, Some(&["any"])), &from_pane(&rig, 1))
+                .is_ok());
+        }
+
+        #[tokio::test]
+        async fn a_failed_any_send_restores_the_binding() {
+            let mut rig = rig();
+            let binding = bind(&mut rig, 0, vec![Principal::Outside]);
+            let terminal = rig.terminals[0].clone();
+            let (runtime, _rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+            runtime
+                .try_send_bytes(Bytes::from_static(b"occupied"))
+                .unwrap();
+            rig.app.terminal_runtimes.insert(terminal.clone(), runtime);
+            let response = start(&mut rig, 0, Some(&["any"]));
+            assert_eq!(response["error"]["code"], "agent_start_input_failed");
+            let kept = policy(&rig, 0).unwrap();
+            assert_eq!(kept.binding, binding);
+            assert_eq!(kept.accept_from, vec![Principal::Outside]);
+            assert!(!rig.app.state.terminals[&terminal].access_opened_explicitly);
         }
 
         #[tokio::test]

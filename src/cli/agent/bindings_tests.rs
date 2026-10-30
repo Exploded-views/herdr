@@ -1,3 +1,4 @@
+// herdr-fork: tests for `agent start --accept-from`. Unofficial stopgap; see FORK.md.
 use super::bindings::{self, Operation};
 use crate::api::schema::{Method, Request};
 use crate::cli::projection::{self, ParseError};
@@ -209,6 +210,37 @@ fn agent_projection_clap_relations_and_help_before_transport() {
             matches!(parse(&[leaf.get_name(), "--help"]), Err(ParseError::Clap(error)) if error.exit_code() == 0),
             "{}",
             leaf.get_name()
+        );
+    }
+}
+
+#[test]
+fn start_accept_from_splits_commas_and_accumulates_repeats() {
+    let cases: [(&[&str], serde_json::Value); 4] = [
+        (&[], serde_json::Value::Null),
+        (
+            &["--accept-from", "outside,caller:ci"],
+            serde_json::json!(["outside", "caller:ci"]),
+        ),
+        (
+            &[
+                "--accept-from",
+                "none",
+                "--accept-from",
+                "outside,caller:ci",
+            ],
+            serde_json::json!(["none", "outside", "caller:ci"]),
+        ),
+        (&["--accept-from=any"], serde_json::json!(["any"])),
+    ];
+    for (extra, expected) in cases {
+        let mut args = vec!["start", "worker", "--kind", "pi", "--pane", "p_1"];
+        args.extend(extra);
+        let params = params(&args);
+        assert_eq!(
+            params.get("accept_from").cloned().unwrap_or_default(),
+            expected,
+            "{extra:?}"
         );
     }
 }

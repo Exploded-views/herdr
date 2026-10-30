@@ -9,8 +9,6 @@ use crate::access::policy::AccessDefaults;
 use crate::access::policy::{AcceptFrom, AccessBindingId, AccessPolicy, Principal};
 use crate::terminal::{TerminalId, TerminalState};
 
-// bind_access and unbind_access are called by the access.* methods in a later task.
-#[allow(dead_code)]
 impl AppState {
     /// Set a pane's policy. An existing binding id is kept (a rebind changes
     /// who is accepted, not which binding the pane is).

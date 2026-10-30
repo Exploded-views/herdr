@@ -5,12 +5,13 @@
 //!
 //! The gate does nothing until something asks for it: with no bound policy,
 //! no caller token and remote input left at `any`, it returns before it
-//! classifies anything.
+//! classifies anything. The exceptions are `access.*` methods and an
+//! `agent.start` that carries `accept_from`, which are always checked.
 
 use crate::access::caller::{classify, Caller};
 use crate::access::policy::{
-    decide, is_looser, parse_accept_from, AccessDenied, AccessPolicy, CallerClass, GateTarget,
-    RemoteInput,
+    decide, is_looser, parse_accept_from, AcceptFrom, AccessDenied, AccessPolicy, CallerClass,
+    GateTarget, RemoteInput,
 };
 use crate::api::schema::{AccessClass, AgentStartParams, Method};
 use crate::terminal::TerminalId;
@@ -107,7 +108,9 @@ impl App {
     }
 
     /// Allow or refuse `method` for `caller`. Returns before classifying when
-    /// the gate is idle and the method is not an `access.*` one.
+    /// the gate is idle and the method is neither an `access.*` one nor an
+    /// `agent.start` with `accept_from`. An `agent.start` that loosens a policy
+    /// must pass both the pane's rule and the admin rule.
     pub(crate) fn check_access(
         &self,
         method: &Method,
@@ -130,7 +133,19 @@ impl App {
                 "input method target did not resolve; the handler reports it"
             );
         }
-        decide(&target, &class, &self.state.remote_settings).map_err(|denied| {
+        // A loosening start must pass the pane's own rule and the admin rule.
+        // The pane rule answers first.
+        let pane_result = decide(&target, &class, &self.state.remote_settings);
+        let admin_result = if self.start_escalates(method) {
+            decide(
+                &GateTarget::AccessAdmin,
+                &class,
+                &self.state.remote_settings,
+            )
+        } else {
+            Ok(())
+        };
+        pane_result.and(admin_result).map_err(|denied| {
             let denied = self.with_public_pane_id(&class, denied);
             let terminal = match &target {
                 GateTarget::Input { terminal, .. } | GateTarget::PaneControl { terminal, .. } => {
@@ -323,28 +338,52 @@ impl App {
         }
     }
 
-    /// `agent.start`: control of the pane, unless an explicit `accept_from`
-    /// would let in someone the pane does not accept today (or the section or
-    /// default it would get). That loosens a policy, so it is admin only.
-    /// An `accept_from` that does not parse is the handler's error to report.
-    fn agent_start_gate_target(&self, params: &AgentStartParams) -> GateTarget<'_> {
-        let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
-            return GateTarget::Open;
+    /// Does this `agent.start` ask for more access than the pane gives today
+    /// (or would give from its section or default)? An explicit `accept_from`
+    /// that is looser than that, or `any` on a pane that was not already opened
+    /// on purpose, loosens a policy: it needs the admin check on top of the
+    /// pane check, never instead of it. An `accept_from` that does not parse
+    /// is the handler's error to report.
+    fn start_escalates(&self, method: &Method) -> bool {
+        let Method::AgentStart(params) = method else {
+            return false;
         };
-        if let Some(values) = params.accept_from.as_deref() {
-            let terminal = self
+        let Some(values) = params.accept_from.as_deref() else {
+            return false;
+        };
+        let Ok(explicit) = parse_accept_from(values) else {
+            return false;
+        };
+        let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
+            return false;
+        };
+        let Some(terminal) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.terminal_id(pane_id))
+        else {
+            return false;
+        };
+        let opens_new = matches!(explicit, AcceptFrom::Any)
+            && !self
                 .state
-                .workspaces
-                .get(ws_idx)
-                .and_then(|workspace| workspace.terminal_id(pane_id));
-            if let (Some(terminal), Ok(explicit)) = (terminal, parse_accept_from(values)) {
-                let baseline = self.state.start_baseline_access(terminal, &params.name);
-                if is_looser(&explicit, baseline) {
-                    return GateTarget::AccessAdmin;
-                }
-            }
+                .terminals
+                .get(terminal)
+                .is_some_and(|state| state.access_opened_explicitly);
+        opens_new
+            || is_looser(
+                &explicit,
+                self.state.start_baseline_access(terminal, &params.name),
+            )
+    }
+
+    /// `agent.start`: control of the pane if it holds a policy, else input.
+    fn agent_start_gate_target(&self, params: &AgentStartParams) -> GateTarget<'_> {
+        match self.parse_current_public_pane_id(&params.pane_id) {
+            Some((ws_idx, pane_id)) => self.pane_gate_target(ws_idx, pane_id, true),
+            None => GateTarget::Open,
         }
-        self.pane_gate_target(ws_idx, pane_id, true)
     }
 
     fn agent_gate_target(&self, target: &str) -> GateTarget<'_> {
@@ -911,12 +950,13 @@ mod tests {
         let mut app = app_with_panes(1);
         let terminal = terminal_of(&app, pane_ids(&app)[0]);
         protect(&mut app, &terminal, vec![Principal::Outside]);
+        assert!(app.start_escalates(&start_with(&app, 0, &["caller:ci"])));
+        assert!(app.start_escalates(&start_with(&app, 0, &["any"])));
+        assert!(!app.start_escalates(&start_with(&app, 0, &["outside"])));
+        assert!(!app.start_escalates(&start_with(&app, 0, &["none"])));
+        // The pane target stays the pane's own: control of a bound pane.
         assert!(matches!(
             app.gate_target(&start_with(&app, 0, &["caller:ci"])),
-            GateTarget::AccessAdmin
-        ));
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["outside"])),
             GateTarget::PaneControl { .. }
         ));
     }
@@ -924,44 +964,33 @@ mod tests {
     #[test]
     fn start_loosening_is_measured_against_the_section_or_default_an_unbound_pane_would_get() {
         let mut app = app_with_panes(1);
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["any"])),
-            GateTarget::Input { policy: None, .. }
-        ));
+        // No default: a narrowing list is fine, `any` still opens a pane on purpose.
+        assert!(!app.start_escalates(&start_with(&app, 0, &["caller:ci"])));
         app.state.access_defaults.default = Some(vec![Principal::Outside]);
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
-            GateTarget::AccessAdmin
-        ));
+        assert!(app.start_escalates(&start_with(&app, 0, &["caller:ci"])));
         // A section for the agent's name replaces the default.
         app.state
             .access_defaults
             .by_name
             .insert("worker".into(), vec![Principal::Caller("ci".into())]);
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
-            GateTarget::Input { .. }
-        ));
+        assert!(!app.start_escalates(&start_with(&app, 0, &["caller:ci"])));
+        assert!(app.start_escalates(&start_with(&app, 0, &["outside"])));
+        // The pane target of an unbound pane is input.
         assert!(matches!(
             app.gate_target(&start_with(&app, 0, &["outside"])),
-            GateTarget::AccessAdmin
+            GateTarget::Input { policy: None, .. }
         ));
     }
 
     #[test]
-    fn start_loosening_treats_an_explicitly_opened_pane_as_open() {
+    fn start_any_escalates_unless_the_pane_was_already_opened_on_purpose() {
         let mut app = app_with_panes(1);
         let terminal = terminal_of(&app, pane_ids(&app)[0]);
+        assert!(app.start_escalates(&start_with(&app, 0, &["any"])));
         app.state.access_defaults.default = Some(vec![Principal::None]);
         app.state.unbind_access(&terminal);
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["any"])),
-            GateTarget::Input { policy: None, .. }
-        ));
-        assert!(matches!(
-            app.gate_target(&start_with(&app, 0, &["caller:ci"])),
-            GateTarget::Input { policy: None, .. }
-        ));
+        assert!(!app.start_escalates(&start_with(&app, 0, &["any"])));
+        assert!(!app.start_escalates(&start_with(&app, 0, &["caller:ci"])));
     }
 
     #[test]
@@ -969,6 +998,7 @@ mod tests {
         let mut app = app_with_panes(1);
         let terminal = terminal_of(&app, pane_ids(&app)[0]);
         protect(&mut app, &terminal, vec![Principal::None]);
+        assert!(!app.start_escalates(&start_with(&app, 0, &["caller:*"])));
         assert!(matches!(
             app.gate_target(&start_with(&app, 0, &["caller:*"])),
             GateTarget::PaneControl { .. }
