@@ -148,7 +148,9 @@ def show(path, patterns, locales):
             return "<path withheld: its name matches the denylist>"
         if rc > 1:
             raise ScanError(f"grep failed ({locale})")
-    return path.decode("utf-8", "replace").replace("\n", "\\n")
+    text = path.decode("utf-8", "replace")
+    # Escape control characters so a crafted name can't rewrite the terminal line.
+    return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in text)
 
 
 def scan(repo, allow, ref, denylist):
@@ -209,6 +211,9 @@ def main(argv):
         return scan(repo, allow, ref, denylist)
     except ScanError as e:
         print(f"denylist-scan: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:  # any other failure is an error too, never "hits" or clean
+        print(f"denylist-scan: unexpected error: {type(e).__name__}", file=sys.stderr)
         return 2
 
 

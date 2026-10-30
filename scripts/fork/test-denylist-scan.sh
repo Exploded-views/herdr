@@ -125,6 +125,14 @@ printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
 check "a CRLF denylist still matches" 1 "$tmp/crlf"
 reset
 
+got=0; PATH=/nonexistent SCRUB_DENYLIST=$tmp/denylist "$(command -v python3)" "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+if [[ $got == 2 ]]; then echo "  ok    a missing git is an error, not hits"; else echo "  FAIL  missing git (exit $got, want 2)"; fail=1; fi
+
+printf 'x %s\n' "$term" >"$repo/esc$(printf '\033')[2Kname.txt"; commit
+SCRUB_DENYLIST=$tmp/denylist "$scan" "$repo" "$allow" >"$tmp/out" 2>&1 || true
+if grep -q "$(printf '\033')" "$tmp/out"; then echo "  FAIL  control characters in a path are escaped"; fail=1; else echo "  ok    control characters in a path are escaped"; fi
+reset
+
 printf '%s\n(\n' "$term" >"$tmp/badre"
 check "an invalid denylist pattern is an error, not clean" 2 "$tmp/badre"
 
