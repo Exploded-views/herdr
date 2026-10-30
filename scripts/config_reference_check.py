@@ -30,7 +30,8 @@ ROOT_STRUCT = "Config"
 
 # Dotted key prefixes that are open-ended (user-defined tables/arrays) and
 # therefore not enumerable in a flat reference table.
-SKIPPED_SUBTREES = ("keys.command",)
+# herdr-fork: [access.<name>] tables are user-defined, like [[keys.command]]. See FORK.md.
+SKIPPED_SUBTREES = ("keys.command", "access.sections")
 
 FIELD_RE = re.compile(r"^\s*pub ([a-z_][a-z0-9_]*):\s*(.+?),?\s*$")
 STRUCT_RE = re.compile(r"^\s*pub(?:\(crate\))? struct ([A-Za-z0-9_]+)\s*\{\s*$")
@@ -241,6 +242,8 @@ def collect_entries(model: Model, struct_name: str = ROOT_STRUCT, prefix: str = 
                 )
             entries.extend(collect_entries(model, inner, f"{dotted}."))
         else:
+            if dotted in SKIPPED_SUBTREES:  # herdr-fork: a map of user-defined tables. See FORK.md.
+                continue
             entry = {"key": dotted, "rust_type": struct_field.rust_type, "doc": struct_field.doc}
             if inner in model.enums:
                 entry["values"] = model.enums[inner]

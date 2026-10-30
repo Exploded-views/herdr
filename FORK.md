@@ -51,6 +51,8 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
 | `scripts/fork/denylist-scan.py` | new | Scans a commit's tree (contents, symlink targets, path names) against the private denylist; prints paths and counts only |
 | `scripts/fork/denylist-allow.sha256` | new | Denylist exemptions for unmodified vendored upstream files, each pinned by sha256 |
+| `docs/next/website/src/data/config-reference.json` | changed | Documents the fork-only `[access]` keys (Access section) |
+| `scripts/config_reference_check.py` | changed | Skips the user-defined `[access.<name>]` map, as it skips `[[keys.command]]` |
 | `scripts/fork/test-denylist-scan.sh` | new | Tests the scanner: pinned exemptions lapse on any change, and every error fails rather than passing clean |
 | `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 | `src/api/schema/operations.rs` | changed | `AccessClass` enum and `Operation.access`; the operation macro requires a class on every row |
