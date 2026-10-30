@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# herdr-fork: fork-only. Tests scripts/fork/denylist-scan.sh. Unofficial stopgap; see FORK.md.
+# herdr-fork: fork-only. Tests scripts/fork/denylist-scan.py. Unofficial stopgap; see FORK.md.
 #
 # Builds a throwaway repo with a synthetic denylist term (never a real one) and checks that a
 # hash-pinned allowlist entry exempts exactly that path at exactly those committed bytes, and
 # that every failure mode is an error, never a clean result.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-scan=$here/denylist-scan.sh
+scan=$here/denylist-scan.py
 tmp=$(mktemp -d)
 trap 'rm -r "$tmp"' EXIT
 fail=0
@@ -77,6 +77,52 @@ reset
 
 printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
 check "a hit outside the allowlist still fails" 1
+reset
+
+printf 'x\377%s\n' "$term" >"$repo/bin.dat"; commit
+check "a term next to a non-UTF-8 byte is found" 1
+reset
+
+printf 'x %s\n' "$(printf '%s' "$term" | tr a-z A-Z)" >>"$repo/ours.rs"; commit
+check "matching is case-insensitive" 1
+reset
+
+empty=$(git -C "$repo" commit-tree "$(git -C "$repo" hash-object -t tree /dev/null)" -m empty)
+got=0; SCRUB_DENYLIST=$tmp/denylist "$scan" "$repo" "$allow" "$empty" >/dev/null 2>&1 || got=$?
+if [[ $got == 2 ]]; then echo "  ok    an empty tree is an error"; else echo "  FAIL  empty tree (exit $got, want 2)"; fail=1; fi
+
+check "a repo path that does not exist is an error" 2 "$tmp/denylist" "$tmp/no-such-dir"
+
+link=$(printf '%s' "$good" | git -C "$repo" hash-object -w --stdin)
+git -C "$repo" update-index --cacheinfo 120000,"$link",vendor/lib/third.h
+git -C "$repo" commit -qm x
+check "pinned bytes stored as a symlink are not exempt" 1
+reset
+
+printf 'unique blob %s\n' "$RANDOM$RANDOM" >"$repo/gone.txt"; commit
+gone=$(git -C "$repo" rev-parse HEAD:gone.txt)
+rm -f "$repo/.git/objects/${gone:0:2}/${gone:2}"
+check "a missing blob object is an error" 2
+git -C "$repo" reset -q --hard "$base" 2>/dev/null || true; git -C "$repo" clean -qfd
+
+printf 'x %s\n' "$term" >"$repo/a
+b.txt"; commit
+check "a newline in a path name is handled" 1
+reset
+
+printf 'x %s\n' "$term" >"$repo/$term-and-content.txt"; commit
+check "a path whose name matches is withheld from output" 1
+reset
+
+mkdir -p "$repo/sub/dir"; printf 'clean\n' >"$repo/sub/dir/f.txt"; commit
+sub=$(git -C "$repo" rev-parse HEAD:sub/dir)
+rm -f "$repo/.git/objects/${sub:0:2}/${sub:2}"
+check "a missing subtree object is an error, not a partial clean scan" 2
+git -C "$repo" reset -q --hard "$base" 2>/dev/null || true; git -C "$repo" clean -qfd
+
+printf '%s\r\n' "$term" >"$tmp/crlf"
+printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
+check "a CRLF denylist still matches" 1 "$tmp/crlf"
 reset
 
 printf '%s\n(\n' "$term" >"$tmp/badre"

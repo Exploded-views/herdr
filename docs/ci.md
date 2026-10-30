@@ -45,6 +45,20 @@ CI and local runs build and use the same file, so a version bump touches one fil
 
 macOS builds and tests natively on the Mac.
 
+## Denylist scan before every push
+
+CI has no copy of the private denylist, so the scan runs locally before each push:
+
+    scripts/fork/denylist-scan.py            # scans HEAD; exit 0 clean, 1 hits, 2 error
+    scripts/fork/test-denylist-scan.sh       # the scanner's own tests (synthetic terms only)
+
+It scans the committed tree (file contents, symlink targets and path names), not the working
+tree, in the C locale and a UTF-8 locale. It prints paths and counts, never matched text, and
+withholds a path whose own name matches. `scripts/fork/denylist-allow.sha256` exempts unmodified
+vendored upstream files by sha256: an entry applies only while the file is a regular file with
+exactly the pinned bytes, so an upstream sync that changes one is scanned again. Adding an entry
+needs the owner's go; never widen the denylist's patterns to make a scan pass.
+
 ## Repository settings
 
 These are settings, not file edits: upstream's workflow files stay untouched. In the same
