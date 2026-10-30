@@ -78,8 +78,9 @@ stop a process that sets out to get around it:
   own files (its settings, hooks and instructions).
 - A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
   `tmux new -d`, any SSH login to the host) and then counts as being outside every pane.
-  A caller is stamped `remote` when its lineage passes through an SSH server, and for
-  herdr's own `--machine` route.
+  TUI clients whose lineage passes through an SSH server, and herdr's `--machine` route, are
+  stamped `remote`; other callers under an SSH login count as another host under
+  `bridge-only`.
 - **Remote client bridge.** The server can't tell at accept that a TUI came in through the
   remote client bridge, so `remote` comes from `via_ssh` only. A bridge launched under
   something other than an SSH server looks local. This matches the decision that remote TUIs
