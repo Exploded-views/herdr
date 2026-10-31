@@ -125,7 +125,62 @@ printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
 check "a CRLF denylist still matches" 1 "$tmp/crlf"
 reset
 
-got=0; PATH=/nonexistent SCRUB_DENYLIST=$tmp/denylist "$(command -v python3)" "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+# A trailing " #class=<word>" tag labels a line; the pattern is what comes before it.
+printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
+printf '%s #class=client\n' "$term" >"$tmp/tagged"
+check "a class-tagged line still matches its pattern" 1 "$tmp/tagged"
+printf '%s #class=crew-host\r\n' "$term" >"$tmp/tagged-crlf"
+check "a class-tagged CRLF line still matches" 1 "$tmp/tagged-crlf"
+reset
+for bad in "$term #class=" "$term #class=a b" "$term #class=a #class=b" "$term #class=cl!ent" \
+  "$term #CLASS=client" "$term # class=client" "$term #Class =client" "$term #class=client " "$term\\ #class=client" \
+  "$term"$'\t'"#class=client" "$term  #class=client" "$term #class=Client" "$term #class=crew_host" \
+  "$term #class:client" "$term # note" "$term"$'\xc2\xa0'"#class=client" "$term"$'\xef\xbc\x83'"class=client"; do
+  printf '%s\n' "$bad" >"$tmp/badtag"
+  check "a malformed class tag is an error: ${bad#"$term"}" 2 "$tmp/badtag"
+done
+
+printf 'fine-pattern\n%s #CLASS=client\n' "$term" >"$tmp/badtag"
+SCRUB_DENYLIST=$tmp/badtag "$scan" "$repo" "$allow" >"$tmp/out" 2>&1 || true
+if grep -q 'line 2' "$tmp/out" && ! grep -qiE "$term|fine-pattern|#CLASS=" "$tmp/out"; then
+  echo "  ok    a malformed tag names its line number and nothing else"
+else
+  echo "  FAIL  a malformed tag names its line number and nothing else"; sed 's/^/        /' "$tmp/out"; fail=1
+fi
+
+: >"$tmp/empty"
+check "an empty denylist is an error" 2 "$tmp/empty"
+printf '# only a comment\r\n\r\n' >"$tmp/comments"
+check "a denylist of only comments and CRLF blank lines is an error" 2 "$tmp/comments"
+mkdir "$tmp/dl-dir"
+check "an unreadable denylist (a directory) is an error" 2 "$tmp/dl-dir"
+
+# A module planted next to the scanner, or on PYTHONPATH, must not replace a stdlib import.
+mkdir "$tmp/scandir" "$tmp/pp"
+cp "$scan" "$tmp/scandir/denylist-scan.py"
+printf 'import sys\nopen(%s, "w").close()\nsys.exit(0)\n' "'$tmp/planted'" >"$tmp/evil.py"
+ln -s "$tmp/evil.py" "$tmp/scandir/re.py"
+ln -s "$tmp/evil.py" "$tmp/pp/re.py"
+printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
+ln -s "$tmp/evil.py" "$tmp/pp/sitecustomize.py"
+for how in "scandir" "pythonpath"; do
+  got=0; rm -f "$tmp/planted"
+  if [[ $how == scandir ]]; then
+    SCRUB_DENYLIST=$tmp/denylist "$tmp/scandir/denylist-scan.py" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+  else
+    PYTHONPATH=$tmp/pp SCRUB_DENYLIST=$tmp/denylist "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+  fi
+  if [[ $got == 1 && ! -e $tmp/planted ]]; then echo "  ok    a planted module symlink ($how) is not loaded"
+  else echo "  FAIL  a planted module symlink ($how) is not loaded (exit $got)"; fail=1; fi
+done
+# Run any other way than isolated, the scanner refuses rather than trusting its imports.
+got=0; SCRUB_DENYLIST=$tmp/denylist python3 "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+if [[ $got == 2 ]]; then echo "  ok    run without python3 -I is refused"; else echo "  FAIL  run without python3 -I is refused (exit $got)"; fail=1; fi
+got=0; SCRUB_DENYLIST=$tmp/denylist python3 -I "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+if [[ $got == 1 ]]; then echo "  ok    python3 -I runs the scan"; else echo "  FAIL  python3 -I runs the scan (exit $got)"; fail=1; fi
+reset
+
+got=0; PATH=/nonexistent SCRUB_DENYLIST=$tmp/denylist "$(command -v python3)" -I "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
 if [[ $got == 2 ]]; then echo "  ok    a missing git is an error, not hits"; else echo "  FAIL  missing git (exit $got, want 2)"; fail=1; fi
 
 printf 'x %s\n' "$term" >"$repo/esc$(printf '\033')[2Kname.txt"; commit
