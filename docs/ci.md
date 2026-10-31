@@ -63,6 +63,12 @@ runner, inside the same image as the `linux` job. Nothing needs a secret.
   writable directory (plus Zig's gitignored `zig-pkg`, which the build needs) and works only there.
   It never touches the checkout.
 
+Before any mutant it builds the clean copy and runs every filter of the shard once; if that fails it
+prints `baseline failed` and exits 2, so a test that is already broken cannot read as a kill. A
+manifest with no mutants at all also exits 2. Runs use the `mutants` nextest profile
+(`.config/nextest.toml`), which terminates a hung test after two minutes; a terminated test counts as
+failed, so KILLED.
+
 For each mutant it prints one verdict line, and exits non-zero unless every verdict is `KILLED`:
 
 | Verdict | Meaning | What to do |
@@ -71,7 +77,7 @@ For each mutant it prints one verdict line, and exits non-zero unless every verd
 | `SURVIVED` | It applied and compiled, but every test in the filter passed: no test notices the broken guard. | Fix the test (or the filter), or, if the mutation is equivalent because another guard shadows it, change the mutation so it isn't. |
 | `STALE` | `git apply --check` failed: the code the patch edits has moved. | Re-derive the same mutation by hand against the new code and regenerate the patch. |
 | `BROKEN` | The patch applied but the tests don't compile with it. | Fix the mutation so it compiles. |
-| `ERROR` | The test run failed without a test failing, for example the filter matched no test (renamed or removed). | Fix the filter. |
+| `ERROR` | The test run failed without a test failing. The runner passes `--no-tests=fail`, so a filter that matches no test (renamed or removed) ends here, as does a crash. | Fix the filter. |
 
 ### Add a mutant
 
@@ -81,7 +87,7 @@ For each mutant it prints one verdict line, and exits non-zero unless every verd
    first `diff --git`: `# herdr-fork: mutant <id>: <what it breaks>. Unofficial stopgap; see FORK.md.`
    Then revert your working tree.
 3. Add a line to `manifest.tsv` with the id, the patch file name and a filter such as
-   `test(name_of_the_test)`. Join several with ` | ` if more than one should fail.
+   `test(name_of_the_test)`. Join several with ` | ` if any one of several tests should catch it: the mutant counts as KILLED when any of them fails, and every joined test must pass on the unmutated tree (the baseline).
 4. Check that it applies with `git apply --check scripts/fork/mutants/<id>.patch`. Shards take lines
    by position, so a new line shifts which shard later mutants run in; that is fine.
 5. A mutation that only changes behaviour on one OS needs a test that runs on Linux, because the

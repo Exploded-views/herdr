@@ -31,9 +31,15 @@ case " $* " in
   *" --no-run "*)
     echo "build saw=$guard" >>"$STUB_LOG"
     [[ $guard == *BROKEN* ]] && { echo "error: could not compile"; exit 101; }
+    [[ $guard == GUARD=on && ${STUB_BASE:-} == build ]] && { echo "error: baseline does not compile"; exit 101; }
     exit 0 ;;
 esac
-echo "run saw=$guard filter=$filter" >>"$STUB_LOG"
+echo "run saw=$guard filter=$filter args=$*" >>"$STUB_LOG"
+[[ $guard == *STRAY* ]] && touch stray.txt
+[[ $guard == GUARD=on && ${STUB_BASE:-} == run ]] && { echo "        FAIL [   0.010s] fake::tests::baseline"; exit 100; }
+[[ $guard == *NOTESTS* ]] && { echo "error: no tests to run"; exit 4; }
+[[ $guard == *CRASH* ]] && { echo "error: test binary crashed"; exit 101; }
+if [[ $guard == *STRAY* ]]; then exit 100; fi
 if [[ $guard == *KILL* ]]; then
   echo "        FAIL [   0.010s] fake::tests::guard_holds"
   exit 100
@@ -60,6 +66,9 @@ mkpatch kill GUARD=KILL
 mkpatch weak GUARD=weak
 mkpatch broken GUARD=BROKEN
 mkpatch kill2 GUARD=KILL2
+mkpatch notests GUARD=NOTESTS
+mkpatch crash GUARD=CRASH
+mkpatch stray GUARD=STRAY
 # A patch written against other content: it does not apply at the base.
 sed -e 's/^-GUARD=on/-GUARD=other/' "$fx/scripts/fork/mutants/kill.patch" >"$fx/scripts/fork/mutants/stale.patch"
 tab=$'\t'
@@ -85,7 +94,8 @@ write_manifest "K1${tab}kill.patch${tab}test(guard_holds)"
 run 1/1
 check "killed mutant exits 0" "$rc" "rc=$rc"
 has "K1" && has "KILLED"; check "killed mutant is reported KILLED" $?
-grep -q 'run saw=GUARD=KILL filter=test(guard_holds)' "$tmp/stub.log"; check "the filter reaches nextest, with the patch applied" $?
+grep -q 'run saw=GUARD=KILL filter=test(guard_holds) ' "$tmp/stub.log"; check "the filter reaches nextest, with the patch applied" $?
+grep 'run saw=GUARD=KILL' "$tmp/stub.log" | grep -q -- '--no-tests=fail' && grep 'run saw=GUARD=KILL' "$tmp/stub.log" | grep -q -- '--profile mutants'; check "mutant runs pass --no-tests=fail and --profile mutants" $?
 
 # 2. A survivor gives exit 1.
 write_manifest "S1${tab}weak.patch${tab}test(guard_holds)"
@@ -98,7 +108,7 @@ write_manifest "X1${tab}stale.patch${tab}test(guard_holds)"
 run 1/1
 [[ $rc -eq 1 ]]; check "stale patch exits 1" $? "rc=$rc"
 has "STALE"; check "stale patch is reported STALE" $?
-[[ ! -s $tmp/stub.log ]]; check "stale patch runs no cargo" $?
+! grep -q 'saw=GUARD=\(KILL\|weak\)' "$tmp/stub.log"; check "stale patch runs no cargo on a mutated tree" $?
 
 # 4. A missing patch file is stale too.
 write_manifest "X2${tab}no-such.patch${tab}test(guard_holds)"
@@ -110,7 +120,7 @@ write_manifest "B1${tab}broken.patch${tab}test(guard_holds)"
 run 1/1
 [[ $rc -eq 1 ]]; check "broken build exits 1" $? "rc=$rc"
 has "BROKEN"; check "broken build is reported BROKEN" $?
-! grep -q '^run ' "$tmp/stub.log"; check "broken build runs no tests" $?
+! grep -q '^run saw=GUARD=BROKEN' "$tmp/stub.log"; check "broken build runs no tests" $?
 
 # 6. Shard selection takes every total-th line from shard (comments and blanks are skipped).
 write_manifest "M1${tab}kill.patch${tab}f1" "M2${tab}kill2.patch${tab}f2" "M3${tab}kill.patch${tab}f3" \
@@ -120,12 +130,12 @@ run 1/2; [[ $(ids) == "M1 M3 M5 " && $rc -eq 0 ]]; check "shard 1/2 takes M1 M3 
 run 2/2; [[ $(ids) == "M2 M4 " && $rc -eq 0 ]]; check "shard 2/2 takes M2 M4" $? "got: $(ids) rc=$rc"
 run 3/3; [[ $(ids) == "M3 " && $rc -eq 0 ]]; check "shard 3/3 takes M3" $? "got: $(ids) rc=$rc"
 run 1/5; [[ $(ids) == "M1 " ]]; check "shard 1/5 takes M1" $? "got: $(ids)"
-grep -q 'filter=f1$' "$tmp/stub.log" && ! grep -q 'filter=f2' "$tmp/stub.log"; check "only the shard's filters run" $?
+grep -q 'filter=f1 args' "$tmp/stub.log" && ! grep -q 'filter=f2 args' "$tmp/stub.log"; check "only the shard's filters run" $?
 
 # 7. One failure does not hide the others, and the exit is non-zero.
 write_manifest "M1${tab}kill.patch${tab}f1" "M2${tab}weak.patch${tab}f2" "M3${tab}kill2.patch${tab}f3"
 run 1/1
-[[ $rc -eq 1 ]] && has "M2" && has "SURVIVED" && grep -q 'filter=f3$' "$tmp/stub.log"; check "a survivor does not stop later mutants" $? "rc=$rc"
+[[ $rc -eq 1 ]] && has "M2" && has "SURVIVED" && grep -q 'filter=f3 args' "$tmp/stub.log"; check "a survivor does not stop later mutants" $? "rc=$rc"
 
 # 8. The tree is restored after each mutant: each cargo call sees only its own mutation,
 #    and the work copy ends clean and the source repo is untouched.
@@ -135,7 +145,7 @@ work=$tmp/work
 out=$(MUTANTS_ROOT=$fx MUTANTS_WORK=$work STUB_LOG=$tmp/stub.log PATH="$stubs:$PATH" bash "$runner" 1/1 2>&1)
 rc=$?
 saw=$(sed -e 's/ filter=.*//' "$tmp/stub.log" | tr '\n' ' ')
-[[ $saw == "build saw=GUARD=KILL run saw=GUARD=KILL build saw=GUARD=weak run saw=GUARD=weak build saw=GUARD=BROKEN build saw=GUARD=KILL2 run saw=GUARD=KILL2 " ]]
+[[ $saw == "build saw=GUARD=on run saw=GUARD=on build saw=GUARD=KILL run saw=GUARD=KILL build saw=GUARD=weak run saw=GUARD=weak build saw=GUARD=BROKEN build saw=GUARD=KILL2 run saw=GUARD=KILL2 " ]]
 check "each mutant is built on a clean tree" $? "saw: $saw"
 [[ -z $(git -C "$work" status --porcelain) && $(sed -n 1p "$work/guard.txt") == GUARD=on ]]; check "work copy is restored at the end" $?
 [[ -z $(git -C "$fx" status --porcelain -- guard.txt scripts/fork/mutants/kill.patch) && $(sed -n 1p "$fx/guard.txt") == GUARD=on ]]; check "source repo is never touched" $?
@@ -149,6 +159,53 @@ done
 write_manifest "Z1${tab}kill.patch"
 run 1/1
 [[ $rc -eq 2 ]]; check "a malformed manifest line exits 2" $? "rc=$rc"
+
+# 10. Verdicts for a run that fails without a test failing (nextest exit 4 and 101) are ERROR.
+write_manifest "N1${tab}notests.patch${tab}test(gone)"
+run 1/1
+[[ $rc -eq 1 ]] && has "ERROR"; check "no tests matched (exit 4) is ERROR, exit 1" $? "rc=$rc"
+grep -q "^N1 *KILLED" <<<"$out" && r=1 || r=0; check "no tests matched is not KILLED" $r
+write_manifest "C1${tab}crash.patch${tab}test(guard_holds)"
+run 1/1
+[[ $rc -eq 1 ]] && has "ERROR"; check "a crashed run (exit 101) is ERROR, exit 1" $? "rc=$rc"
+
+# 11. The baseline: every filter of the shard must pass on the clean copy before any mutant runs.
+write_manifest "A1${tab}kill.patch${tab}test(one)" "A2${tab}kill2.patch${tab}test(two)"
+run 1/1
+grep -q 'run saw=GUARD=on filter=(test(one)) | (test(two)) args=' "$tmp/stub.log"; check "baseline runs all of the shard's filters on the clean copy" $?
+grep -- 'filter=(test(one))' "$tmp/stub.log" | grep -q -- '--no-tests=fail'; check "baseline passes --no-tests=fail" $?
+STUB_BASE=run run 1/1
+[[ $rc -eq 2 ]] && has "baseline failed"; check "a failing baseline exits 2" $? "rc=$rc"
+! grep -q 'saw=GUARD=KILL' "$tmp/stub.log"; check "a failing baseline tries no mutant" $?
+STUB_BASE=build run 1/1
+[[ $rc -eq 2 ]] && has "baseline failed"; check "a baseline that does not build exits 2" $? "rc=$rc"
+! grep -q 'saw=GUARD=KILL' "$tmp/stub.log"; check "a baseline that does not build tries no mutant" $?
+
+# 12. An empty manifest exits 2; a shard with nothing while others have mutants exits 0.
+write_manifest
+run 1/4
+[[ $rc -eq 2 ]]; check "a manifest with no mutants exits 2" $? "rc=$rc"
+write_manifest "E1${tab}kill.patch${tab}f1" "E2${tab}kill2.patch${tab}f2"
+run 3/4
+[[ $rc -eq 0 ]]; check "an empty shard of a non-empty manifest exits 0" $? "rc=$rc"
+run 1/4
+[[ $rc -eq 0 ]] && has "E1"; check "the shard that has a mutant still runs it" $? "rc=$rc"
+
+# 13. Manifest fields split on single tabs; empty fields are rejected.
+write_manifest "T1${tab}${tab}kill.patch${tab}f1"
+run 1/1
+[[ $rc -eq 2 ]]; check "an empty middle field exits 2" $? "rc=$rc"
+write_manifest "T2${tab}kill.patch${tab}"
+run 1/1
+[[ $rc -eq 2 ]]; check "an empty filter exits 2" $? "rc=$rc"
+write_manifest "T3${tab}kill.patch${tab}f1${tab}extra"
+run 1/1
+[[ $rc -eq 2 ]]; check "an extra field exits 2" $? "rc=$rc"
+
+# 14. A file left behind after the revert is caught.
+write_manifest "U1${tab}stray.patch${tab}f1"
+run 1/1
+[[ $rc -eq 2 ]] && has "did not revert cleanly"; check "an untracked file after the revert exits 2" $? "rc=$rc"
 
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

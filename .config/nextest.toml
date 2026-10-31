@@ -1,0 +1,4 @@
+# herdr-fork: nextest profile for scripts/fork/run-mutants.sh. A mutant can make a test hang;
+# terminate it after 2 minutes (a terminated test counts as failed). Unofficial stopgap; see FORK.md.
+[profile.mutants]
+slow-timeout = { period = "30s", terminate-after = 4 }

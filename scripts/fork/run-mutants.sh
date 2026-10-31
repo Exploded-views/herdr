@@ -12,8 +12,11 @@
 #   3. nextest run -E <filter>  passes -> SURVIVED (no test noticed the broken guard)
 #                               fails  -> KILLED  (what we want)
 #                               any other outcome (no tests matched, a crash) -> ERROR
+#   (a test killed by the `mutants` nextest profile's slow-timeout counts as failed -> KILLED)
 #   4. git apply -R, then check the tree is back to the base.
-# Exits 1 if any mutant is not KILLED, 2 on a usage error or a tree that did not restore.
+# Before any mutant it builds the clean copy and runs this shard's filters once; both must succeed
+# (baseline). Exits 1 if any mutant is not KILLED, 2 on a usage error, an empty manifest, a failing
+# baseline or a tree that did not restore.
 #
 # The repo is mounted read-only in CI's image, so the tracked tree is copied to a writable
 # directory first and every mutant runs there. Never touches the source tree.
@@ -40,10 +43,17 @@ ids=()
 patches=()
 filters=()
 index=0
-while IFS=$'\t' read -r id patch filter extra || [[ -n $id ]]; do
-  [[ -z $id || $id == \#* ]] && continue
-  if [[ -z $patch || -z $filter || -n $extra ]]; then
-    echo "run-mutants.sh: malformed manifest line for '$id' (want: id TAB patch TAB filter)" >&2
+tab=$'\t'
+while IFS= read -r line || [[ -n $line ]]; do
+  [[ -z $line || $line == \#* ]] && continue
+  # Exactly two single tabs, and no empty field (read would collapse repeated tabs).
+  tabs=${line//[!$tab]/}
+  id=${line%%"$tab"*}
+  rest=${line#*"$tab"}
+  patch=${rest%%"$tab"*}
+  filter=${rest#*"$tab"}
+  if [[ ${#tabs} -ne 2 || -z $id || -z $patch || -z $filter ]]; then
+    echo "run-mutants.sh: malformed manifest line '$line' (want: id TAB patch TAB filter, one tab each, none empty)" >&2
     exit 2
   fi
   if (((index % total) == shard - 1)); then
@@ -53,6 +63,10 @@ while IFS=$'\t' read -r id patch filter extra || [[ -n $id ]]; do
   fi
   index=$((index + 1))
 done <"$manifest"
+if [[ $index -eq 0 ]]; then
+  echo "run-mutants.sh: the manifest holds no mutants" >&2
+  exit 2
+fi
 echo "shard $shard/$total: ${#ids[@]} of $index mutants"
 if [[ ${#ids[@]} -eq 0 ]]; then
   exit 0
@@ -78,6 +92,26 @@ fi
 g() { git -C "$work" -c user.name=mutants -c user.email=mutants@localhost -c commit.gpgsign=false "$@"; }
 g init -q && g add -A && g commit -qm base || { echo "run-mutants.sh: cannot snapshot the copy" >&2; exit 2; }
 
+# Baseline: the unmutated copy must build and every filter of this shard must pass, or a test
+# that fails for an unrelated reason would read as KILLED for every mutant aimed at it.
+baseline_filter=
+for f in "${filters[@]}"; do
+  baseline_filter=${baseline_filter:+$baseline_filter | }"($f)"
+done
+echo "baseline: building and running this shard's tests on the clean copy"
+if ! (cd "$work" && cargo nextest run --locked --profile mutants --no-run) >"$log" 2>&1; then
+  tail -n 40 "$log" | sed -e 's/^/    | /'
+  echo "run-mutants.sh: baseline failed: the unmutated copy does not build" >&2
+  exit 2
+fi
+if ! (cd "$work" && cargo nextest run --locked --profile mutants --no-tests=fail -E "$baseline_filter" \
+  --no-fail-fast --status-level fail --final-status-level fail --failure-output final \
+  --success-output never) >"$log" 2>&1; then
+  tail -n 40 "$log" | sed -e 's/^/    | /'
+  echo "run-mutants.sh: baseline failed: the shard's tests do not pass on the unmutated copy" >&2
+  exit 2
+fi
+
 verdicts=()
 failed=0
 n=${#ids[@]}
@@ -96,10 +130,10 @@ for ((i = 0; i < n; i++)); do
   elif ! g apply "$patch" >"$log" 2>&1; then
     verdict=STALE
   else
-    if ! (cd "$work" && cargo nextest run --locked --no-run) >"$log" 2>&1; then
+    if ! (cd "$work" && cargo nextest run --locked --profile mutants --no-run) >"$log" 2>&1; then
       verdict=BROKEN
     else
-      (cd "$work" && cargo nextest run --locked -E "$filter" --no-fail-fast \
+      (cd "$work" && cargo nextest run --locked --profile mutants --no-tests=fail -E "$filter" --no-fail-fast \
         --status-level fail --final-status-level fail --failure-output final \
         --success-output never) >"$log" 2>&1
       case $? in
@@ -108,7 +142,7 @@ for ((i = 0; i < n; i++)); do
         *) verdict=ERROR ;;
       esac
     fi
-    if ! g apply -R "$patch" >>"$log" 2>&1 || ! g diff --quiet; then
+    if ! g apply -R "$patch" >>"$log" 2>&1 || ! g diff --quiet || [[ -n $(g status --porcelain) ]]; then
       echo "run-mutants.sh: $id did not revert cleanly; the working copy is no longer the base" >&2
       exit 2
     fi
