@@ -79,6 +79,16 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/server/headless/tests/access_gate.rs`, `src/server/headless/tests/mod.rs`, `src/server/headless/tests/surface_interest.rs` | new / changed | Gate tests for every Input method, legacy and moved pane ids, bridge-only, restore, alt-screen reads and client callers |
 | `src/platform/mod.rs`, `src/platform/unix_common.rs`, `src/pane.rs`, `src/terminal/runtime.rs`, `src/terminal/runtime_registry.rs` | changed | `process_identity` (a pane shell's identity with the same token the lineage walk records); runtime registry iteration on every platform; test-only child pid setter |
 | `src/access/mod.rs`, `src/api/mod.rs`, `src/api/schema.rs`, `src/api/schema/operations.rs`, `src/config/model.rs`, `src/app/mod.rs`, `src/app/access_tests.rs`, `justfile` | changed | Temporary dead-code allows removed now that the gate uses them; `[access] input_log` key parsed (default true, not used yet); `just bench-access` |
+| `src/access/registry.rs` | new | `CallerRegistry`: named callers, tokens stored only as sha256, constant-time `lookup`, saved 0600 by tmp + rename to `access-callers.json` |
+| `src/api/schema/access.rs`, `src/api/schema/response.rs`, `src/api/schema.rs`, `src/api/schema/operations.rs` | new / changed | `access.caller.add/list/rotate/retarget/remove` (all Control); `AccessCallerToken` and `AccessCallers` results; `CallerToken` redacts itself in `Debug`; the policy-table test lists the new rows |
+| `src/app/api/access_callers.rs`, `src/app/api.rs` | new / changed | Handlers for `access.caller.*`; a change is made on a copy, saved, then kept |
+| `src/app/access_gate.rs`, `src/access/policy.rs` | changed | `access.caller.*` are `AccessAdmin` (outside callers only); a presented token is matched against the registry; the caller-name check is shared |
+| `src/app/mod.rs`, `src/app/state.rs` | changed | The registry is loaded once at startup (`AppPolicy.persist_access_callers`); an unreadable file refuses changes instead of being overwritten |
+| `src/app/agents.rs` | changed | `remote_input`, `bridge_agent` and `remote_owner_tui` are refused as agent names (start and rename) |
+| `src/cli/access.rs`, `src/cli.rs`, `src/cli/spec.rs` | new / changed | `herdr access caller add/list/rotate/retarget/remove`; the token goes to a 0600 file and is never printed |
+| `src/platform/mod.rs`, `src/platform/unix_common.rs` | changed | `create_private_file` (create-new, mode 0600) |
+| `docs/next/website/src/content/docs/cli-reference.mdx` | changed | Documents `herdr access caller` |
+| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains the `access.caller.*` methods and results |
 
 Follow-up: the ja and zh-cn `cli-reference.mdx` still show the old `agent start` usage line without `--accept-from`; only the English page is updated.
 

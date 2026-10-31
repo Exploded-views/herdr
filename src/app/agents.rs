@@ -1,4 +1,4 @@
-// herdr-fork: `agent start` binds, keeps or opens a pane's access policy. Unofficial stopgap; see FORK.md.
+// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config are refused. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -13,7 +13,13 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
+/// Names the access config uses as keys; an agent may not take one.
+const RESERVED_AGENT_NAMES: [&str; 3] = ["remote_input", "bridge_agent", "remote_owner_tui"];
+
 fn valid_agent_name(name: &str) -> bool {
+    if RESERVED_AGENT_NAMES.contains(&name) {
+        return false;
+    }
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
         && name.len() <= 32
@@ -512,6 +518,17 @@ pub(super) enum AgentRenameError {
 #[cfg(test)]
 mod tests {
     use super::valid_agent_name;
+
+    #[test]
+    fn reserved_agent_names_refused() {
+        for name in ["remote_input", "bridge_agent", "remote_owner_tui"] {
+            assert!(!valid_agent_name(name), "expected {name:?} to be refused");
+        }
+        // Only the exact reserved words; near misses stay valid.
+        for name in ["remote_inputs", "bridge-agent", "remote"] {
+            assert!(valid_agent_name(name), "expected {name:?} to be valid");
+        }
+    }
 
     #[test]
     fn agent_names_use_a_small_cli_safe_grammar() {

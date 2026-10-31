@@ -1228,6 +1228,50 @@
     },
     "request": {
       "$defs": {
+        "AccessCallerAddParams": {
+          "properties": {
+            "name": {
+              "description": "Caller name: `[a-z0-9][a-z0-9_-]{0,63}`.",
+              "type": "string"
+            },
+            "target_pane": {
+              "description": "Public id of the pane the caller may send input to. The pane must hold an access policy.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "target_pane"
+          ],
+          "type": "object"
+        },
+        "AccessCallerNameParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "AccessCallerRetargetParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "target_pane": {
+              "description": "Public id of the pane the caller is moved to. The pane must hold an access policy.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "target_pane"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -6322,6 +6366,86 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.caller.add",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessCallerAddParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.caller.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.caller.rotate",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessCallerNameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.caller.retarget",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessCallerRetargetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.caller.remove",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessCallerNameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -6550,6 +6674,29 @@
     },
     "success_response": {
       "$defs": {
+        "AccessCallerInfo": {
+          "properties": {
+            "binding": {
+              "description": "The access binding id (`acc_...`) the caller is bound to.",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "pane_id": {
+              "description": "Public id of the pane that holds that binding now, if it is open.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "binding"
+          ],
+          "type": "object"
+        },
         "AgentInfo": {
           "properties": {
             "agent": {
@@ -6784,6 +6931,10 @@
             "done",
             "unknown"
           ],
+          "type": "string"
+        },
+        "CallerToken": {
+          "description": "A caller token. It appears on the wire in exactly one result, when it is\nminted; its `Debug` never shows it.",
           "type": "string"
         },
         "ClientWindowTitleReason": {
@@ -9223,6 +9374,50 @@
               "required": [
                 "type",
                 "snapshot"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A caller's new token. Shown once; only its sha256 is kept.",
+              "properties": {
+                "binding": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "token": {
+                  "$ref": "#/schemas/success_response/$defs/CallerToken"
+                },
+                "type": {
+                  "const": "access_caller_token",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "name",
+                "binding",
+                "token"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "callers": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AccessCallerInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "access_callers",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "callers"
               ],
               "type": "object"
             },

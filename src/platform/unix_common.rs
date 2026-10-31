@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) and random_secret. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret and create_private_file. Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ChildPipe(std::fs::File);
@@ -496,9 +496,19 @@ pub(super) fn walk_lineage(
     lineage
 }
 
+/// A new file that only its owner can read or write (mode 0600), created
+/// atomically; fails if `path` exists. Holds caller tokens and the caller registry.
+pub(crate) fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
 /// 32 bytes from the OS random source.
-// Wired in by the access classifier in a later task.
-#[allow(dead_code)]
 pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
     use std::io::Read as _;
 

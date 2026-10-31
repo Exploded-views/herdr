@@ -1,4 +1,4 @@
-// herdr-fork: resolve `[access]` once at startup, bind defaults after restore, and gate input methods (access_gate). Unofficial stopgap; see FORK.md.
+// herdr-fork: resolve `[access]` and load the caller registry once at startup, bind defaults after restore, and gate input methods (access_gate). Unofficial stopgap; see FORK.md.
 //! Application orchestration.
 //!
 //! - `state.rs` — AppState, Mode, and pure data structs
@@ -80,6 +80,8 @@ pub(crate) struct AppPolicy {
     pub(crate) persist_session: bool,
     pub(crate) persist_plugin_registry: bool,
     pub(crate) background_updates: bool,
+    /// Load and save the `access.caller.*` registry in the data dir.
+    pub(crate) persist_access_callers: bool,
 }
 
 impl AppPolicy {
@@ -88,6 +90,7 @@ impl AppPolicy {
         persist_session: true,
         persist_plugin_registry: true,
         background_updates: true,
+        persist_access_callers: true,
     };
 
     #[cfg(test)]
@@ -96,6 +99,7 @@ impl AppPolicy {
         persist_session: false,
         persist_plugin_registry: false,
         background_updates: false,
+        persist_access_callers: false,
     };
 
     #[cfg(unix)]
@@ -104,7 +108,30 @@ impl AppPolicy {
         persist_session: true,
         persist_plugin_registry: true,
         background_updates: true,
+        persist_access_callers: true,
     };
+}
+
+/// Read the caller registry once. A file that cannot be read leaves the
+/// registry empty and refuses changes, so the unreadable file is not overwritten.
+fn load_access_callers(
+    persist: bool,
+) -> (
+    crate::access::registry::CallerRegistry,
+    Option<std::path::PathBuf>,
+    bool,
+) {
+    if !persist {
+        return (Default::default(), None, false);
+    }
+    let path = crate::access::registry::registry_path();
+    match crate::access::registry::CallerRegistry::load(&path) {
+        Ok(registry) => (registry, Some(path), false),
+        Err(err) => {
+            tracing::error!(%err, path = %path.display(), "could not read the access caller registry; caller changes are refused");
+            (Default::default(), Some(path), true)
+        }
+    }
 }
 
 pub struct App {
@@ -465,6 +492,8 @@ impl App {
         };
 
         let resolved_access = config.access.resolve();
+        let (access_callers, access_callers_path, access_callers_unreadable) =
+            load_access_callers(policy.persist_access_callers);
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
 
         let worktree_directory =
@@ -585,6 +614,9 @@ impl App {
             session_dirty: false,
             access_defaults: resolved_access.defaults,
             remote_settings: resolved_access.remote,
+            access_callers,
+            access_callers_path,
+            access_callers_unreadable,
             remote_owner_tui: resolved_access.remote_owner_tui,
             terminal_runtime_shutdowns: Vec::new(),
         };

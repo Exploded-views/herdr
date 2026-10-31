@@ -23,7 +23,7 @@ impl From<Principal> for String {
     }
 }
 
-fn valid_caller_name(name: &str) -> bool {
+pub(crate) fn valid_caller_name(name: &str) -> bool {
     let mut chars = name.chars();
     let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit());
     first_ok

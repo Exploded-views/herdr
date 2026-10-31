@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy is admin only. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method are admin only, and a caller token is matched against the caller registry. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -98,13 +98,16 @@ impl App {
         }
     }
 
-    /// Named callers are registered by `access.caller.*`, which has not landed:
-    /// no token matches yet, so a token never raises a caller above `Outside`.
+    /// The registered caller a token belongs to, compared in constant time.
+    /// A token that matches nobody leaves the caller `Outside`.
     fn match_caller_token(
         &self,
-        _token: &str,
+        token: &str,
     ) -> Option<(String, crate::access::policy::AccessBindingId)> {
-        None
+        if self.state.access_callers.is_empty() {
+            return None;
+        }
+        self.state.access_callers.lookup(token)
     }
 
     /// Allow or refuse `method` for `caller`. Returns before classifying when
@@ -238,6 +241,12 @@ impl App {
             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendInput(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::AgentStart(params) => self.agent_start_gate_target(params),
+            // Admin: only an outside caller manages named callers.
+            Method::AccessCallerAdd(_)
+            | Method::AccessCallerList(_)
+            | Method::AccessCallerRotate(_)
+            | Method::AccessCallerRetarget(_)
+            | Method::AccessCallerRemove(_) => GateTarget::AccessAdmin,
             // Open: nothing here writes caller-chosen bytes into an existing pane.
             Method::Ping(_)
             | Method::ServerStop(_)
@@ -1003,5 +1012,347 @@ mod tests {
             app.gate_target(&start_with(&app, 0, &["caller:*"])),
             GateTarget::PaneControl { .. }
         ));
+    }
+
+    fn caller_methods(pane: &str) -> Vec<Method> {
+        use crate::api::schema::{
+            AccessCallerAddParams, AccessCallerNameParams, AccessCallerRetargetParams, EmptyParams,
+        };
+        vec![
+            Method::AccessCallerAdd(AccessCallerAddParams {
+                name: "ops".into(),
+                target_pane: pane.into(),
+            }),
+            Method::AccessCallerList(EmptyParams::default()),
+            Method::AccessCallerRotate(AccessCallerNameParams { name: "ops".into() }),
+            Method::AccessCallerRetarget(AccessCallerRetargetParams {
+                name: "ops".into(),
+                target_pane: pane.into(),
+            }),
+            Method::AccessCallerRemove(AccessCallerNameParams { name: "ops".into() }),
+        ]
+    }
+
+    fn call(app: &mut App, method: Method) -> serde_json::Value {
+        let request = crate::api::schema::Request {
+            id: "t".into(),
+            method,
+        };
+        serde_json::from_str(&app.handle_api_request(request)).unwrap()
+    }
+
+    fn token_of(response: &serde_json::Value) -> String {
+        assert_eq!(
+            response["result"]["type"], "access_caller_token",
+            "{response}"
+        );
+        response["result"]["token"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn access_caller_methods_refused_from_pane_even_when_unprotected() {
+        // Nothing is protected, so the gate is otherwise idle.
+        let app = app_with_panes(2);
+        assert!(!app.any_access_protected());
+        let panes = pane_ids(&app);
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])));
+        let binding = AccessBindingId::mint().unwrap();
+        let refused = [
+            from_pane,
+            Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+            Caller::Classified(CallerClass::Remote),
+            Caller::Classified(CallerClass::Caller {
+                name: "ops".into(),
+                target: binding,
+                via_ssh: false,
+            }),
+        ];
+        for method in caller_methods("1") {
+            for caller in &refused {
+                let denied = app.check_access(&method, caller).unwrap_err();
+                assert!(
+                    matches!(denied, AccessDenied::Control { .. }),
+                    "{}",
+                    method.operation().name
+                );
+                assert!(denied
+                    .message()
+                    .contains("does not accept control requests from"));
+            }
+            assert!(
+                app.check_access(&method, &outside()).is_ok(),
+                "{}",
+                method.operation().name
+            );
+        }
+    }
+
+    #[test]
+    fn caller_add_requires_policy() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let pane_id = app.public_pane_id(0, panes[0]).unwrap();
+        let add = |name: &str| {
+            caller_methods(&pane_id)
+                .into_iter()
+                .next()
+                .map(|method| match method {
+                    Method::AccessCallerAdd(mut params) => {
+                        params.name = name.into();
+                        Method::AccessCallerAdd(params)
+                    }
+                    other => other,
+                })
+                .unwrap()
+        };
+        let refused = call(&mut app, add("ops"));
+        assert_eq!(refused["error"]["code"], "no_access_policy");
+        assert_eq!(
+            refused["error"]["message"],
+            format!("pane {pane_id} has no access policy; set one first")
+        );
+        assert!(app.state.access_callers.is_empty());
+
+        let terminal = terminal_of(&app, panes[0]);
+        protect(&mut app, &terminal, vec![Principal::None]);
+        let binding = app.state.terminals[&terminal]
+            .access
+            .as_ref()
+            .unwrap()
+            .binding
+            .clone();
+        let added = call(&mut app, add("ops"));
+        let token = token_of(&added);
+        assert_eq!(token.len(), 64);
+        assert_eq!(added["result"]["name"], "ops");
+        assert_eq!(added["result"]["binding"], binding.to_string());
+        assert_eq!(
+            app.state.access_callers.lookup(&token),
+            Some(("ops".to_string(), binding.clone()))
+        );
+
+        // The token appears nowhere else.
+        let listed = call(&mut app, Method::AccessCallerList(Default::default()));
+        assert!(!listed.to_string().contains(&token));
+        assert_eq!(listed["result"]["callers"][0]["name"], "ops");
+        assert_eq!(
+            listed["result"]["callers"][0]["binding"],
+            binding.to_string()
+        );
+        assert_eq!(listed["result"]["callers"][0]["pane_id"], pane_id);
+
+        // A bad or repeated name, and an unknown pane, are refused without a token.
+        assert_eq!(call(&mut app, add("ops"))["error"]["code"], "caller_exists");
+        assert_eq!(
+            call(&mut app, add("Bad Name"))["error"]["code"],
+            "invalid_caller_name"
+        );
+        let missing = call(
+            &mut app,
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: "other".into(),
+                target_pane: "no-such-pane".into(),
+            }),
+        );
+        assert_eq!(missing["error"]["code"], "pane_not_found");
+    }
+
+    #[test]
+    fn caller_rotate_retarget_remove_through_the_api() {
+        use crate::api::schema::{AccessCallerNameParams, AccessCallerRetargetParams};
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let (first, second) = (terminal_of(&app, panes[0]), terminal_of(&app, panes[1]));
+        protect(&mut app, &first, vec![Principal::None]);
+        protect(&mut app, &second, vec![Principal::None]);
+        let second_binding = app.state.terminals[&second]
+            .access
+            .as_ref()
+            .unwrap()
+            .binding
+            .clone();
+        let first_id = app.public_pane_id(0, panes[0]).unwrap();
+        let second_id = app.public_pane_id(0, panes[1]).unwrap();
+        let old = token_of(&call(
+            &mut app,
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: "ops".into(),
+                target_pane: first_id,
+            }),
+        ));
+        let name = || AccessCallerNameParams { name: "ops".into() };
+        let new = token_of(&call(&mut app, Method::AccessCallerRotate(name())));
+        assert_ne!(old, new);
+        assert!(app.state.access_callers.lookup(&old).is_none());
+        assert!(app.state.access_callers.lookup(&new).is_some());
+        assert_eq!(
+            call(
+                &mut app,
+                Method::AccessCallerRotate(AccessCallerNameParams { name: "x".into() })
+            )["error"]["code"],
+            "caller_not_found"
+        );
+
+        let moved = call(
+            &mut app,
+            Method::AccessCallerRetarget(AccessCallerRetargetParams {
+                name: "ops".into(),
+                target_pane: second_id,
+            }),
+        );
+        assert_eq!(moved["result"]["type"], "ok", "{moved}");
+        assert_eq!(
+            app.state.access_callers.lookup(&new),
+            Some(("ops".to_string(), second_binding))
+        );
+
+        assert_eq!(
+            call(&mut app, Method::AccessCallerRemove(name()))["result"]["type"],
+            "ok"
+        );
+        assert!(app.state.access_callers.lookup(&new).is_none());
+        assert_eq!(
+            call(&mut app, Method::AccessCallerRemove(name()))["error"]["code"],
+            "caller_not_found"
+        );
+    }
+
+    #[test]
+    fn caller_changes_are_saved_and_a_failed_save_changes_nothing() {
+        let dir = crate::access::registry::TestDir::new("app-save");
+        let path = dir.path().join("access-callers.json");
+        let mut app = app_with_panes(1);
+        let pane = pane_ids(&app)[0];
+        let terminal = terminal_of(&app, pane);
+        protect(&mut app, &terminal, vec![Principal::None]);
+        let pane_id = app.public_pane_id(0, pane).unwrap();
+        let add = |name: &str| {
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: name.into(),
+                target_pane: pane_id.clone(),
+            })
+        };
+        app.state.access_callers_path = Some(path.clone());
+        let token = token_of(&call(&mut app, add("ops")));
+        let on_disk = crate::access::registry::CallerRegistry::load(&path).unwrap();
+        assert_eq!(on_disk, app.state.access_callers);
+        assert!(on_disk.lookup(&token).is_some());
+
+        // The registry path is a directory: the save fails and memory is unchanged.
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        app.state.access_callers_path = Some(blocked);
+        let failed = call(&mut app, add("later"));
+        assert_eq!(failed["error"]["code"], "internal_error");
+        assert!(!failed.to_string().contains(&token));
+        assert!(app.state.access_callers.lookup(&token).is_some());
+        assert_eq!(app.state.access_callers.callers().count(), 1);
+
+        // An unreadable registry at startup refuses changes.
+        app.state.access_callers_path = Some(path.clone());
+        app.state.access_callers_unreadable = true;
+        assert_eq!(
+            call(&mut app, add("later"))["error"]["code"],
+            "internal_error"
+        );
+        assert_eq!(
+            crate::access::registry::CallerRegistry::load(&path).unwrap(),
+            on_disk
+        );
+    }
+
+    fn token_peer(token: &str) -> Caller {
+        Caller::Peer {
+            lineage: PeerLineage {
+                chain: vec![crate::platform::ProcessIdentity {
+                    pid: 999_999,
+                    start_token: 1,
+                }],
+                complete: true,
+                via_ssh: false,
+            },
+            token: Some(token.to_string()),
+            remote: false,
+        }
+    }
+
+    #[test]
+    fn a_registered_token_classifies_as_its_caller_and_only_reaches_its_pane() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let (bound, other) = (terminal_of(&app, panes[0]), terminal_of(&app, panes[1]));
+        protect(&mut app, &bound, vec![Principal::Caller("ops".into())]);
+        protect(&mut app, &other, vec![Principal::Outside]);
+        let binding = app.state.terminals[&bound]
+            .access
+            .as_ref()
+            .unwrap()
+            .binding
+            .clone();
+        let token = app
+            .state
+            .access_callers
+            .add("ops", binding.clone())
+            .unwrap();
+
+        assert_eq!(
+            app.classify_caller(&token_peer(&token)),
+            CallerClass::Caller {
+                name: "ops".into(),
+                target: binding,
+                via_ssh: false
+            }
+        );
+        // A token nobody holds is just an outside caller.
+        assert_eq!(
+            app.classify_caller(&token_peer(&"0".repeat(64))),
+            CallerClass::Outside { via_ssh: false }
+        );
+
+        let bound_id = app.public_pane_id(0, panes[0]).unwrap();
+        let other_id = app.public_pane_id(0, panes[1]).unwrap();
+        assert!(app
+            .check_access(&send_text(&bound_id), &token_peer(&token))
+            .is_ok());
+        // The other pane admits outside callers, but a caller stays on its own pane.
+        let denied = app
+            .check_access(&send_text(&other_id), &token_peer(&token))
+            .unwrap_err();
+        assert!(denied.message().contains("caller:ops"));
+        assert!(!denied.message().contains(&token));
+        // And a caller cannot manage callers.
+        for method in caller_methods(&bound_id) {
+            assert!(app.check_access(&method, &token_peer(&token)).is_err());
+        }
+    }
+
+    #[test]
+    fn a_token_never_reaches_debug_output() {
+        let mut app = app_with_panes(1);
+        let pane = pane_ids(&app)[0];
+        let terminal = terminal_of(&app, pane);
+        protect(&mut app, &terminal, vec![Principal::None]);
+        let pane_id = app.public_pane_id(0, pane).unwrap();
+        let token = token_of(&call(
+            &mut app,
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: "ops".into(),
+                target_pane: pane_id,
+            }),
+        ));
+        let parsed: crate::api::schema::SuccessResponse =
+            serde_json::from_value(serde_json::json!({
+                "id": "t",
+                "result": {"type": "access_caller_token", "name": "ops",
+                    "binding": "acc_00000000000000000000000000000001", "token": token}
+            }))
+            .unwrap();
+        for text in [
+            format!("{parsed:?}"),
+            format!("{:?}", token_peer(&token)),
+            format!("{:?}", app.state.access_callers),
+        ] {
+            assert!(!text.contains(&token), "{text}");
+        }
     }
 }

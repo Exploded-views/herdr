@@ -43,3 +43,12 @@ a plan to send it upstream, and nothing has been proposed upstream.
   accepts now (or would get from its section or default) is an admin request: only a caller
   outside every pane may make it. A malformed value fails with `invalid_accept_from` and starts
   nothing. *fork-only*
+- Named access callers. `herdr access caller add <name> --target-pane ID --token-file PATH`
+  registers a caller bound to a pane that already has an access policy, and writes its secret
+  token to the file (mode 0600, never printed; an existing file is refused). A request that
+  presents the token may send input only to that pane, and only if the pane's policy lists
+  `caller:<name>`. `list`, `rotate` (a new token; the old one stops working), `retarget` and
+  `remove` complete the set, and the API has matching `access.caller.*` methods. Only a caller
+  outside every pane may use them. Only a sha256 of each token is stored, in `access-callers.json`
+  (mode 0600) in the herdr data directory. The agent names `remote_input`, `bridge_agent` and
+  `remote_owner_tui` are no longer accepted. *fork-only*

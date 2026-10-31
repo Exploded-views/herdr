@@ -1,6 +1,7 @@
-// herdr-fork: adds an access-class column to every operation row and re-exports AccessClass. Unofficial stopgap; see FORK.md.
+// herdr-fork: adds an access-class column to every operation row, re-exports AccessClass, and adds the access.caller.* rows. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
+pub mod access;
 pub mod agents;
 pub mod commands;
 pub mod common;
@@ -18,6 +19,7 @@ pub mod worktrees;
 
 pub(crate) use operations::AccessClass;
 
+pub use access::*;
 pub use agents::*;
 pub use commands::*;
 pub use common::*;
@@ -149,6 +151,11 @@ operations::define_operations! {
     PluginPaneOpen(PluginPaneOpenParams) => "plugin.pane.open", true, false, Meta;
     PluginPaneFocus(PluginPaneFocusParams) => "plugin.pane.focus", true, false, Meta;
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false, Meta;
+    AccessCallerAdd(AccessCallerAddParams) => "access.caller.add", false, false, Control;
+    AccessCallerList(EmptyParams) => "access.caller.list", false, false, Control;
+    AccessCallerRotate(AccessCallerNameParams) => "access.caller.rotate", false, false, Control;
+    AccessCallerRetarget(AccessCallerRetargetParams) => "access.caller.retarget", false, false, Control;
+    AccessCallerRemove(AccessCallerNameParams) => "access.caller.remove", false, false, Control;
 }
 
 #[cfg(test)]

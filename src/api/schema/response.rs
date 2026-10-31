@@ -1,5 +1,7 @@
+// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers). Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
+use super::access::{AccessCallerInfo, CallerToken};
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
@@ -50,6 +52,15 @@ pub enum ResponseResult {
     },
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,
+    },
+    /// A caller's new token. Shown once; only its sha256 is kept.
+    AccessCallerToken {
+        name: String,
+        binding: String,
+        token: CallerToken,
+    },
+    AccessCallers {
+        callers: Vec<AccessCallerInfo>,
     },
     WorkspaceInfo {
         workspace: WorkspaceInfo,

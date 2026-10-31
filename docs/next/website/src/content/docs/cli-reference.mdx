@@ -3,7 +3,7 @@ title: CLI reference
 description: Herdr commands for sessions, workspaces, tabs, panes, notifications, agents, waits, integrations, and status.
 ---
 
-{/* herdr-fork: documents `agent start --accept-from`; see FORK.md */}
+{/* herdr-fork: documents `agent start --accept-from` and `access caller`; see FORK.md */}
 
 Herdr’s CLI talks to the running server over the same local socket API used by integrations and agents.
 
@@ -423,6 +423,20 @@ Use `pane wait-output` for normal commands and servers. Use `agent wait` for cod
 A timeout or `agent_prompt_stalled` does not prove the prompt was never delivered. Inspect the agent before retrying.
 
 `pane wait-output` and `agent wait` wait indefinitely when `--timeout` is omitted. For `agent prompt --wait`, the settled-state wait is indefinite after activity is observed or when the prompt starts in `working`; a non-working prompt still returns `agent_prompt_stalled` after five seconds without observed activity. A timeout or server error is emitted as JSON on stderr with exit status 1. CLI usage errors exit with status 2.
+
+## Access callers
+
+A fork-only feature. A named caller holds a secret token and may send input only to the one pane it is bound to. The pane must already hold an access policy that lists `caller:<name>`. Only a caller outside every pane may manage callers; a pane, a remote host or another caller is refused.
+
+```bash
+herdr access caller add <name> --target-pane ID --token-file PATH
+herdr access caller list
+herdr access caller rotate <name> --token-file PATH
+herdr access caller retarget <name> --target-pane ID
+herdr access caller remove <name>
+```
+
+Names match `[a-z0-9][a-z0-9_-]{0,63}`. `add` creates the token file with mode 0600 and refuses a file that already exists; it prints the binding id (`acc_...`) and never the token. `rotate` writes the new token to a private temporary file and renames it over the old one; the old token stops working. Only a sha256 of each token is kept, in `access-callers.json` (mode 0600) in the herdr data directory. `retarget` moves a caller to another pane that holds a policy.
 
 ## Integrations
 

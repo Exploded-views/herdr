@@ -1,3 +1,4 @@
+// herdr-fork: dispatches `herdr access`. Unofficial stopgap; see FORK.md.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -19,6 +20,7 @@ macro_rules! println {
     }};
 }
 
+mod access;
 pub(crate) mod agent;
 mod api;
 mod completion;
@@ -135,6 +137,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "pane" => pane::run_pane_command(&args[2..])?,
         "plugin" => plugin::run_plugin_command(&args[2..])?,
         "integration" => integration::run_integration_command(&args[2..])?,
+        "access" => access::run_access_command(&args[2..])?,
         "session" => run_session_command(&args[2..])?,
         _ => return Ok(CommandOutcome::NotCli),
     };

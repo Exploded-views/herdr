@@ -1,3 +1,4 @@
+// herdr-fork: help spec for `herdr access caller`. Unofficial stopgap; see FORK.md.
 use std::io::Write;
 
 use clap::{Arg, ArgAction, Command, ValueHint};
@@ -46,6 +47,7 @@ pub(super) fn command() -> Command {
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
+        .subcommand(access_command())
         .subcommand(plugin_command());
     configure_help(command, 0)
 }
@@ -291,6 +293,40 @@ fn integration_command() -> Command {
             Command::new("status")
                 .about("Show integration status")
                 .arg(flag("outdated-only")),
+        )
+}
+
+fn access_command() -> Command {
+    Command::new("access")
+        .about("Manage who may send input to a pane")
+        .subcommand(
+            Command::new("caller")
+                .about("Manage named callers and their tokens")
+                .subcommand(
+                    Command::new("add")
+                        .about("Register a caller bound to a pane and write its token to a file")
+                        .arg(required("name", "NAME"))
+                        .arg(option("target-pane", "PANE").required(true))
+                        .arg(path_option("token-file", "PATH").required(true)),
+                )
+                .subcommand(Command::new("list").about("List callers"))
+                .subcommand(
+                    Command::new("rotate")
+                        .about("Replace a caller's token and write it to a file")
+                        .arg(required("name", "NAME"))
+                        .arg(path_option("token-file", "PATH").required(true)),
+                )
+                .subcommand(
+                    Command::new("retarget")
+                        .about("Bind a caller to a different pane")
+                        .arg(required("name", "NAME"))
+                        .arg(option("target-pane", "PANE").required(true)),
+                )
+                .subcommand(
+                    Command::new("remove")
+                        .about("Remove a caller")
+                        .arg(required("name", "NAME")),
+                ),
         )
 }
 

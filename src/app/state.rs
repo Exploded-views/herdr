@@ -1,4 +1,4 @@
-// herdr-fork: startup-resolved access defaults and remote settings on AppState. Unofficial stopgap; see FORK.md.
+// herdr-fork: startup-resolved access defaults and remote settings, and the caller registry, on AppState. Unofficial stopgap; see FORK.md.
 use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -890,6 +890,12 @@ pub struct AppState {
     pub(crate) access_defaults: crate::access::policy::AccessDefaults,
     /// `[access]` node keys, read once at startup. `bridge_binding` is filled later.
     pub(crate) remote_settings: crate::access::policy::RemoteSettings,
+    /// Named callers (`access.caller.*`), loaded once at startup. Only hashes of tokens.
+    pub(crate) access_callers: crate::access::registry::CallerRegistry,
+    /// Where `access_callers` is saved; `None` keeps it in memory only (tests).
+    pub(crate) access_callers_path: Option<std::path::PathBuf>,
+    /// The registry file could not be read at startup. Changes are refused so the file is not overwritten.
+    pub(crate) access_callers_unreadable: bool,
     #[allow(dead_code)] // read by the remote TUI input check (Task 10)
     pub(crate) remote_owner_tui: crate::access::policy::RemoteOwnerTui,
     /// Terminal runtimes that should be shut down by the app/runtime layer
@@ -1128,6 +1134,9 @@ impl AppState {
             session_dirty: false,
             access_defaults: Default::default(),
             remote_settings: Default::default(),
+            access_callers: Default::default(),
+            access_callers_path: None,
+            access_callers_unreadable: false,
             remote_owner_tui: Default::default(),
             terminal_runtime_shutdowns: Vec::new(),
         }

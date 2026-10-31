@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage (socket peer -> verified process ancestry) for access classification. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage (socket peer -> verified process ancestry) for access classification, and create_private_file. Unofficial stopgap; see FORK.md.
 //! Platform-specific process and filesystem operations.
 //!
 //! Centralizes OS-dependent behavior behind a clean boundary so core
@@ -217,7 +217,9 @@ fn names_include_ssh_server<'a>(names: impl IntoIterator<Item = &'a str>) -> boo
 }
 
 #[cfg(unix)]
-pub(crate) use unix_common::{local_stream_peer_lineage, process_identity, random_secret};
+pub(crate) use unix_common::{
+    create_private_file, local_stream_peer_lineage, process_identity, random_secret,
+};
 // Only tests and the access gate benchmark walk a lineage by pid.
 #[cfg(all(test, unix))]
 pub(crate) use unix_common::process_lineage;
@@ -235,6 +237,14 @@ pub(crate) fn process_lineage(_pid: u32) -> PeerLineage {
 #[cfg(not(unix))]
 pub(crate) fn process_identity(_pid: u32) -> Option<ProcessIdentity> {
     None
+}
+
+#[cfg(not(unix))]
+pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 #[cfg(not(unix))]
