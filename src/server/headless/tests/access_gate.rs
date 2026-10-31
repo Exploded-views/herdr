@@ -970,3 +970,267 @@ async fn a_policy_bound_mid_harvest_stops_the_wheel_bytes() {
     );
     shutdown_test_runtimes(&mut f.server);
 }
+
+// ---- access.pane.* and caller tokens through the whole request path ----
+
+fn token_peer(token: &str) -> Caller {
+    let Caller::Peer {
+        lineage, remote, ..
+    } = peer(false, false)
+    else {
+        unreachable!()
+    };
+    Caller::Peer {
+        lineage,
+        token: Some(token.to_string()),
+        remote,
+    }
+}
+
+fn pane_set(pane_id: &str, accept_from: &[&str]) -> Method {
+    Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+        pane_id: pane_id.into(),
+        accept_from: accept_from.iter().map(|s| s.to_string()).collect(),
+    })
+}
+
+fn pane_get(pane_id: &str) -> Method {
+    Method::AccessPaneGet(crate::api::schema::AccessPaneGetParams {
+        pane_id: pane_id.into(),
+    })
+}
+
+fn caller_name(name: &str) -> crate::api::schema::AccessCallerNameParams {
+    crate::api::schema::AccessCallerNameParams { name: name.into() }
+}
+
+/// The gate let an agent request through and its target resolved to a pane.
+fn reached_its_pane(response: &str) -> bool {
+    !matches!(
+        error_code(response).as_deref(),
+        Some("access_denied" | "agent_not_found")
+    )
+}
+
+fn json(response: &str) -> serde_json::Value {
+    serde_json::from_str(response).expect("json response")
+}
+
+impl Fixture {
+    /// Set a pane's policy through the API, as an outside admin.
+    fn set_policy(&mut self, index: usize, accept_from: &[&str]) -> serde_json::Value {
+        let pane = self.public(index);
+        let response = json(&self.call(outside(), pane_set(&pane, accept_from)));
+        assert_eq!(response["result"]["type"], "access_policy", "{response}");
+        response
+    }
+
+    fn mint_token(&mut self, name: &str, index: usize) -> String {
+        let pane = self.public(index);
+        let response = json(&self.call(
+            outside(),
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: name.into(),
+                target_pane: pane,
+            }),
+        ));
+        assert_eq!(
+            response["result"]["type"], "access_caller_token",
+            "{response}"
+        );
+        response["result"]["token"].as_str().unwrap().to_string()
+    }
+}
+
+/// Pane 0 is the bridge (accepts `caller:ops`), pane 1 an ordinary agent
+/// (accepts `outside`). Returns the fixture, `ops`'s token and both binding ids.
+fn bridge_fixture() -> (Fixture, String, String, String) {
+    let mut f = gate_fixture(2);
+    f.make_agent(0, "bridge");
+    f.make_agent(1, "other");
+    let bridge = f.set_policy(0, &["caller:ops"])["result"]["binding"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other = f.set_policy(1, &["outside"])["result"]["binding"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = f.mint_token("ops", 0);
+    (f, token, bridge, other)
+}
+
+#[tokio::test]
+async fn caller_token_reaches_bridge_only() {
+    let (mut f, token, bridge_binding, other_binding) = bridge_fixture();
+    let (bridge, other) = (f.public(0), f.public(1));
+
+    // The bridge takes it, by pane id and by binding id.
+    let response = f.call(token_peer(&token), send_text(&bridge));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    // (An agent route is not delivered in this fixture, which has no live agent
+    // process; what matters is that the gate lets it through to its pane.)
+    let response = f.call(token_peer(&token), agent_send_keys(&bridge_binding));
+    assert!(reached_its_pane(&response), "{response}");
+
+    // Nothing else does, though that pane accepts outside callers; no byte lands.
+    let response = f.call(token_peer(&token), send_text(&other));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert_eq!(error_message(&response), input_denial(&other, "caller:ops"));
+    assert!(!response.contains(&token));
+    let response = f.call(token_peer(&token), agent_send_keys(&other_binding));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    // By name, too: a token holder is confined, whatever the route.
+    let response = f.call(token_peer(&token), agent_send_keys("other"));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    f.assert_no_bytes(1);
+
+    // Holding a token is not holding admin rights: it cannot change any policy.
+    for pane in [&bridge, &other] {
+        let response = f.call(token_peer(&token), pane_set(pane, &["any"]));
+        assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+        assert!(
+            error_message(&response).contains("does not accept control requests from caller:ops")
+        );
+    }
+    assert!(f.server.app.state.terminals[&f.terminals[0]]
+        .access
+        .is_some());
+    assert!(f.server.app.state.terminals[&f.terminals[1]]
+        .access
+        .is_some());
+
+    // An outside caller without the token reaches the other pane and not the bridge.
+    let response = f.call(outside(), send_text(&other));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[1].try_recv().unwrap().as_ref(), b"x");
+    let response = f.call(outside(), send_text(&bridge));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn unknown_token_from_outside_is_denied_by_bridge() {
+    let (mut f, token, bridge_binding, _) = bridge_fixture();
+    let bridge = f.public(0);
+    let outside_denial = input_denial(&bridge, "outside");
+
+    // A token nobody holds is an outside caller, and the bridge takes no outside callers.
+    for stranger in ["0".repeat(64), String::new(), token[..63].to_string()] {
+        for method in [send_text(&bridge), agent_send_keys(&bridge_binding)] {
+            let response = f.call(token_peer(&stranger), method);
+            assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+            assert_eq!(error_message(&response), outside_denial);
+        }
+    }
+    f.assert_no_bytes(0);
+
+    // The real one still works.
+    let response = f.call(token_peer(&token), send_text(&bridge));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+
+    // A rotated token's predecessor, then a removed caller's token, stop working.
+    let rotated = json(&f.call(outside(), Method::AccessCallerRotate(caller_name("ops"))))
+        ["result"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = f.call(token_peer(&token), send_text(&bridge));
+    assert_eq!(error_message(&response), outside_denial);
+    let response = f.call(token_peer(&rotated), send_text(&bridge));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert!(f.inputs[0].try_recv().is_ok());
+    let removed = json(&f.call(outside(), Method::AccessCallerRemove(caller_name("ops"))));
+    assert_eq!(removed["result"]["type"], "ok", "{removed}");
+    let response = f.call(token_peer(&rotated), send_text(&bridge));
+    assert_eq!(error_message(&response), outside_denial);
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn retarget_moves_caller_to_new_binding() {
+    let (mut f, token, bridge_binding, other_binding) = bridge_fixture();
+    let (bridge, other) = (f.public(0), f.public(1));
+    let retarget = |pane: &str| {
+        Method::AccessCallerRetarget(crate::api::schema::AccessCallerRetargetParams {
+            name: "ops".into(),
+            target_pane: pane.into(),
+        })
+    };
+
+    // A pane with no policy cannot be a target, and the caller stays put.
+    f.call(outside(), pane_set(&other, &["any"]));
+    let refused = json(&f.call(outside(), retarget(&other)));
+    assert_eq!(refused["error"]["code"], "no_access_policy", "{refused}");
+    let response = f.call(token_peer(&token), send_text(&bridge));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert!(f.inputs[0].try_recv().is_ok());
+
+    let rebound = f.set_policy(1, &["outside", "caller:ops"])["result"]["binding"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(
+        rebound, other_binding,
+        "an opened pane gets a fresh binding"
+    );
+    let moved = json(&f.call(outside(), retarget(&other)));
+    assert_eq!(moved["result"]["type"], "ok", "{moved}");
+
+    // The same token now reaches the new pane (by id and by binding), not the old one.
+    let response = f.call(token_peer(&token), send_text(&other));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[1].try_recv().unwrap().as_ref(), b"x");
+    let response = f.call(token_peer(&token), agent_send_keys(&rebound));
+    assert!(reached_its_pane(&response), "{response}");
+    for method in [send_text(&bridge), agent_send_keys(&bridge_binding)] {
+        let response = f.call(token_peer(&token), method);
+        assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    }
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn access_pane_set_refused_from_pane_even_when_unprotected() {
+    // Nothing is protected, so the gate would otherwise be idle.
+    let mut f = gate_fixture(2);
+    let (victim, from) = (f.public(0), f.public(1));
+    assert!(!f.server.app.any_access_protected());
+    let denial = |from: &str| {
+        format!("access_denied: pane server does not accept control requests from {from}. {TAIL}")
+    };
+    for accept_from in [&["any"][..], &["none"], &["outside"]] {
+        let caller = f.pane_caller(1);
+        let response = f.call(caller, pane_set(&victim, accept_from));
+        assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+        assert_eq!(error_message(&response), denial(&format!("pane:{from}")));
+    }
+    // A remote host is refused as well.
+    let response = f.call(peer(false, true), pane_set(&victim, &["none"]));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    // Nothing changed: no policy, and the pane was not "opened on purpose".
+    let state = &f.server.app.state.terminals[&f.terminals[0]];
+    assert!(state.access.is_none() && !state.access_opened_explicitly);
+    assert!(!f.server.app.any_access_protected());
+
+    // Reading is open to a pane; writing is for outside callers.
+    let caller = f.pane_caller(1);
+    let got = json(&f.call(caller, pane_get(&victim)));
+    assert_eq!(got["result"]["accept_from"], serde_json::json!(["any"]));
+    f.set_policy(0, &["outside"]);
+    let caller = f.pane_caller(1);
+    let got = json(&f.call(caller, pane_get(&victim)));
+    assert_eq!(got["result"]["accept_from"], serde_json::json!(["outside"]));
+    // ...and once protected, a pane still cannot loosen it.
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, pane_set(&victim, &["any"]));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    let state = &f.server.app.state.terminals[&f.terminals[0]];
+    assert!(state.access.is_some());
+    shutdown_test_runtimes(&mut f.server);
+}

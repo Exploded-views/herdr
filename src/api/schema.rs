@@ -1,4 +1,4 @@
-// herdr-fork: adds an access-class column to every operation row, re-exports AccessClass, and adds the access.caller.* rows. Unofficial stopgap; see FORK.md.
+// herdr-fork: adds an access-class column to every operation row, re-exports AccessClass, and adds the access.caller.* and access.pane.* rows. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 pub mod access;
@@ -156,6 +156,8 @@ operations::define_operations! {
     AccessCallerRotate(AccessCallerNameParams) => "access.caller.rotate", false, false, Control;
     AccessCallerRetarget(AccessCallerRetargetParams) => "access.caller.retarget", false, false, Control;
     AccessCallerRemove(AccessCallerNameParams) => "access.caller.remove", false, false, Control;
+    AccessPaneSet(AccessPaneSetParams) => "access.pane.set", false, false, Control;
+    AccessPaneGet(AccessPaneGetParams) => "access.pane.get", false, false, Meta;
 }
 
 #[cfg(test)]

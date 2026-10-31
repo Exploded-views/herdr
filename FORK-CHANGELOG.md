@@ -52,3 +52,17 @@ a plan to send it upstream, and nothing has been proposed upstream.
   outside every pane may use them. Only a sha256 of each token is stored, in `access-callers.json`
   (mode 0600) in the herdr data directory. The agent names `remote_input`, `bridge_agent` and
   `remote_owner_tui` are no longer accepted. *fork-only*
+- `herdr access pane set <pane> --accept-from LIST` and `herdr access pane get <pane>` (API
+  `access.pane.set` and `access.pane.get`) change and read a pane's access policy. `set` is for
+  a caller outside every pane only, and `any` removes the policy and opens the pane on purpose.
+  *fork-only*
+- A caller presents its token with `HERDR_CALLER_TOKEN_FILE` or a leading
+  `herdr --caller-token-file PATH`. The file is read for the local server only: with
+  `--machine` the flag is a usage error and the variable is ignored. An unreadable token file
+  stops the command with exit status 2. *fork-only*
+- An agent target of the form `acc_<32 hex>` is a pane's binding id: it reaches the pane that
+  holds that binding, and a stale or malformed one is `agent_not_found` instead of falling back
+  to a name or position. Agent names starting with `acc_` are no longer accepted. *fork-only*
+- The caller registry file must not be writable by group or others; otherwise it is refused at
+  startup (callers are then empty and changes are refused) and the log says to `chmod 600` it.
+  The registry's directory is synced after each save. *fork-only*

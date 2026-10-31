@@ -1,4 +1,4 @@
-// herdr-fork: dispatches `herdr access`. Unofficial stopgap; see FORK.md.
+// herdr-fork: dispatches `herdr access`; takes a leading `--caller-token-file`. Unofficial stopgap; see FORK.md.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -23,6 +23,7 @@ macro_rules! println {
 mod access;
 pub(crate) mod agent;
 mod api;
+pub(crate) mod caller_token;
 mod completion;
 mod integration;
 mod machine;
@@ -93,6 +94,12 @@ pub(super) fn print_read_response(response: &serde_json::Value) -> std::io::Resu
         print!("{text}");
     }
     Ok(0)
+}
+
+/// Take a leading `--caller-token-file <path>` out of the arguments and
+/// remember it for the API client.
+pub(crate) fn extract_caller_token_flag(args: &[String]) -> Result<Vec<String>, String> {
+    caller_token::extract_flag(args)
 }
 
 pub(crate) fn maybe_run_machine(args: &[String]) -> Option<std::io::Result<CommandOutcome>> {

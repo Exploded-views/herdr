@@ -1,4 +1,4 @@
-// herdr-fork: params and results for the `access.caller.*` methods. Unofficial stopgap; see FORK.md.
+// herdr-fork: params and results for the `access.caller.*` and `access.pane.*` methods. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -22,6 +22,20 @@ pub struct AccessCallerRetargetParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AccessPaneSetParams {
+    /// Public id of the pane whose policy is set.
+    pub pane_id: String,
+    /// Who the pane accepts input from: `none`, `outside`, `caller:<name>`, or
+    /// `any` alone, which removes the policy and opens the pane on purpose.
+    pub accept_from: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AccessPaneGetParams {
+    pub pane_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AccessCallerInfo {
     pub name: String,
     /// The access binding id (`acc_...`) the caller is bound to.
@@ -32,19 +46,33 @@ pub struct AccessCallerInfo {
 }
 
 /// A caller token. It appears on the wire in exactly one result, when it is
-/// minted; its `Debug` never shows it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+/// minted; its `Debug` never shows it. There is no derived `==`: the only
+/// equality is the constant-time one below, and tokens are matched through
+/// the registry's hashes, never compared as text.
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct CallerToken(String);
 
 impl CallerToken {
-    pub fn new(token: String) -> Self {
+    pub(crate) fn new(token: String) -> Self {
         Self(token)
     }
 
     /// The token text. Callers must not log it.
-    pub fn expose(&self) -> &str {
+    pub(crate) fn expose(&self) -> &str {
         &self.0
+    }
+}
+
+// Needed because `ResponseResult` derives `PartialEq`. Looks at every byte.
+impl PartialEq for CallerToken {
+    fn eq(&self, other: &Self) -> bool {
+        let (a, b) = (self.0.as_bytes(), other.0.as_bytes());
+        let mut diff = a.len() ^ b.len();
+        for (x, y) in a.iter().zip(b.iter()) {
+            diff |= usize::from(x ^ y);
+        }
+        std::hint::black_box(diff) == 0
     }
 }
 

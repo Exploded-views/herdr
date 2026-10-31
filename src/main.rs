@@ -1,4 +1,4 @@
-// herdr-fork: declares the pure access model module (`access`). Unofficial stopgap; see FORK.md.
+// herdr-fork: declares the pure access model module (`access`) and takes a leading `--caller-token-file`. Unofficial stopgap; see FORK.md.
 use std::io;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
@@ -526,6 +526,14 @@ fn main() -> io::Result<()> {
     if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
         return finish_cli(outcome);
     }
+    let raw_args = match cli::extract_caller_token_flag(&raw_args) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'herdr --help' for usage");
+            std::process::exit(2);
+        }
+    };
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
@@ -748,6 +756,7 @@ fn main() -> io::Result<()> {
         "--machine",
         "--remote",
         "--remote-keybindings",
+        "--caller-token-file",
         "--version",
         "-V",
         "--default-config",

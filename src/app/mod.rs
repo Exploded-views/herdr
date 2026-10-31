@@ -121,10 +121,19 @@ fn load_access_callers(
     Option<std::path::PathBuf>,
     bool,
 ) {
-    if !persist {
+    load_access_callers_at(persist.then(crate::access::registry::registry_path))
+}
+
+fn load_access_callers_at(
+    path: Option<std::path::PathBuf>,
+) -> (
+    crate::access::registry::CallerRegistry,
+    Option<std::path::PathBuf>,
+    bool,
+) {
+    let Some(path) = path else {
         return (Default::default(), None, false);
-    }
-    let path = crate::access::registry::registry_path();
+    };
     match crate::access::registry::CallerRegistry::load(&path) {
         Ok(registry) => (registry, Some(path), false),
         Err(err) => {
@@ -1120,6 +1129,53 @@ mod tests {
     use crate::workspace::Workspace;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Mutex;
+
+    #[test]
+    fn load_access_callers_reads_once_and_fails_closed() {
+        use crate::access::registry::{CallerRegistry, TestDir};
+        let dir = TestDir::new("app-load");
+        let path = dir.path().join("access-callers.json");
+
+        // Not persisting: nothing is read, nothing will be written.
+        let (registry, kept, unreadable) = load_access_callers_at(None);
+        assert!(registry.is_empty() && kept.is_none() && !unreadable);
+
+        // A missing file is an empty, writable registry.
+        let (registry, kept, unreadable) = load_access_callers_at(Some(path.clone()));
+        assert!(registry.is_empty() && kept.as_deref() == Some(path.as_path()) && !unreadable);
+
+        // A good file is loaded.
+        let mut saved = CallerRegistry::default();
+        let token = saved
+            .add(
+                "ops",
+                crate::access::policy::AccessBindingId::parse(
+                    "acc_00000000000000000000000000000001",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        saved.save(&path).unwrap();
+        let (registry, _, unreadable) = load_access_callers_at(Some(path.clone()));
+        assert!(!unreadable);
+        assert!(registry.lookup(&token).is_some());
+
+        // A file that cannot be read (here: a directory in its place) leaves the
+        // registry empty and refuses changes, and is not replaced.
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        let (registry, kept, unreadable) = load_access_callers_at(Some(blocked.clone()));
+        assert!(registry.is_empty());
+        assert_eq!(kept.as_deref(), Some(blocked.as_path()));
+        assert!(unreadable);
+        assert!(blocked.is_dir());
+
+        // So does a malformed one, and its text stays where it is.
+        std::fs::write(&path, "{ not json").unwrap();
+        let (registry, _, unreadable) = load_access_callers_at(Some(path.clone()));
+        assert!(registry.is_empty() && unreadable);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
 
     fn test_app() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();

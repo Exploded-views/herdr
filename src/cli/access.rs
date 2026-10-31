@@ -1,4 +1,4 @@
-// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove); tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
+// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove) and `herdr access pane` (set, get); tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -10,11 +10,16 @@ const HELP: &str = "Usage:
   herdr access caller rotate <name> --token-file <path>
   herdr access caller retarget <name> --target-pane <pane>
   herdr access caller remove <name>
+  herdr access pane set <pane> --accept-from <list>
+  herdr access pane get <pane>
 
 A caller holds a secret token and may send input only to the pane it is bound to.
 The token is written to the token file (mode 0600) and is never printed.
 `add` refuses a token file that already exists. `rotate` replaces the file, and
-the old token stops working.";
+the old token stops working.
+<list> is `any`, or a comma-separated or repeated list of `none`, `outside` and
+`caller:<name>`. `pane set` is for a caller outside every pane only; `any` removes
+the policy and opens the pane on purpose.";
 
 pub(super) fn run_access_command(args: &[String]) -> io::Result<i32> {
     run_access(
@@ -35,6 +40,7 @@ fn run_access(
 ) -> io::Result<i32> {
     match args.first().map(String::as_str) {
         Some("caller") => run_caller(&args[1..], send, out, err),
+        Some("pane") => run_pane(&args[1..], send, out, err),
         _ => {
             writeln!(err, "{HELP}")?;
             Ok(2)
@@ -52,6 +58,16 @@ struct Parsed {
     name: Option<String>,
     target_pane: Option<String>,
     token_file: Option<PathBuf>,
+    accept_from: Vec<String>,
+}
+
+/// `--accept-from` takes a comma-separated list, and may repeat.
+fn split_list(value: &str) -> Result<Vec<String>, String> {
+    let entries: Vec<String> = value.split(',').map(str::to_string).collect();
+    if entries.iter().any(String::is_empty) {
+        return Err("--accept-from has an empty entry".into());
+    }
+    Ok(entries)
 }
 
 fn parse(args: &[String]) -> Result<Parsed, String> {
@@ -66,6 +82,15 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--token-file" => {
                 let value = iter.next().ok_or("--token-file needs a value")?;
                 parsed.token_file = Some(PathBuf::from(value));
+            }
+            "--accept-from" => {
+                let value = iter.next().ok_or("--accept-from needs a value")?;
+                parsed.accept_from.extend(split_list(value)?);
+            }
+            flag if flag.starts_with("--accept-from=") => {
+                parsed
+                    .accept_from
+                    .extend(split_list(&flag["--accept-from=".len()..])?);
             }
             flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
             name if parsed.name.is_none() => parsed.name = Some(name.to_string()),
@@ -203,6 +228,62 @@ fn run_caller(
             acknowledge(outcome, err)
         }
         _ => usage(err, &format!("unknown access caller command {action}")),
+    }
+}
+
+fn run_pane(
+    args: &[String],
+    send: &mut Send<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<i32> {
+    let Some(action) = args.first().map(String::as_str) else {
+        return usage(err, "missing access pane command");
+    };
+    let parsed = match parse(&args[1..]) {
+        Ok(parsed) => parsed,
+        Err(message) => return usage(err, &message),
+    };
+    if parsed.target_pane.is_some() || parsed.token_file.is_some() {
+        return usage(err, "access pane takes only <pane> and --accept-from");
+    }
+    let method = match action {
+        "set" => match (parsed.name, parsed.accept_from.is_empty()) {
+            (Some(pane_id), false) => {
+                Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+                    pane_id,
+                    accept_from: parsed.accept_from,
+                })
+            }
+            _ => return usage(err, "set needs <pane> and --accept-from"),
+        },
+        "get" => match (parsed.name, parsed.accept_from.is_empty()) {
+            (Some(pane_id), true) => {
+                Method::AccessPaneGet(crate::api::schema::AccessPaneGetParams { pane_id })
+            }
+            _ => return usage(err, "get needs <pane> and takes no --accept-from"),
+        },
+        _ => return usage(err, &format!("unknown access pane command {action}")),
+    };
+    let outcome = send(&request(method))
+        .map_err(|e| e.to_string())
+        .and_then(|response| result_of(&response));
+    match outcome {
+        Ok(ResponseResult::AccessPolicy {
+            pane_id,
+            binding,
+            accept_from,
+        }) => {
+            writeln!(
+                out,
+                "{pane_id}\t{}\t{}",
+                binding.as_deref().unwrap_or("-"),
+                accept_from.join(",")
+            )?;
+            Ok(0)
+        }
+        Ok(_) => fail(err, "unexpected response from the server"),
+        Err(message) => fail(err, &message),
     }
 }
 
@@ -436,6 +517,175 @@ mod tests {
         assert!(err.contains("caller_not_found"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    fn policy_response(binding: Option<&str>, accept_from: &[&str]) -> serde_json::Value {
+        let mut result = serde_json::json!({
+            "type": "access_policy",
+            "pane_id": "w1:p1",
+            "accept_from": accept_from,
+        });
+        if let Some(binding) = binding {
+            result["binding"] = binding.into();
+        }
+        serde_json::json!({"id": "cli:request", "result": result})
+    }
+
+    fn sent_pane_set(argv: &[&str]) -> (i32, String, String, Vec<Method>) {
+        let mut seen = Vec::new();
+        let (code, out, err) = run(argv, |request| {
+            seen.push(request.method.clone());
+            Ok(policy_response(
+                Some("acc_00000000000000000000000000000001"),
+                &["outside", "caller:ops"],
+            ))
+        });
+        (code, out, err, seen)
+    }
+
+    #[test]
+    fn pane_set_sends_the_parsed_list_and_prints_the_policy() {
+        let (code, out, err, seen) = sent_pane_set(&[
+            "pane",
+            "set",
+            "w1:p1",
+            "--accept-from",
+            "outside,caller:ops",
+        ]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out,
+            "w1:p1\tacc_00000000000000000000000000000001\toutside,caller:ops\n"
+        );
+        assert_eq!(
+            seen,
+            vec![Method::AccessPaneSet(
+                crate::api::schema::AccessPaneSetParams {
+                    pane_id: "w1:p1".into(),
+                    accept_from: vec!["outside".into(), "caller:ops".into()],
+                }
+            )]
+        );
+        // Repeats accumulate, `=` works, and `any` goes through as the sole entry.
+        for (argv, expected) in [
+            (
+                &[
+                    "pane",
+                    "set",
+                    "w1:p1",
+                    "--accept-from",
+                    "outside",
+                    "--accept-from=caller:ops",
+                ][..],
+                vec!["outside", "caller:ops"],
+            ),
+            (
+                &["pane", "set", "--accept-from=any", "w1:p1"][..],
+                vec!["any"],
+            ),
+            (
+                &["pane", "set", "w1:p1", "--accept-from", "none"][..],
+                vec!["none"],
+            ),
+        ] {
+            let (code, _, err, seen) = sent_pane_set(argv);
+            assert_eq!(code, 0, "{err}");
+            let Method::AccessPaneSet(params) = &seen[0] else {
+                panic!("{seen:?}")
+            };
+            assert_eq!(params.accept_from, expected, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn pane_get_prints_the_policy_and_a_dash_for_no_binding() {
+        let mut seen = Vec::new();
+        let (code, out, _) = run(&["pane", "get", "w1:p1"], |request| {
+            seen.push(request.method.clone());
+            Ok(policy_response(None, &["any"]))
+        });
+        assert_eq!(code, 0);
+        assert_eq!(out, "w1:p1\t-\tany\n");
+        assert_eq!(
+            seen,
+            vec![Method::AccessPaneGet(
+                crate::api::schema::AccessPaneGetParams {
+                    pane_id: "w1:p1".into()
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn pane_errors_are_printed_with_their_code() {
+        let (code, out, err) = run(&["pane", "set", "w9:p9", "--accept-from", "none"], |_| {
+            Ok(serde_json::json!({"id": "x", "error": {
+                "code": "pane_not_found", "message": "pane w9:p9 not found"}}))
+        });
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        assert!(
+            err.contains("pane_not_found: pane w9:p9 not found"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pane_usage_errors_never_connect() {
+        for argv in [
+            &["pane"][..],
+            &["pane", "bogus"],
+            &["pane", "set"],
+            &["pane", "set", "w1:p1"],
+            &["pane", "set", "--accept-from", "none"],
+            &["pane", "set", "w1:p1", "--accept-from"],
+            &["pane", "set", "w1:p1", "--accept-from", ""],
+            &["pane", "set", "w1:p1", "--accept-from", "none,,outside"],
+            &["pane", "set", "w1:p1", "w1:p2", "--accept-from", "none"],
+            &[
+                "pane",
+                "set",
+                "w1:p1",
+                "--accept-from",
+                "none",
+                "--token-file",
+                "t",
+            ],
+            &[
+                "pane",
+                "set",
+                "w1:p1",
+                "--accept-from",
+                "none",
+                "--target-pane",
+                "p",
+            ],
+            &["pane", "get"],
+            &["pane", "get", "w1:p1", "w1:p2"],
+            &["pane", "get", "w1:p1", "--accept-from", "none"],
+        ] {
+            let (code, _, _) = run(argv, |_| panic!("usage errors must not connect: {argv:?}"));
+            assert_eq!(code, 2, "{argv:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotated_token_file_is_mode_0600_and_never_wider_than_the_old_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TestDir::new("cli-rotate-mode");
+        let file = dir.path().join("token");
+        std::fs::write(&file, "old\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = file.to_str().unwrap();
+        let (code, _, err) = run(&["caller", "rotate", "ops", "--token-file", path], |_| {
+            Ok(token_response())
+        });
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]

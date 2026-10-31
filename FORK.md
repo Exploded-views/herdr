@@ -87,8 +87,17 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/app/agents.rs` | changed | `remote_input`, `bridge_agent` and `remote_owner_tui` are refused as agent names (start and rename) |
 | `src/cli/access.rs`, `src/cli.rs`, `src/cli/spec.rs` | new / changed | `herdr access caller add/list/rotate/retarget/remove`; the token goes to a 0600 file and is never printed |
 | `src/platform/mod.rs`, `src/platform/unix_common.rs` | changed | `create_private_file` (create-new, mode 0600) |
-| `docs/next/website/src/content/docs/cli-reference.mdx` | changed | Documents `herdr access caller` |
-| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains the `access.caller.*` methods and results |
+| `docs/next/website/src/content/docs/cli-reference.mdx` | changed | Documents `herdr access caller`, `herdr access pane`, the caller token file and binding-id targets |
+| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains the `access.caller.*` and `access.pane.*` methods and results |
+| `src/api/schema/access.rs`, `src/api/schema/response.rs`, `src/api/schema.rs`, `src/api/schema/operations.rs` | changed | `access.pane.set` (Control) and `access.pane.get` (Meta); `AccessPolicy` result; `CallerToken` loses its derived `PartialEq` (constant-time `==` only) and its `new`/`expose` are crate-private; the policy-table test lists the new rows |
+| `src/app/api/access_panes.rs`, `src/app/api.rs` | new / changed | Handlers for `access.pane.set` (`any` unbinds and opens the pane on purpose; any other list binds, keeping the binding id) and `access.pane.get` |
+| `src/app/access_gate.rs` | changed | `access.pane.set` is `AccessAdmin`, `access.pane.get` is open; tests for the pane methods and for token confinement |
+| `src/api/client.rs` | changed | `ApiClient` carries an optional `CallerToken` (redacted in `Debug`); `write_request` puts it in the request line as `caller_token`; without one the bytes are unchanged |
+| `src/cli/caller_token.rs`, `src/cli/target.rs`, `src/cli.rs`, `src/main.rs` | new / changed | `HERDR_CALLER_TOKEN_FILE` or a leading `--caller-token-file PATH` (the flag wins); read for the local server only; `--caller-token-file` with `--machine` is a usage error; an unreadable file is `error: caller token file PATH unreadable: ...`, exit 2 |
+| `src/cli/access.rs`, `src/cli/spec.rs` | changed | `herdr access pane set <pane> --accept-from LIST` and `herdr access pane get <pane>` |
+| `src/app/terminal_targets.rs`, `src/access/policy.rs`, `src/app/agents.rs` | changed | An agent target starting with `acc_` is a binding id only (a stale or malformed one is not found, never a name or position); agent names starting with `acc_` are refused for start and rename |
+| `src/access/registry.rs`, `src/platform/mod.rs`, `src/platform/unix_common.rs`, `src/app/mod.rs` | changed | The registry file is refused when group or others can write it (fail closed, logged with a `chmod 600` hint); the registry directory is synced after a save; tests for the startup load and for constant-time `lookup` |
+| `src/server/headless/tests/access_gate.rs` | changed | Whole-request-path tests for caller tokens (confined to the bridge, unknown/rotated/removed tokens, retarget) and for `access.pane.set` from a pane |
 
 Follow-up: the ja and zh-cn `cli-reference.mdx` still show the old `agent start` usage line without `--accept-from`; only the English page is updated.
 

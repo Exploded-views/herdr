@@ -1,4 +1,4 @@
-// herdr-fork: adds AccessClass and Operation.access (per-operation access class); the policy-table test lists the access.caller.* rows. Unofficial stopgap; see FORK.md.
+// herdr-fork: adds AccessClass and Operation.access (per-operation access class); the policy-table test lists the access.caller.* and access.pane.* rows. Unofficial stopgap; see FORK.md.
 use std::sync::LazyLock;
 
 /// How much a caller can do through an operation, used to gate requests per pane.
@@ -226,6 +226,7 @@ mod tests {
             "access.caller.rotate",
             "access.caller.retarget",
             "access.caller.remove",
+            "access.pane.set",
         ];
         let meta = [
             "ping",
@@ -290,6 +291,7 @@ mod tests {
             "plugin.pane.open",
             "plugin.pane.focus",
             "plugin.pane.close",
+            "access.pane.get",
         ];
         for operation in Method::OPERATIONS {
             let expected = if input.contains(&operation.name) {

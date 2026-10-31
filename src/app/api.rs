@@ -1,7 +1,8 @@
-// herdr-fork: dispatch the access.caller.* methods. Unofficial stopgap; see FORK.md.
+// herdr-fork: dispatch the access.caller.* and access.pane.* methods. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 mod access_callers;
+mod access_panes;
 mod agent_view;
 mod agents;
 mod env;
@@ -1273,6 +1274,12 @@ impl App {
             }
             Method::AccessCallerRemove(params) => {
                 return self.handle_access_caller_remove(request.id, params);
+            }
+            Method::AccessPaneSet(params) => {
+                return self.handle_access_pane_set(request.id, params);
+            }
+            Method::AccessPaneGet(params) => {
+                return self.handle_access_pane_get(request.id, params);
             }
             _ => {
                 return responses::encode_error(

@@ -1,4 +1,4 @@
-// herdr-fork: the named-caller registry: tokens stored only as sha256, each bound to one pane's access binding. Unofficial stopgap; see FORK.md.
+// herdr-fork: the named-caller registry: tokens stored only as sha256, each bound to one pane's access binding; a registry file that group or others can write is refused. Unofficial stopgap; see FORK.md.
 //! Named callers for `access.caller.*`. A caller's token is shown once, when it
 //! is minted; only its sha256 is kept, in memory and in the registry file.
 //! Nothing here prints, logs or formats a token.
@@ -86,6 +86,15 @@ fn ct_eq(a: &TokenHash, b: &TokenHash) -> bool {
     std::hint::black_box(diff) == 0
 }
 
+/// Flush a directory's entries to disk. A directory can't be opened on every
+/// platform, so one that doesn't open is skipped; one that opens must sync.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    match std::fs::File::open(dir) {
+        Ok(handle) => handle.sync_all(),
+        Err(_) => Ok(()),
+    }
+}
+
 fn mint_token() -> io::Result<String> {
     Ok(hex(&crate::platform::random_secret()?))
 }
@@ -94,11 +103,25 @@ impl CallerRegistry {
     /// A missing file is an empty registry; an unreadable or malformed one is
     /// an error (its text is never put in the message).
     pub(crate) fn load(path: &Path) -> io::Result<Self> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
+        use io::Read as _;
+
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => return Err(err),
         };
+        // Whoever can write this file can mint callers. Fail closed, and say why.
+        if crate::platform::is_writable_by_others(&file)? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "caller registry {} is writable by group or others; run chmod 600 on it",
+                    path.display()
+                ),
+            ));
+        }
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
         let file: FileFormat = serde_json::from_str(&text)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "malformed caller registry"))?;
         let mut registry = Self::default();
@@ -154,6 +177,13 @@ impl CallerRegistry {
         })();
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
+            return result;
+        }
+        // Make the rename durable, so a removed caller does not come back
+        // after a power cut. The file is already in place, so a failure here is
+        // logged and not reported as a failed save.
+        if let Err(err) = sync_dir(dir.unwrap_or(Path::new("."))) {
+            tracing::warn!(%err, "could not sync the caller registry directory");
         }
         result
     }
@@ -256,6 +286,17 @@ impl TestDir {
     pub(crate) fn path(&self) -> &Path {
         &self.0
     }
+
+    /// Write `text` to `path` with mode 0600, whatever the umask: the
+    /// registry refuses a file that group or others can write.
+    pub(crate) fn write_private(path: &Path, text: &str) {
+        std::fs::write(path, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -357,7 +398,7 @@ mod tests {
         let dir = temp_dir();
         let path = dir.path().join("access-callers.json");
         assert!(CallerRegistry::load(&path).unwrap().is_empty());
-        std::fs::write(&path, "{\"callers\": SECRET-TEXT").unwrap();
+        TestDir::write_private(&path, "{\"callers\": SECRET-TEXT");
         let err = CallerRegistry::load(&path).unwrap_err();
         assert!(!err.to_string().contains("SECRET-TEXT"));
         std::fs::write(
@@ -393,6 +434,93 @@ mod tests {
         assert!(registry.remove("alice"));
         assert!(!registry.remove("alice"));
         assert_eq!(registry.lookup(&token), None);
+    }
+
+    /// The text of the first `fn <name>(` in this file, to its closing brace
+    /// at `indent`.
+    fn body_of(name: &str, indent: &str) -> &'static str {
+        const SOURCE: &str = include_str!("registry.rs");
+        let start = SOURCE.find(&format!("fn {name}(")).unwrap();
+        let end = SOURCE[start..].find(&format!("\n{indent}}}\n")).unwrap();
+        &SOURCE[start..start + end]
+    }
+
+    #[test]
+    fn ct_eq_looks_at_every_byte() {
+        let base = [7u8; 32];
+        assert!(ct_eq(&base, &base));
+        for i in 0..32 {
+            let mut other = base;
+            other[i] ^= 1;
+            assert!(!ct_eq(&base, &other), "byte {i}");
+        }
+        // The shape that keeps the time flat: an accumulator, no early exit.
+        let body = body_of("ct_eq", "");
+        assert!(body.contains("diff |="), "{body}");
+        for banned in [
+            "return", "break", "?;", "&&", ".all(", ".any(", ".eq(", " == b",
+        ] {
+            assert!(!body.contains(banned), "ct_eq must not contain {banned:?}");
+        }
+    }
+
+    #[test]
+    fn lookup_visits_every_entry_without_stopping_at_a_match() {
+        let body = body_of("lookup", "    ");
+        assert!(body.contains("for entry in &self.entries"), "{body}");
+        assert!(body.contains("ct_eq(&entry.hash, &presented)"), "{body}");
+        for banned in [
+            "return",
+            "break",
+            "?;",
+            ".find(",
+            ".position(",
+            ".any(",
+            ".iter().find",
+        ] {
+            assert!(!body.contains(banned), "lookup must not contain {banned:?}");
+        }
+        // And the answer is still right with the match first, middle and last.
+        let mut registry = CallerRegistry::default();
+        let tokens: Vec<_> = (0..5)
+            .map(|i| registry.add(&format!("c{i}"), bid(i as u8)).unwrap())
+            .collect();
+        for (i, token) in tokens.iter().enumerate() {
+            assert_eq!(
+                registry.lookup(token),
+                Some((format!("c{i}"), bid(i as u8)))
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_refuses_a_registry_that_group_or_others_can_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let path = dir.path().join("access-callers.json");
+        let mut registry = CallerRegistry::default();
+        registry.add("alice", bid(1)).unwrap();
+        registry.save(&path).unwrap();
+        let set_mode = |mode: u32| {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        for mode in [0o620, 0o660, 0o602, 0o666, 0o777] {
+            set_mode(mode);
+            let err = CallerRegistry::load(&path).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{mode:o}");
+            let message = err.to_string();
+            assert!(message.contains("writable"), "{message}");
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert!(message.contains("chmod 600"), "{message}");
+            // The file's content is not in the diagnostic.
+            assert!(!message.contains("alice"), "{message}");
+        }
+        // Owner-only and read-only-by-others are fine.
+        for mode in [0o600, 0o640, 0o644, 0o400] {
+            set_mode(mode);
+            assert_eq!(CallerRegistry::load(&path).unwrap(), registry, "{mode:o}");
+        }
     }
 
     #[test]
