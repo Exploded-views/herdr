@@ -1,0 +1,14 @@
+# herdr-fork: mutant T3-M6: linux stat parser reads the wrong starttime field. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/linux.rs b/src/platform/linux.rs
+index 2f8cadcf..76369493 100644
+--- a/src/platform/linux.rs
++++ b/src/platform/linux.rs
+@@ -750,7 +750,7 @@ fn link_info_from_stat(stat: &str) -> Option<super::LinkInfo> {
+ /// Index of ppid and starttime in the fields after `(comm)`:
+ /// state(0) ppid(1) pgrp(2) session(3) ... starttime(19).
+ const STAT_PPID: usize = 1;
+-const STAT_STARTTIME: usize = 19;
++const STAT_STARTTIME: usize = 18;
+ 
+ /// The whitespace-separated fields after the last `)` of a stat line, so a
+ /// comm holding spaces or parentheses can't shift them.

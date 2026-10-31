@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-M3: an incomplete walk classifies as Outside. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/caller.rs b/src/access/caller.rs
+index a11d2c46..d2036839 100644
+--- a/src/access/caller.rs
++++ b/src/access/caller.rs
+@@ -70,7 +70,7 @@ pub(crate) fn classify(
+     }
+     // An empty chain proves nothing, complete or not.
+     if !lineage.complete || lineage.chain.is_empty() {
+-        return unknown;
++        return CallerClass::Outside { via_ssh: false };
+     }
+     if remote {
+         return CallerClass::Remote;

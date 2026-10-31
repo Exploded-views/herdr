@@ -1,0 +1,13 @@
+# herdr-fork: mutant T4-D5: an unknown caller with a remote hint is not treated as remote. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..8614441a 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -315,7 +315,6 @@ pub(crate) fn decide(
+                 let remote_origin = matches!(
+                     caller,
+                     CallerClass::Remote
+-                        | CallerClass::Unknown { remote_hint: true }
+                         | CallerClass::Outside { via_ssh: true }
+                         | CallerClass::Caller { via_ssh: true, .. }
+                 );

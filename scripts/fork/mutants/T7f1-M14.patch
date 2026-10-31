@@ -1,0 +1,14 @@
+# herdr-fork: mutant T7f1-M14: a wheel harvest keeps going after a policy is bound mid-harvest. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index a3077dc8..5b1d17c9 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -2825,7 +2825,7 @@ impl HeadlessServer {
+             let may_inject = self
+                 .app
+                 .terminal_input_allowed(&read.terminal_id, &read.caller);
+-            let outcome = if remains_idle && !attached && may_inject {
++            let outcome = if remains_idle && !attached {
+                 read.poll(runtime, now)
+             } else {
+                 read.abort(runtime, now)

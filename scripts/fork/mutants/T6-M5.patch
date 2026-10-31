@@ -1,0 +1,15 @@
+# herdr-fork: mutant T6-M5: a malformed saved pane policy costs the whole session. Unofficial stopgap; see FORK.md.
+diff --git a/src/persist/snapshot.rs b/src/persist/snapshot.rs
+index d47365ef..b06a0a82 100644
+--- a/src/persist/snapshot.rs
++++ b/src/persist/snapshot.rs
+@@ -114,8 +114,7 @@ pub struct PaneSnapshot {
+     pub launch_argv: Option<Vec<String>>,
+     #[serde(
+         default,
+-        skip_serializing_if = "Option::is_none",
+-        deserialize_with = "lenient_access"
++        skip_serializing_if = "Option::is_none"
+     )]
+     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
+     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

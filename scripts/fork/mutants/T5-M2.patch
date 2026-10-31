@@ -1,0 +1,16 @@
+# herdr-fork: mutant T5-M2: the remote bridge forwards the request without setting caller_origin to remote. Unofficial stopgap; see FORK.md.
+diff --git a/src/remote.rs b/src/remote.rs
+index f489dae1..d29cffa1 100644
+--- a/src/remote.rs
++++ b/src/remote.rs
+@@ -34,10 +34,6 @@ fn stamp_remote_origin(line: &[u8]) -> Option<Vec<u8>> {
+     ) {
+         return None;
+     }
+-    object.insert(
+-        "caller_origin".into(),
+-        serde_json::Value::String("remote".into()),
+-    );
+     let mut stamped = serde_json::to_vec(&object).ok()?;
+     stamped.push(b'\n');
+     (stamped.len() <= crate::api::MAX_INITIAL_REQUEST_BYTES).then_some(stamped)

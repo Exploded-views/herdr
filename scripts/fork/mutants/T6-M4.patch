@@ -1,0 +1,20 @@
+# herdr-fork: mutant T6-M4: an unknown [access] key fails the whole config read. Unofficial stopgap; see FORK.md.
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 833213ca..0609f768 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -1135,9 +1135,11 @@ impl<'de> Deserialize<'de> for AccessConfig {
+                         .read_diagnostics
+                         .push(format!("access.{key}: {err}; section skipped")),
+                 },
+-                _ => out
+-                    .read_diagnostics
+-                    .push(format!("unknown config key access.{key}")),
++                _ => {
++                    return Err(serde::de::Error::custom(format!(
++                        "unknown config key access.{key}"
++                    )))
++                }
+             }
+         }
+         Ok(out)

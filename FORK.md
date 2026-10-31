@@ -49,6 +49,9 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `.github/workflows/fork-ci.yml` | new | Fork CI; every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
+| `scripts/fork/run-mutants.sh` | new | Runs a shard of the security-guard mutants in a writable copy of the tree: each mutant's patch must apply, compile, and make its named test fail |
+| `scripts/fork/mutants/manifest.tsv`, `scripts/fork/mutants/*.patch` | new | The mutants: one patch per broken guard, and the nextest filter of the test that must fail (see docs/ci.md, "Mutants in CI") |
+| `scripts/fork/test-run-mutants.sh` | new | Tests the mutant runner with a stub `cargo` in a fixture repo: killed, survived, stale and broken verdicts, shard selection, tree restore |
 | `scripts/fork/denylist-scan.py` | new | Scans a commit's tree (contents, symlink targets, path names) against the private denylist; prints paths and counts only |
 | `scripts/fork/denylist-allow.sha256` | new | Denylist exemptions for unmodified vendored upstream files, each pinned by sha256 |
 | `docs/next/website/src/data/config-reference.json` | changed | Documents the fork-only `[access]` keys (Access section) |

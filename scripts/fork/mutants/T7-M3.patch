@@ -1,0 +1,13 @@
+# herdr-fork: mutant T7-M3: the gate idles even when a pane is protected. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..80759c75 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -53,7 +53,6 @@ impl App {
+         let carries_token = matches!(caller, Caller::Peer { token: Some(_), .. });
+         !carries_token
+             && self.state.remote_settings.input != RemoteInput::BridgeOnly
+-            && !self.any_access_protected()
+     }
+ 
+     /// Classify a caller. A pane shell is matched by pid first (an integer

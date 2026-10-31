@@ -1,0 +1,15 @@
+# herdr-fork: mutant T4-M2: a lineage containing the server pid is Unknown even when a pane matches. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/caller.rs b/src/access/caller.rs
+index a11d2c46..57d3e513 100644
+--- a/src/access/caller.rs
++++ b/src/access/caller.rs
+@@ -60,6 +60,9 @@ pub(crate) fn classify(
+     let unknown = CallerClass::Unknown {
+         remote_hint: remote || lineage.via_ssh,
+     };
++    if lineage.chain.iter().any(|i| i.pid == server_pid) {
++        return unknown;
++    }
+     for ident in &lineage.chain {
+         if let Some((terminal, _)) = panes.iter().find(|(_, shell)| shell == ident) {
+             return CallerClass::Pane(terminal.clone());

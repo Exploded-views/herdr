@@ -1,0 +1,21 @@
+# herdr-fork: mutant T4-M4: a caller token upgrades a pane caller. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/caller.rs b/src/access/caller.rs
+index a11d2c46..4d075566 100644
+--- a/src/access/caller.rs
++++ b/src/access/caller.rs
+@@ -62,7 +62,14 @@ pub(crate) fn classify(
+     };
+     for ident in &lineage.chain {
+         if let Some((terminal, _)) = panes.iter().find(|(_, shell)| shell == ident) {
+-            return CallerClass::Pane(terminal.clone());
++            return match token_match.clone() {
++                Some((name, target)) => CallerClass::Caller {
++                    name,
++                    target,
++                    via_ssh: false,
++                },
++                None => CallerClass::Pane(terminal.clone()),
++            };
+         }
+         if ident.pid == server_pid {
+             return unknown;
