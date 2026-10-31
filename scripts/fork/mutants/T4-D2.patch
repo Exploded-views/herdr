@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-D2: Principal::Outside stops admitting an outside caller that came through ssh. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..cb8de6df 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -263,7 +263,7 @@ fn principal_admits(
+ ) -> bool {
+     match principal {
+         Principal::None => false,
+-        Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
++        Principal::Outside => matches!(caller, CallerClass::Outside { via_ssh: false }),
+         Principal::Caller(n) => matches!(
+             caller,
+             CallerClass::Caller { name, target, .. } if name == n && target == binding

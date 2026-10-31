@@ -1,0 +1,17 @@
+# herdr-fork: mutant T7-M5: agent.prompt is gated with the terminal resolver instead of the agent resolver. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..0b021faa 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -235,7 +235,10 @@ impl App {
+     /// placed here.
+     fn gate_target(&self, method: &Method) -> GateTarget<'_> {
+         match method {
+-            Method::AgentPrompt(params) => self.agent_gate_target(&params.target),
++            Method::AgentPrompt(params) => match self.resolve_terminal_target(&params.target) {
++                Ok(t) => self.pane_gate_target(t.ws_idx, t.pane_id, false),
++                Err(_) => GateTarget::Open,
++            },
+             Method::AgentSendKeys(params) => self.agent_gate_target(&params.target),
+             Method::PaneSendText(params) => self.parsed_pane_gate_target(&params.pane_id),
+             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),

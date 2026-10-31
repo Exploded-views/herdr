@@ -1,0 +1,16 @@
+# herdr-fork: mutant T9a-M1: a token lookup returns the first caller whatever the token. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/registry.rs b/src/access/registry.rs
+index 56b27e47..d864f6f9 100644
+--- a/src/access/registry.rs
++++ b/src/access/registry.rs
+@@ -221,7 +221,9 @@ impl CallerRegistry {
+                 found = Some(entry);
+             }
+         }
+-        found.map(|entry| (entry.name.clone(), entry.binding.clone()))
++        self.entries
++            .first()
++            .map(|entry| (entry.name.clone(), entry.binding.clone()))
+     }
+ 
+     pub(crate) fn is_empty(&self) -> bool {

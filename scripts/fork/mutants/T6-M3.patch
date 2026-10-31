@@ -1,0 +1,16 @@
+# herdr-fork: mutant T6-M3: the sticky default re-binds a pane that was opened on purpose. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access.rs b/src/app/access.rs
+index d82880a1..73f244c4 100644
+--- a/src/app/access.rs
++++ b/src/app/access.rs
+@@ -116,9 +116,7 @@ pub(crate) fn apply_default_access(
+     let Some(default) = defaults.default.as_ref() else {
+         return false;
+     };
+-    if terminal.access.is_some()
+-        || terminal.access_opened_explicitly
+-        || !terminal.is_agent_terminal()
++    if terminal.access.is_some() || !terminal.is_agent_terminal()
+     {
+         return false;
+     }

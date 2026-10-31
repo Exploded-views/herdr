@@ -1,0 +1,23 @@
+# herdr-fork: mutant T4-M7b: rule 2 dropped and a named caller principal ignores the binding (M7 alone is shadowed by rule 2 in decide). Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..a20b1804 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -266,7 +266,7 @@ fn principal_admits(
+         Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
+         Principal::Caller(n) => matches!(
+             caller,
+-            CallerClass::Caller { name, target, .. } if name == n && target == binding
++            CallerClass::Caller { name, target, .. } if name == n
+         ),
+     }
+ }
+@@ -333,7 +333,7 @@ pub(crate) fn decide(
+             }
+             // Rule 2: a caller token is confined to its own binding.
+             if let CallerClass::Caller { target, .. } = caller {
+-                if !matches!(policy, Some(p) if p.binding == *target) {
++                if false {
+                     return Err(input_denied(label, caller));
+                 }
+             }

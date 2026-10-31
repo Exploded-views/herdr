@@ -21,6 +21,7 @@ on manual dispatch. It uses GitHub-hosted runners only, pinned actions (full com
 | Job | Runner | What it runs |
 |---|---|---|
 | `linux` | `ubuntu-latest` | `scripts/fork/linux-test.sh --fetch`, then `scripts/fork/linux-test.sh just ci`, inside `fork-ci.Dockerfile` |
+| `mutants` | `ubuntu-latest`, 4 shards | `scripts/fork/linux-test.sh scripts/fork/run-mutants.sh <shard>/4` in the same image (see "Mutants in CI") |
 | `macos` | `macos-latest` | `just ci 'not binary(live_handoff)'` natively, with upstream's macOS filter |
 
 ## One image for local and CI Linux runs
@@ -44,6 +45,64 @@ CI and local runs build and use the same file, so a version bump touches one fil
   running.
 
 macOS builds and tests natively on the Mac.
+
+## Mutants in CI
+
+A mutant is a small patch that breaks one security guard (the access gate, caller classification,
+the remote stamp, and so on). A named test must fail when the patch is applied; if it doesn't, the
+guard is not really tested. The `mutants` job runs them as a matrix of four shards, each on its own
+runner, inside the same image as the `linux` job. Nothing needs a secret.
+
+- `scripts/fork/mutants/manifest.tsv` has one line per mutant: `<id>`, TAB, `<patch file>`, TAB,
+  `<nextest filter expression>`. The filter names the test or tests that must fail. Lines starting
+  with `#` are comments.
+- `scripts/fork/mutants/<id>.patch` is a unified diff that applies with `git apply` at the branch
+  head. Text before the first `diff --git` line is ignored, so the patch starts with a one-line note.
+- `scripts/fork/run-mutants.sh <shard>/<total>` takes every `<total>`-th manifest line starting at
+  line `<shard>`. The repo is mounted read-only in the image, so it first copies the tracked tree to a
+  writable directory (plus Zig's gitignored `zig-pkg`, which the build needs) and works only there.
+  It never touches the checkout.
+
+Before any mutant it builds the clean copy and runs every filter of the shard once; if that fails it
+prints `baseline failed` and exits 2, so a test that is already broken cannot read as a kill. A
+manifest with no mutants at all also exits 2. Runs use the `mutants` nextest profile
+(`.config/nextest.toml`), which terminates a hung test after two minutes; a terminated test counts as
+failed, so KILLED.
+
+For each mutant it prints one verdict line, and exits non-zero unless every verdict is `KILLED`:
+
+| Verdict | Meaning | What to do |
+|---|---|---|
+| `KILLED` | The patch applied, compiled, and a test in the filter failed. | Nothing. |
+| `SURVIVED` | It applied and compiled, but every test in the filter passed: no test notices the broken guard. | Fix the test (or the filter), or, if the mutation is equivalent because another guard shadows it, change the mutation so it isn't. |
+| `STALE` | `git apply --check` failed: the code the patch edits has moved. | Re-derive the same mutation by hand against the new code and regenerate the patch. |
+| `BROKEN` | The patch applied but the tests don't compile with it. | Fix the mutation so it compiles. |
+| `ERROR` | The test run failed without a test failing. The runner passes `--no-tests=fail`, so a filter that matches no test (renamed or removed) ends here, as does a crash. | Fix the filter. |
+
+### Add a mutant
+
+1. Make the one-line change that breaks the guard in your working tree, so the named test should
+   fail. Keep it to the guard: a mutation that also breaks unrelated tests proves little.
+2. Save it as `scripts/fork/mutants/<id>.patch` with `git diff > ...` and add a note line before the
+   first `diff --git`: `# herdr-fork: mutant <id>: <what it breaks>. Unofficial stopgap; see FORK.md.`
+   Then revert your working tree.
+3. Add a line to `manifest.tsv` with the id, the patch file name and a filter such as
+   `test(name_of_the_test)`. Join several with ` | ` if any one of several tests should catch it: the mutant counts as KILLED when any of them fails, and every joined test must pass on the unmutated tree (the baseline).
+4. Check that it applies with `git apply --check scripts/fork/mutants/<id>.patch`. Shards take lines
+   by position, so a new line shifts which shard later mutants run in; that is fine.
+5. A mutation that only changes behaviour on one OS needs a test that runs on Linux, because the
+   image is Linux. macOS-only code is not covered here.
+
+### Run one shard locally
+
+Like every Linux run, from a full clone and not a worktree, with the image already fetched:
+
+    scripts/fork/linux-test.sh --fetch                                   # once, network on
+    scripts/fork/linux-test.sh scripts/fork/run-mutants.sh 1/4           # shard 1 of 4
+
+A shard builds the crate once per mutant, so it takes a while. Take the heavy lock first if you run
+this by hand, as for any Linux run. `scripts/fork/test-run-mutants.sh` tests the runner itself with a
+stub `cargo` and runs in a second.
 
 ## Denylist scan before every push
 

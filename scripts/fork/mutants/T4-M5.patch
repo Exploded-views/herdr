@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-M5: the remote stamp is ignored by classify. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/caller.rs b/src/access/caller.rs
+index a11d2c46..865b762e 100644
+--- a/src/access/caller.rs
++++ b/src/access/caller.rs
+@@ -72,7 +72,7 @@ pub(crate) fn classify(
+     if !lineage.complete || lineage.chain.is_empty() {
+         return unknown;
+     }
+-    if remote {
++    if false && remote {
+         return CallerClass::Remote;
+     }
+     let via_ssh = lineage.via_ssh;

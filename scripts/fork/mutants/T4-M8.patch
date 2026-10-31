@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-M8: rule 2 dropped: a caller token is no longer confined to its own binding. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..9e9017e3 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -333,7 +333,7 @@ pub(crate) fn decide(
+             }
+             // Rule 2: a caller token is confined to its own binding.
+             if let CallerClass::Caller { target, .. } = caller {
+-                if !matches!(policy, Some(p) if p.binding == *target) {
++                if false {
+                     return Err(input_denied(label, caller));
+                 }
+             }

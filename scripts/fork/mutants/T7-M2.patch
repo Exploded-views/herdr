@@ -1,0 +1,14 @@
+# herdr-fork: mutant T7-M2: classify_caller passes no pane shells. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..6ef26564 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -93,7 +93,7 @@ impl App {
+                 let token_match = token
+                     .as_deref()
+                     .and_then(|token| self.match_caller_token(token));
+-                classify(lineage, *remote, &panes, std::process::id(), token_match)
++                classify(lineage, *remote, &[], std::process::id(), token_match)
+             }
+         }
+     }

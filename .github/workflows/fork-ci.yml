@@ -2,7 +2,8 @@
 # not forks of this fork), and upstream's
 # own workflows are untouched. Linux builds and tests in the same image local runs use
 # (fork-ci.Dockerfile via scripts/fork/linux-test.sh); macOS runs natively, mirroring
-# upstream ci.yml. Unofficial stopgap; see FORK.md and docs/ci.md.
+# upstream ci.yml. The mutants job runs the security-guard mutants as a sharded matrix
+# (scripts/fork/run-mutants.sh). Unofficial stopgap; see FORK.md and docs/ci.md.
 name: fork-ci
 
 on:
@@ -34,6 +35,31 @@ jobs:
         run: scripts/fork/linux-test.sh --fetch
       - name: just ci (offline, repo read-only)
         run: scripts/fork/linux-test.sh just ci
+
+  # Each mutant is a small patch that breaks one security guard; a named test must fail with it
+  # applied. CI fails if a mutant survives, no longer applies (STALE) or does not compile (BROKEN).
+  mutants:
+    if: github.repository == 'Exploded-views/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Runner tests (stub cargo, no build)
+        run: scripts/fork/test-run-mutants.sh
+      - name: Build image and fetch dependencies
+        run: scripts/fork/linux-test.sh --fetch
+      - name: Mutants, shard ${{ matrix.shard }} of ${{ matrix.total }} (offline, repo read-only)
+        run: scripts/fork/linux-test.sh scripts/fork/run-mutants.sh ${{ matrix.shard }}/${{ matrix.total }}
 
   macos:
     if: github.repository == 'Exploded-views/herdr'

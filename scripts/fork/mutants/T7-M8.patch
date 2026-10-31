@@ -1,0 +1,15 @@
+# herdr-fork: mutant T7-M8: a denied caller's read still starts the alt-screen wheel harvest. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index a3077dc8..c4708ee5 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -2743,9 +2743,6 @@ impl HeadlessServer {
+ 
+         // The wheel harvest writes bytes into the pane. A caller refused Input
+         // there gets the frozen screen snapshot instead, and no bytes.
+-        if !self.app.read_may_inject_input(&request.method, caller) {
+-            return None;
+-        }
+ 
+         let (target, source, lines, format) = match &request.method {
+             Method::AgentRead(params) => (

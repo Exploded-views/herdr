@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9a-M3: every caller token is treated as unregistered. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..fdd86b9f 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -107,7 +107,7 @@ impl App {
+         if self.state.access_callers.is_empty() {
+             return None;
+         }
+-        self.state.access_callers.lookup(token)
++        None::<(String, crate::access::policy::AccessBindingId)>
+     }
+ 
+     /// Allow or refuse `method` for `caller`. Returns before classifying when

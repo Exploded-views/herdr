@@ -1,0 +1,15 @@
+# herdr-fork: mutant T4-D3: remote input defaults to bridge-only instead of any. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..f538c650 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -196,8 +196,8 @@ pub(crate) enum GateTarget<'a> {
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+ pub(crate) enum RemoteInput {
+-    #[default]
+     Any,
++    #[default]
+     BridgeOnly,
+ }
+ 

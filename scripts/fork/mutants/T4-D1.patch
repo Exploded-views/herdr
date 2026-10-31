@@ -1,0 +1,15 @@
+# herdr-fork: mutant T4-D1: a remote stamp overrides a pane match in classify. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/caller.rs b/src/access/caller.rs
+index a11d2c46..c92bada4 100644
+--- a/src/access/caller.rs
++++ b/src/access/caller.rs
+@@ -60,6 +60,9 @@ pub(crate) fn classify(
+     let unknown = CallerClass::Unknown {
+         remote_hint: remote || lineage.via_ssh,
+     };
++    if remote {
++        return CallerClass::Remote;
++    }
+     for ident in &lineage.chain {
+         if let Some((terminal, _)) = panes.iter().find(|(_, shell)| shell == ident) {
+             return CallerClass::Pane(terminal.clone());

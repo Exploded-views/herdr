@@ -1,0 +1,19 @@
+# herdr-fork: mutant T3-M3: ssh-server names match by substring. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/mod.rs b/src/platform/mod.rs
+index ccfb267f..751fd89b 100644
+--- a/src/platform/mod.rs
++++ b/src/platform/mod.rs
+@@ -205,10 +205,9 @@ pub(crate) const MAX_LINEAGE_DEPTH: usize = 64;
+ /// Executable names of remote-login servers. Exact match only.
+ #[allow(dead_code)]
+ fn is_ssh_server_name(name: &str) -> bool {
+-    matches!(
+-        name,
+-        "sshd" | "sshd-session" | "mosh-server" | "etserver" | "tailscaled" | "dropbear"
+-    )
++    ["sshd", "sshd-session", "mosh-server", "etserver", "tailscaled", "dropbear"]
++        .iter()
++        .any(|n| name.contains(n))
+ }
+ 
+ #[allow(dead_code)]

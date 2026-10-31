@@ -1,0 +1,18 @@
+# herdr-fork: mutant T7-M4: pane ids are gated with the handler's resolver instead of the public-id parser. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..4e23d68e 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -403,7 +403,11 @@ impl App {
+     }
+ 
+     fn parsed_pane_gate_target(&self, pane_id: &str) -> GateTarget<'_> {
+-        match self.parse_pane_id(pane_id) {
++        match self
++            .resolve_terminal_target(pane_id)
++            .ok()
++            .map(|t| (t.ws_idx, t.pane_id))
++        {
+             Some((ws_idx, pane_id)) => self.pane_gate_target(ws_idx, pane_id, false),
+             None => GateTarget::Open,
+         }

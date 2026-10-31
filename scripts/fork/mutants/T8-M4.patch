@@ -1,0 +1,14 @@
+# herdr-fork: mutant T8-M4: opening a pane with accept_from=any no longer needs admin. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..a09215b5 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -380,7 +380,7 @@ impl App {
+                 .terminals
+                 .get(terminal)
+                 .is_some_and(|state| state.access_opened_explicitly);
+-        opens_new
++        (opens_new && false)
+             || is_looser(
+                 &explicit,
+                 self.state.start_baseline_access(terminal, &params.name),

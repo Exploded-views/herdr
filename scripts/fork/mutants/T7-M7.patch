@@ -1,0 +1,13 @@
+# herdr-fork: mutant T7-M7: the gate idles under bridge-only remote input when no policy is bound. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..5a123d4a 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -52,7 +52,6 @@ impl App {
+     fn access_gate_idle(&self, caller: &Caller) -> bool {
+         let carries_token = matches!(caller, Caller::Peer { token: Some(_), .. });
+         !carries_token
+-            && self.state.remote_settings.input != RemoteInput::BridgeOnly
+             && !self.any_access_protected()
+     }
+ 

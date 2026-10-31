@@ -1,0 +1,16 @@
+# herdr-fork: mutant T8-M2: a loosening agent.start no longer escalates to the admin check. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..a921b235 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -381,10 +381,6 @@ impl App {
+                 .get(terminal)
+                 .is_some_and(|state| state.access_opened_explicitly);
+         opens_new
+-            || is_looser(
+-                &explicit,
+-                self.state.start_baseline_access(terminal, &params.name),
+-            )
+     }
+ 
+     /// `agent.start`: control of the pane if it holds a policy, else input.

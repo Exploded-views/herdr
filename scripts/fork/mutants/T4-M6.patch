@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-M6: Principal::None admits an outside caller. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..2a49137e 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -262,7 +262,7 @@ fn principal_admits(
+     binding: &AccessBindingId,
+ ) -> bool {
+     match principal {
+-        Principal::None => false,
++        Principal::None => matches!(caller, CallerClass::Outside { .. }),
+         Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
+         Principal::Caller(n) => matches!(
+             caller,

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T2-M1: agent.prompt triaged as Meta instead of Input. Unofficial stopgap; see FORK.md.
+diff --git a/src/api/schema.rs b/src/api/schema.rs
+index bdeabe3e..70e434d9 100644
+--- a/src/api/schema.rs
++++ b/src/api/schema.rs
+@@ -94,7 +94,7 @@ operations::define_operations! {
+     AgentViewClear(AgentViewClearParams) => "agent.view.clear", true, false, Meta;
+     AgentFocus(AgentTarget) => "agent.focus", true, false, Meta;
+     AgentStart(AgentStartParams) => "agent.start", true, false, Input;
+-    AgentPrompt(AgentPromptParams) => "agent.prompt", true, false, Input;
++    AgentPrompt(AgentPromptParams) => "agent.prompt", true, false, Meta;
+     AgentWait(AgentWaitParams) => "agent.wait", false, false, Meta;
+     PaneSplit(PaneSplitParams) => "pane.split", true, true, Meta;
+     PaneSwap(PaneSwapParams) => "pane.swap", true, true, Meta;

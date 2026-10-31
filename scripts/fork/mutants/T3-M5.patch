@@ -1,0 +1,14 @@
+# herdr-fork: mutant T3-M5: linux link check ignores parent start time. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/linux.rs b/src/platform/linux.rs
+index 2f8cadcf..7f849208 100644
+--- a/src/platform/linux.rs
++++ b/src/platform/linux.rs
+@@ -768,7 +768,7 @@ fn stat_fields_after_comm(stat: &str) -> Option<Vec<&str>> {
+ /// started at boot can't be a reused pid.
+ #[allow(dead_code)]
+ pub(super) fn verify_link(parent: &super::LinkInfo, child: &super::LinkInfo) -> bool {
+-    child.start_token != 0 && parent.start_token <= child.start_token
++    child.start_token != 0 && true
+ }
+ 
+ fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {

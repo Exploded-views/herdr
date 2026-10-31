@@ -1,0 +1,14 @@
+# herdr-fork: mutant T3-M4: chain[0] is excluded from the ssh-server check. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/unix_common.rs b/src/platform/unix_common.rs
+index cbef1922..b89fe989 100644
+--- a/src/platform/unix_common.rs
++++ b/src/platform/unix_common.rs
+@@ -474,7 +474,7 @@ pub(super) fn walk_lineage(
+             pid: current,
+             start_token: info.start_token,
+         });
+-        lineage.via_ssh |= super::is_ssh_server_name(&info.name);
++        lineage.via_ssh |= lineage.chain.len() > 1 && super::is_ssh_server_name(&info.name);
+         if current == 1 {
+             reached_init = true;
+             break;

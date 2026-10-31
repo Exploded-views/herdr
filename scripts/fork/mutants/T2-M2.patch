@@ -1,0 +1,13 @@
+# herdr-fork: mutant T2-M2: the policy table's meta list loses ping, so a method goes untriaged. Unofficial stopgap; see FORK.md.
+diff --git a/src/api/schema/operations.rs b/src/api/schema/operations.rs
+index 820c538d..994969c0 100644
+--- a/src/api/schema/operations.rs
++++ b/src/api/schema/operations.rs
+@@ -228,7 +228,6 @@ mod tests {
+             "access.caller.remove",
+         ];
+         let meta = [
+-            "ping",
+             "server.agent_manifests",
+             "server.reload_agent_manifests",
+             "notification.show",
