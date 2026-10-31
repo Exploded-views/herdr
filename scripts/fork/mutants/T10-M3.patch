@@ -1,16 +1,16 @@
 # herdr-fork: mutant T10-M3. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
-index 1a70cb01..fe43e21b 100644
+index 99aba29c..0cf3c26d 100644
 --- a/src/app/access_gate.rs
 +++ b/src/app/access_gate.rs
-@@ -522,7 +522,9 @@ impl App {
-             return Ok(());
-         };
-         let mut class = self.classify_caller(&caller);
+@@ -543,7 +543,9 @@ impl App {
+     /// Under `allow`, the owner's remote TUI types as a local client does: the ssh marks
+     /// that only rule 0 reads are cleared.
+     fn owner_tui_class(&self, mut class: CallerClass) -> CallerClass {
 -        if self.state.remote_owner_tui == RemoteOwnerTui::Allow {
 +        if self.state.remote_owner_tui == RemoteOwnerTui::Allow
 +            || self.state.remote_owner_tui == RemoteOwnerTui::Deny
 +        {
-             if let CallerClass::Outside { via_ssh } = &mut class {
-                 *via_ssh = false;
-             }
+             match &mut class {
+                 CallerClass::Outside { via_ssh } => *via_ssh = false,
+                 CallerClass::Unknown { remote_hint } => *remote_hint = false,

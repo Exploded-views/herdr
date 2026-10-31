@@ -106,6 +106,9 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx` | changed | Translations of the access sections (`Access callers`, `Pane access policies`) and the `agent start --accept-from` usage and paragraph, so the heading outlines match English |
 | `src/platform/windows.rs`, `src/platform/mod.rs`, `Cargo.toml` | changed | `random_secret` on Windows is `BCryptGenRandom` (system-preferred RNG), so binding ids and caller tokens can be minted there; the `Unsupported` stub remains only for targets that are neither unix nor windows |
 | `src/app/access_gate.rs`, `src/access/policy.rs`, `src/app/terminal_targets.rs` | changed | A log-capture test that no caller token or token hash reaches the log; `AccessBindingId` Debug prints `AccessBindingId(acc_...)`; the resolver test's assert message names the target index, not the id |
+| `src/server/headless.rs`, `src/server/clients.rs`, `src/app/access_gate.rs`, `src/config/model.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs`, `docs/fork.md`, `docs/next/website/src/data/config-reference.json` | changed | Shell-client pane and popup input and pane clipboard-image paste are checked (`shell_client_input_allowed`); client-shell API callers carry `remote: false`; `remote_owner_tui` is read; an invalid value fails closed under bridge-only; a remote denial names the bridge binding; a refusal is noticed once per pane |
+| `src/client/shell/actions.rs`, `src/client/shell/tests/keybindings_settings.rs` | changed | An access refusal shows as "Input refused" instead of "Paste rejected" |
+| `scripts/fork/mutants/T10-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10-M1a, T10-M1b, T10-M2 to T10-M6 |
 
 ## Limits
 
@@ -114,5 +117,3 @@ agents**, not a security boundary. [docs/fork.md](docs/fork.md#limits) lists wha
 stop.
 
 An orphaned caller (parent exited, re-parented to init) gets a short lineage that still reports `complete`; see [docs/fork.md](docs/fork.md#limits).
-| `src/server/headless.rs`, `src/app/access_gate.rs`, `src/config/model.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs`, `docs/fork.md`, `docs/next/website/src/data/config-reference.json` | changed | Shell-client pane input and pane clipboard-image paste are checked by `shell_client_input_allowed`; `remote_owner_tui` is read; an invalid value fails closed under bridge-only; a remote denial names the bridge binding |
-| `scripts/fork/mutants/T10-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10-M1 to T10-M4 |

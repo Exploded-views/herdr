@@ -1,3 +1,4 @@
+// herdr-fork: an access refusal sent as a client shell error shows as "Input refused", not "Paste rejected". Unofficial stopgap; see FORK.md.
 use super::*;
 
 impl ClientShellState {
@@ -428,12 +429,13 @@ impl ClientShellState {
     }
 
     pub(crate) fn receive_endpoint_error(&mut self, message: String) -> bool {
-        self.push_endpoint_notice(
-            ClientEndpointNoticeKind::Rejected,
-            "paste_rejected",
-            "Paste rejected",
-            message,
-        )
+        // The fork's access refusals come through the same message; name them as what they are.
+        let (key, title) = if message.starts_with("access_denied:") {
+            ("input_refused", "Input refused")
+        } else {
+            ("paste_rejected", "Paste rejected")
+        };
+        self.push_endpoint_notice(ClientEndpointNoticeKind::Rejected, key, title, message)
     }
 
     pub(crate) fn receive_endpoint_unavailable(&mut self, message: String) -> bool {

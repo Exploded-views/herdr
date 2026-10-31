@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane input is judged with its own lineage, and a remote refusal names the bridge's binding. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -494,8 +494,9 @@ impl App {
 
     /// May a shell client type into, or paste an image into, `pane_id`? Judged as `Input`
     /// against the pane's policy with the class of the client's own connection. Reads the
-    /// stored lineage only; nothing is walked here. Returns before classifying when the gate
-    /// is idle. A pane id that does not resolve is left to the handler.
+    /// stored lineage only; nothing is walked, cloned or allocated before the idle check. A
+    /// pane id that does not resolve is left to the handler. Logging is the caller's job, so
+    /// it can rate-limit.
     ///
     /// The owner's remote TUI (a `via_ssh` client) types like an outside client unless
     /// `remote_input = "bridge-only"` and `remote_owner_tui = "deny"`, where rule 0 applies.
@@ -504,39 +505,52 @@ impl App {
         caller: &Caller,
         pane_id: &str,
     ) -> Result<(), AccessDenied> {
-        // Judge the lineage itself: the stored caller's `remote` flag follows `via_ssh`,
-        // and the owner setting decides what that means for typing.
-        let caller = match caller {
-            Caller::Peer { lineage, token, .. } => Caller::Peer {
-                lineage: lineage.clone(),
-                token: token.clone(),
-                remote: false,
-            },
-            #[cfg(test)]
-            other => other.clone(),
-        };
-        if self.access_gate_idle(&caller) {
+        if self.access_gate_idle(caller) {
             return Ok(());
         }
         let Some((ws_idx, pane)) = self.parse_pane_id(pane_id) else {
             return Ok(());
         };
-        let mut class = self.classify_caller(&caller);
+        let class = self.owner_tui_class(self.classify_caller(caller));
+        let target = self.pane_gate_target(ws_idx, pane, false);
+        decide(&target, &class, &self.state.remote_settings)
+            .map_err(|denied| self.with_bridge_binding(self.with_public_pane_id(&class, denied)))
+    }
+
+    /// May a shell client type into, or paste an image into, the popup terminal? Pane
+    /// policy does not apply: the popup terminal can't carry a binding. Rule 0 does, so a
+    /// remote TUI under `bridge-only` + `deny` is view-only here too.
+    pub(crate) fn check_client_popup_input(
+        &self,
+        caller: &Caller,
+        terminal: &TerminalId,
+    ) -> Result<(), AccessDenied> {
+        if self.state.remote_settings.input != RemoteInput::BridgeOnly
+            || self.state.remote_owner_tui != RemoteOwnerTui::Deny
+        {
+            return Ok(());
+        }
+        let class = self.classify_caller(caller);
+        let target = GateTarget::Input {
+            label: "popup".to_string(),
+            terminal,
+            policy: None,
+        };
+        decide(&target, &class, &self.state.remote_settings)
+            .map_err(|denied| self.with_bridge_binding(self.with_public_pane_id(&class, denied)))
+    }
+
+    /// Under `allow`, the owner's remote TUI types as a local client does: the ssh marks
+    /// that only rule 0 reads are cleared.
+    fn owner_tui_class(&self, mut class: CallerClass) -> CallerClass {
         if self.state.remote_owner_tui == RemoteOwnerTui::Allow {
-            if let CallerClass::Outside { via_ssh } = &mut class {
-                *via_ssh = false;
+            match &mut class {
+                CallerClass::Outside { via_ssh } => *via_ssh = false,
+                CallerClass::Unknown { remote_hint } => *remote_hint = false,
+                _ => {}
             }
         }
-        let target = self.pane_gate_target(ws_idx, pane, false);
-        decide(&target, &class, &self.state.remote_settings).map_err(|denied| {
-            let denied = self.with_bridge_binding(self.with_public_pane_id(&class, denied));
-            tracing::warn!(
-                from = denied_from(&denied),
-                pane = pane_id,
-                "access denied: client shell input"
-            );
-            denied
-        })
+        class
     }
 
     fn public_pane_id_of_terminal(&self, terminal: &TerminalId) -> String {

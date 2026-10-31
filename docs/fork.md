@@ -78,9 +78,8 @@ stop a process that sets out to get around it:
   own files (its settings, hooks and instructions).
 - A process inside a pane can escape its pane's ancestry (`setsid`, `nohup`, a double fork,
   `tmux new -d`, any SSH login to the host) and then counts as being outside every pane.
-  TUI clients whose lineage passes through an SSH server, and herdr's `--machine` route, are
-  stamped `remote`; other callers under an SSH login count as another host under
-  `bridge-only`.
+  Callers under an SSH login, TUI clients included, count as another host under `bridge-only`;
+  only herdr's `--machine` route is stamped `remote`.
 - **Remote client bridge.** The server can't tell at accept that a TUI came in through the
   remote client bridge, so `remote` comes from `via_ssh` only. A bridge launched under
   something other than an SSH server looks local. This matches the decision that remote TUIs
@@ -88,7 +87,9 @@ stop a process that sets out to get around it:
   A TUI client's typing and image paste into a pane are checked against that pane's policy
   with the client's own class. A client that came in over SSH types like an outside client,
   unless `remote_input = "bridge-only"` and `remote_owner_tui = "deny"`, which refuses it as
-  another host. Under bridge-only, an invalid `remote_owner_tui` counts as `"deny"`.
+  another host, on every pane and in the popup. Under bridge-only, an invalid
+  `remote_owner_tui` counts as `"deny"`. Focus reports and the key releases sent when a client
+  disconnects are not gated.
 - **Reused pane pid.** If a pane's shell dies and its pid is reused before herdr processes the
   exit, a descendant of the new process can briefly classify as that pane.
 - **Windows.** The caller lineage is unavailable there, so once any policy is bound every

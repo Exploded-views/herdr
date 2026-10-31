@@ -71,4 +71,4 @@ a plan to send it upstream, and nothing has been proposed upstream.
 - A TUI client's typing and image paste into a pane are now checked against the pane's policy,
   using the client's own caller class. Under `remote_input = "bridge-only"`, `remote_owner_tui =
   "deny"` refuses a client that came in over SSH, an invalid `remote_owner_tui` counts as `"deny"`,
-  and a remote refusal names the bridge's binding id. Terminal attach stays ungated. *fork-only*
+  and a remote refusal names the bridge's binding id. Terminal attach stays ungated. A refusal shows once as "Input refused". *fork-only*

@@ -1556,7 +1556,7 @@
           "key": "access.remote_owner_tui",
           "type": "string",
           "default": "\"allow\"",
-          "description": "Fork-only. \"deny\" refuses remote TUI input on a bridge-only node; ignored unless access.remote_input is \"bridge-only\". Under bridge-only an invalid value is treated as \"deny\". Also governs a TUI client that came in over SSH."
+          "description": "Fork-only. Under access.remote_input = \"bridge-only\", \"deny\" refuses typing and image paste from a TUI client that came in over SSH, and an invalid value counts as \"deny\". Ignored otherwise."
         },
         {
           "key": "access.input_log",

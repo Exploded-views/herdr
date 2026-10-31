@@ -1,0 +1,16 @@
+# herdr-fork: mutant T10-M1b. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 3c4b63b1..9fcb3ba5 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1292,9 +1292,7 @@ impl HeadlessServer {
+                     return false;
+                 };
+                 let result = self.shell_client_input_allowed(client_id, &pane_id);
+-                if !self.client_input_permitted(client_id, &pane_id, result) {
+-                    return false;
+-                }
++                let _ = result;
+                 let popup_blocks_input = self.app.state.popup_pane.is_some()
+                     && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                 if popup_blocks_input

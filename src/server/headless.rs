@@ -1166,34 +1166,93 @@ impl HeadlessServer {
         Ok(staged)
     }
 
-    /// May this shell client type into, or paste an image into, `pane_id`? Both shell-client
-    /// input routes ask here (`ClientShellPaneInput` and the pane clipboard-image paste).
-    /// Judged as `Input` against the pane's policy with the client's own class. Not gated, on
-    /// purpose: `ClientShellPopupInput` (it targets only the popup terminal, which can't
-    /// carry a binding) and `ClientInput` (attach mode only, the documented attach bypass).
+    /// May this shell client type into, or paste an image into, `pane_id`? Both pane routes
+    /// ask here (`ClientShellPaneInput` and the pane clipboard-image paste). Judged as
+    /// `Input` against the pane's policy with the client's own class. A client that is gone
+    /// is refused. Not gated, on purpose: `ClientInput` and the other attach events (attach
+    /// mode only, the documented attach bypass), `ClientShellFocus` focus reports and the
+    /// held-key releases sent at disconnect (neither carries chosen content). The popup
+    /// routes only get rule 0, see `shell_client_popup_input_allowed`.
     fn shell_client_input_allowed(
         &self,
         client_id: u64,
         pane_id: &str,
     ) -> Result<(), crate::access::policy::AccessDenied> {
         let Some(client) = self.clients.get(&client_id) else {
-            return Ok(());
+            warn!(
+                client_id,
+                "client shell input from a missing client refused"
+            );
+            return Err(crate::access::policy::AccessDenied::Input {
+                label: pane_id.to_owned(),
+                from: "unknown".to_owned(),
+            });
         };
         self.app.check_client_shell_input(&client.caller, pane_id)
     }
 
-    /// Drop a refused shell-client input and tell that client why.
-    fn refuse_client_shell_input(
+    /// The popup terminal can't carry a binding, so pane policy does not apply to it; rule 0
+    /// does, so `remote_owner_tui = "deny"` leaves a remote TUI view-only here too.
+    fn shell_client_popup_input_allowed(
+        &self,
+        client_id: u64,
+        terminal: &crate::terminal::TerminalId,
+    ) -> Result<(), crate::access::policy::AccessDenied> {
+        let Some(client) = self.clients.get(&client_id) else {
+            warn!(
+                client_id,
+                "client popup input from a missing client refused"
+            );
+            return Err(crate::access::policy::AccessDenied::Input {
+                label: "popup".to_owned(),
+                from: "unknown".to_owned(),
+            });
+        };
+        self.app.check_client_popup_input(&client.caller, terminal)
+    }
+
+    /// Run a gate result for one input message. On a refusal, tell the client and log it the
+    /// first time for this pane, and return false so the input is dropped every time. An
+    /// allowed input clears the memory.
+    fn client_input_permitted(
         &mut self,
         client_id: u64,
-        denied: &crate::access::policy::AccessDenied,
-    ) {
-        self.send_to_client(
-            client_id,
-            ServerMessage::ClientShellError {
-                message: denied.message(),
-            },
-        );
+        pane_id: &str,
+        result: Result<(), crate::access::policy::AccessDenied>,
+    ) -> bool {
+        match result {
+            Ok(()) => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    if client.refused_pane.is_some() {
+                        client.refused_pane = None;
+                    }
+                }
+                true
+            }
+            Err(denied) => {
+                let first = self.clients.get_mut(&client_id).is_none_or(|client| {
+                    let first = client.refused_pane.as_deref() != Some(pane_id);
+                    if first {
+                        client.refused_pane = Some(pane_id.to_owned());
+                    }
+                    first
+                });
+                if first {
+                    warn!(
+                        client_id,
+                        pane = pane_id,
+                        "access denied: client shell input"
+                    );
+                    self.send_to_client(
+                        client_id,
+                        ServerMessage::ClientShellError {
+                            message: denied.message(),
+                        },
+                    );
+                }
+                false
+            }
+        }
     }
 
     fn paste_client_clipboard_image_path(
@@ -1232,8 +1291,8 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                if let Err(denied) = self.shell_client_input_allowed(client_id, &pane_id) {
-                    self.refuse_client_shell_input(client_id, &denied);
+                let result = self.shell_client_input_allowed(client_id, &pane_id);
+                if !self.client_input_permitted(client_id, &pane_id, result) {
                     return false;
                 }
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
@@ -1281,6 +1340,10 @@ impl HeadlessServer {
                 if popup_terminal_id.as_str() != terminal_id
                     || self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id)
                 {
+                    return false;
+                }
+                let result = self.shell_client_popup_input_allowed(client_id, &popup_terminal_id);
+                if !self.client_input_permitted(client_id, "popup", result) {
                     return false;
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
@@ -2417,8 +2480,8 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                if let Err(denied) = self.shell_client_input_allowed(client_id, &pane_id) {
-                    self.refuse_client_shell_input(client_id, &denied);
+                let result = self.shell_client_input_allowed(client_id, &pane_id);
+                if !self.client_input_permitted(client_id, &pane_id, result) {
                     return false;
                 }
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
@@ -2525,6 +2588,10 @@ impl HeadlessServer {
                     return false;
                 };
                 if popup_terminal_id.as_str() != terminal_id {
+                    return false;
+                }
+                let result = self.shell_client_popup_input_allowed(client_id, &popup_terminal_id);
+                if !self.client_input_permitted(client_id, "popup", result) {
                     return false;
                 }
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {

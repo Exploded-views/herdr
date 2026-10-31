@@ -784,13 +784,14 @@ async fn shell_endpoint_request_carries_its_clients_stored_caller() {
         .shell_endpoint_message(72, request("b"), respond_to)
         .expect("client 72");
 
-    // The remote bridge's client is remote; nothing defaults to local.
+    // The `remote` stamp is a separate signal (`--machine`, a bridge's origin); an SSH
+    // login travels as `via_ssh` on the lineage and is not stamped. Nothing defaults to local.
     assert_eq!(
         remote.caller,
         Caller::Peer {
             lineage: remote_lineage,
             token: None,
-            remote: true
+            remote: false
         }
     );
     assert_eq!(
@@ -1374,6 +1375,8 @@ async fn shell_client_pane_input_to_open_pane_allowed() {
 
 #[tokio::test]
 async fn shell_client_clipboard_image_to_protected_pane_refused() {
+    // Calls the paste routing directly: the event handler stages a file on disk first, and the
+    // gate sits in the routing step that follows.
     let mut f = gate_fixture(2);
     f.protect(0, vec![Principal::Outside]);
     let target = f.public(0);
@@ -1464,6 +1467,19 @@ async fn remote_shell_client_typing_allowed_by_default() {
 
     assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
     assert!(shell_errors(&notices).is_empty());
+
+    // An unreadable lineage over ssh is unknown, as a local one would be: refused on a
+    // protected pane, typing freely on an unbound one.
+    let unreadable = connect_shell_client(&mut f.server, 92, lineage_for(true, false));
+    let open = f.public(1);
+    type_into(&mut f.server, 92, &open);
+    assert_eq!(f.inputs[1].try_recv().unwrap().as_ref(), b"typed");
+    type_into(&mut f.server, 92, &target);
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&unreadable),
+        vec![input_denial(&target, "unknown")]
+    );
     shutdown_test_runtimes(&mut f.server);
 }
 
@@ -1491,16 +1507,22 @@ async fn remote_shell_client_denied_when_deny() {
     type_into(&mut f.server, 91, &target);
     assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
     assert!(shell_errors(&local).is_empty());
+    // The remote TUI is view-only on every pane, one with no policy included.
+    let unbound = f.public(1);
+    type_into(&mut f.server, 90, &unbound);
+    f.assert_no_bytes(1);
+    let errors = shell_errors(&notices);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("another host"), "{}", errors[0]);
     shutdown_test_runtimes(&mut f.server);
 }
 
 #[tokio::test]
 async fn remote_denial_names_the_bridge_binding() {
-    let (mut f, token, bridge_binding, _) = bridge_fixture();
+    let (mut f, _token, bridge_binding, _) = bridge_fixture();
     f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
     f.server.app.state.remote_settings.bridge_agent = Some("bridge".into());
     let other = f.public(1);
-    let _ = token;
 
     let response = f.call(peer(true, false), send_text(&other));
 
@@ -1510,5 +1532,138 @@ async fn remote_denial_names_the_bridge_binding() {
         message.contains(&format!("(bridge {bridge_binding})")),
         "{message}"
     );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn remote_shell_client_popup_input_denied_when_deny() {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    bridge_only(&mut f, RemoteOwnerTui::Deny);
+    let (popup_runtime, mut popup_input) =
+        crate::terminal::TerminalRuntime::test_with_channel(40, 12);
+    let (_, popup_id) = f.server.app.install_test_popup_runtime(popup_runtime);
+    let remote = connect_shell_client(&mut f.server, 93, lineage_for(true, true));
+    let local = connect_shell_client(&mut f.server, 94, lineage_for(false, true));
+    let popup_input_from = |server: &mut HeadlessServer, client_id: u64| {
+        server.handle_server_event(ServerEvent::ClientShellPopupInput {
+            client_id,
+            terminal_id: popup_id.to_string(),
+            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+                "typed".into(),
+            )],
+        });
+    };
+
+    popup_input_from(&mut f.server, 93);
+
+    assert!(popup_input.try_recv().is_err(), "bytes reached the popup");
+    let errors = shell_errors(&remote);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("another host"), "{}", errors[0]);
+    // A local client is not refused by the setting.
+    popup_input_from(&mut f.server, 94);
+    assert!(shell_errors(&local).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn repeated_refused_input_is_dropped_but_noticed_once() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let (blocked, open) = (f.public(0), f.public(1));
+    let notices = connect_shell_client(&mut f.server, 95, PeerLineage::default());
+
+    for _ in 0..3 {
+        type_into(&mut f.server, 95, &blocked);
+    }
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&blocked, "unknown")]
+    );
+
+    // An allowed input in between resets it, and the next refusal is told again.
+    type_into(&mut f.server, 95, &open);
+    assert_eq!(f.inputs[1].try_recv().unwrap().as_ref(), b"typed");
+    type_into(&mut f.server, 95, &blocked);
+    type_into(&mut f.server, 95, &blocked);
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&blocked, "unknown")]
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn remote_input_denial_names_the_bridge_binding() {
+    let (mut f, _token, bridge_binding, _) = bridge_fixture();
+    bridge_only(&mut f, crate::access::policy::RemoteOwnerTui::Deny);
+    f.server.app.state.remote_settings.bridge_agent = Some("bridge".into());
+    let other = f.public(1);
+    let notices = connect_shell_client(&mut f.server, 96, lineage_for(true, true));
+
+    type_into(&mut f.server, 96, &other);
+
+    f.assert_no_bytes(1);
+    let errors = shell_errors(&notices);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains(&format!("(bridge {bridge_binding})")),
+        "{}",
+        errors[0]
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn invalid_remote_owner_tui_config_makes_a_remote_tui_view_only() {
+    let config: crate::config::Config =
+        toml::from_str("[access]\nremote_input = \"bridge-only\"\nremote_owner_tui = \"maybe\"\n")
+            .unwrap();
+    let resolved = config.access.resolve();
+    let mut f = gate_fixture(2);
+    f.server.app.state.remote_settings = resolved.remote;
+    f.server.app.state.remote_owner_tui = resolved.remote_owner_tui;
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 97, lineage_for(true, true));
+
+    type_into(&mut f.server, 97, &target);
+
+    f.assert_no_bytes(0);
+    assert_eq!(shell_errors(&notices).len(), 1);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// Under remote_input = "any" nothing remote is refused: the same via_ssh TUI gets the same
+// answer for its API input and its typing into an open pane.
+#[tokio::test]
+async fn via_ssh_tui_api_and_typing_agree_under_remote_input_any() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 98, lineage_for(true, true));
+
+    type_into(&mut f.server, 98, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&notices).is_empty());
+
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    let message = f
+        .server
+        .shell_endpoint_message(
+            98,
+            api::schema::Request {
+                id: "s".into(),
+                method: send_text(&target),
+            },
+            respond_to,
+        )
+        .expect("client 98");
+    f.server.handle_api_request_with_shutdown_check(message);
+    let response = response_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
     shutdown_test_runtimes(&mut f.server);
 }
