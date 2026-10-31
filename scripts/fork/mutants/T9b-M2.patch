@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M2: the token is sent with --machine. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/target.rs b/src/cli/target.rs
+index 5be63a86..b2fdddfb 100644
+--- a/src/cli/target.rs
++++ b/src/cli/target.rs
+@@ -70,7 +70,7 @@ pub(super) fn is_remote() -> bool {
+ /// is an error that `finish_cli` reports and exits 2 on.
+ pub(super) fn api_client() -> io::Result<ApiClient> {
+     let client = base_client()?;
+-    if is_remote() {
++    if false {
+         return Ok(client);
+     }
+     match super::caller_token::for_local() {

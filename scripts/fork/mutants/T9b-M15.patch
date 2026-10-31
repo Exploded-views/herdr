@@ -1,0 +1,13 @@
+# herdr-fork: mutant T9b-M15: binding-target resolution accepts a holder that is not an agent. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/terminal_targets.rs b/src/app/terminal_targets.rs
+index 4e3b2cd9..4867c76f 100644
+--- a/src/app/terminal_targets.rs
++++ b/src/app/terminal_targets.rs
+@@ -138,7 +138,6 @@ impl App {
+             })
+             // As the pane-id path: a stale binding on a pane that used to
+             // hold an agent resolves to nothing.
+-            .filter(|candidate| self.target_is_agent(candidate))
+             .collect();
+         self.single_terminal_match(target, holders)?
+             .ok_or_else(not_found)

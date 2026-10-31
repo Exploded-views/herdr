@@ -1,0 +1,13 @@
+# herdr-fork: mutant T9b-M14: the server daemon command inherits HERDR_CALLER_TOKEN_FILE. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/autodetect.rs b/src/server/autodetect.rs
+index b6f53475..1450e948 100644
+--- a/src/server/autodetect.rs
++++ b/src/server/autodetect.rs
+@@ -249,7 +249,6 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
+     }
+ 
+     // The server must not carry a caller token file down to its panes.
+-    command.env_remove(crate::cli::caller_token::ENV_VAR);
+ 
+     command
+ }

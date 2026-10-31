@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M6: access.pane.set is open. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 247c8c6a..2b1237dd 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -249,7 +249,7 @@ impl App {
+             | Method::AccessCallerRemove(_) => GateTarget::AccessAdmin,
+             // Admin: only an outside caller changes a pane's policy, even to
+             // tighten it and even when nothing is protected yet.
+-            Method::AccessPaneSet(_) => GateTarget::AccessAdmin,
++            Method::AccessPaneSet(_) => GateTarget::Open,
+             // Open (Meta): reading a policy writes nothing into any pane.
+             Method::AccessPaneGet(_) => GateTarget::Open,
+             // Open: nothing here writes caller-chosen bytes into an existing pane.

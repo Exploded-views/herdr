@@ -1,0 +1,16 @@
+# herdr-fork: mutant T9b-M1: a binding target falls back to name matching. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/terminal_targets.rs b/src/app/terminal_targets.rs
+index 4e3b2cd9..63133354 100644
+--- a/src/app/terminal_targets.rs
++++ b/src/app/terminal_targets.rs
+@@ -87,7 +87,9 @@ impl App {
+         // nothing else, so a stale or malformed one can never land on another
+         // pane.
+         if target.starts_with(crate::access::policy::BINDING_PREFIX) {
+-            return self.resolve_binding_target(target);
++            if let Ok(found) = self.resolve_binding_target(target) {
++                return Ok(found);
++            }
+         }
+         if let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(target) {
+             if let Some(resolved) = self

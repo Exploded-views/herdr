@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M11: a token reaches any pane the policy admits (rule 2 skipped) via unknown-token path: unknown token matches registry first entry. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 247c8c6a..373da98d 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -107,7 +107,7 @@ impl App {
+         if self.state.access_callers.is_empty() {
+             return None;
+         }
+-        self.state.access_callers.lookup(token)
++        self.state.access_callers.lookup(token).or_else(|| self.state.access_callers.callers().next().map(|(n, b)| (n.to_string(), b.clone())))
+     }
+ 
+     /// Allow or refuse `method` for `caller`. Returns before classifying when
