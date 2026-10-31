@@ -1,4 +1,4 @@
-// herdr-fork: the named-caller registry: tokens stored only as sha256, each bound to one pane's access binding; a registry file that group or others can write is refused. Unofficial stopgap; see FORK.md.
+// herdr-fork: the named-caller registry: tokens stored only as sha256, each bound to one pane's access binding; a registry file that group or others can write, or that another user owns, is refused. Unofficial stopgap; see FORK.md.
 //! Named callers for `access.caller.*`. A caller's token is shown once, when it
 //! is minted; only its sha256 is kept, in memory and in the registry file.
 //! Nothing here prints, logs or formats a token.
@@ -91,7 +91,10 @@ fn ct_eq(a: &TokenHash, b: &TokenHash) -> bool {
 fn sync_dir(dir: &Path) -> io::Result<()> {
     match std::fs::File::open(dir) {
         Ok(handle) => handle.sync_all(),
-        Err(_) => Ok(()),
+        Err(err) => {
+            tracing::debug!(%err, dir = %dir.display(), "could not open the caller registry directory to sync it");
+            Ok(())
+        }
     }
 }
 
@@ -103,6 +106,15 @@ impl CallerRegistry {
     /// A missing file is an empty registry; an unreadable or malformed one is
     /// an error (its text is never put in the message).
     pub(crate) fn load(path: &Path) -> io::Result<Self> {
+        Self::load_checked(path, crate::platform::is_owned_by_other_user)
+    }
+
+    /// `load`, with the owner check supplied so a test can stand in for a
+    /// file that another user owns.
+    fn load_checked(
+        path: &Path,
+        owned_by_other_user: impl Fn(&std::fs::File) -> io::Result<bool>,
+    ) -> io::Result<Self> {
         use io::Read as _;
 
         let mut file = match std::fs::File::open(path) {
@@ -116,6 +128,16 @@ impl CallerRegistry {
                 io::ErrorKind::PermissionDenied,
                 format!(
                     "caller registry {} is writable by group or others; run chmod 600 on it",
+                    path.display()
+                ),
+            ));
+        }
+        // So can whoever owns it, and the owner's mode bits are theirs to set.
+        if owned_by_other_user(&file)? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "caller registry {} is not owned by the user running herdr",
                     path.display()
                 ),
             ));
@@ -521,6 +543,27 @@ mod tests {
             set_mode(mode);
             assert_eq!(CallerRegistry::load(&path).unwrap(), registry, "{mode:o}");
         }
+    }
+
+    #[test]
+    fn load_refuses_a_registry_owned_by_another_user() {
+        let dir = temp_dir();
+        let path = dir.path().join("access-callers.json");
+        let mut registry = CallerRegistry::default();
+        registry.add("alice", bid(1)).unwrap();
+        registry.save(&path).unwrap();
+        let err = CallerRegistry::load_checked(&path, |_| Ok(true)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let message = err.to_string();
+        assert!(message.contains("not owned"), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(!message.contains("alice"), "{message}");
+        // The same file loads when its owner is the current user.
+        assert_eq!(
+            CallerRegistry::load_checked(&path, |_| Ok(false)).unwrap(),
+            registry
+        );
+        assert_eq!(CallerRegistry::load(&path).unwrap(), registry);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+// herdr-fork: the server daemon and handoff child do not inherit HERDR_CALLER_TOKEN_FILE. Unofficial stopgap; see FORK.md.
 //! Auto-detect launch behavior for the `herdr` command.
 //!
 //! When the user runs `herdr` with no subcommand:
@@ -247,6 +248,9 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
             .env_remove("HERDR_CLIENT_SOCKET_PATH");
     }
 
+    // The server must not carry a caller token file down to its panes.
+    command.env_remove(crate::cli::caller_token::ENV_VAR);
+
     command
 }
 
@@ -473,6 +477,15 @@ mod tests {
 
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(STARTUP_CWD_ENV_VAR) && value == &Some(expected.as_os_str())
+        }));
+    }
+
+    #[test]
+    fn server_daemon_command_removes_caller_token_file() {
+        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new("HERDR_CALLER_TOKEN_FILE") && value.is_none()
         }));
     }
 

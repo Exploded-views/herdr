@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file and is_writable_by_others. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ChildPipe(std::fs::File);
@@ -516,6 +516,16 @@ pub(crate) fn is_writable_by_others(file: &std::fs::File) -> std::io::Result<boo
     Ok(file.metadata()?.permissions().mode() & 0o022 != 0)
 }
 
+/// True when `file` belongs to a user other than the one running this process.
+/// The caller registry is refused in that case.
+pub(crate) fn is_owned_by_other_user(file: &std::fs::File) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    Ok(file.metadata()?.uid() != uid)
+}
+
 /// 32 bytes from the OS random source.
 pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
     use std::io::Read as _;
@@ -751,6 +761,17 @@ pub(crate) fn set_default_plugin_pane_pwd(env: &mut Vec<(String, String)>, cwd: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_this_process_made_is_not_owned_by_another_user() {
+        let dir = std::env::temp_dir().join(format!("herdr-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f");
+        std::fs::write(&path, "x").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        assert!(!is_owned_by_other_user(&file).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn server_hangup_evidence_expires() {

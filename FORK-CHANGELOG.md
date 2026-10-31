@@ -66,3 +66,4 @@ a plan to send it upstream, and nothing has been proposed upstream.
 - The caller registry file must not be writable by group or others; otherwise it is refused at
   startup (callers are then empty and changes are refused) and the log says to `chmod 600` it.
   The registry's directory is synced after each save. *fork-only*
+- Caller token files stay out of child environments: panes, the server daemon and the handoff child no longer inherit `HERDR_CALLER_TOKEN_FILE`; an `acc_` target never matches a name in the terminal resolver and resolves only to an agent holder; a caller registry owned by another user is refused; an unreadable token file exits 2 through the normal CLI exit path. *fork-only*

@@ -3,7 +3,7 @@
 //! failure names the file and the OS error, not what the file held.
 
 use std::ffi::OsString;
-use std::io::Read as _;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -109,6 +109,31 @@ pub(crate) fn resolve(
         _ => return Ok(None),
     };
     read_token(&path).map(Some)
+}
+
+/// The caller token file could not be used. It travels inside an `io::Error`
+/// to `finish_cli`, which prints it as a usage error and exits 2.
+#[derive(Debug)]
+struct UnreadableTokenFile(String);
+
+impl std::fmt::Display for UnreadableTokenFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UnreadableTokenFile {}
+
+/// Wrap a `resolve` failure message for the trip to `finish_cli`.
+pub(crate) fn unreadable_error(message: String) -> io::Error {
+    io::Error::other(UnreadableTokenFile(message))
+}
+
+/// The line `finish_cli` prints (and exits 2 on) when `err` is an unusable token file.
+pub(crate) fn usage_report(err: &io::Error) -> Option<String> {
+    err.get_ref()
+        .and_then(|inner| inner.downcast_ref::<UnreadableTokenFile>())
+        .map(|unreadable| format!("error: {}", unreadable.0))
 }
 
 /// `resolve` with this process's flag and environment.

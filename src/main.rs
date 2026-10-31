@@ -1,4 +1,4 @@
-// herdr-fork: declares the pure access model module (`access`) and takes a leading `--caller-token-file`. Unofficial stopgap; see FORK.md.
+// herdr-fork: declares the pure access model module (`access`), takes a leading `--caller-token-file`, and exits 2 on an unusable token file. Unofficial stopgap; see FORK.md.
 use std::io;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
@@ -498,6 +498,12 @@ fn finish_cli(outcome: io::Result<cli::CommandOutcome>) -> io::Result<()> {
         Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
         Ok(cli::CommandOutcome::NotCli) => Ok(()),
         Err(err) if cli::protocol_mismatch_was_reported(&err) => std::process::exit(1),
+        Err(err) if cli::caller_token_usage_report(&err).is_some() => {
+            if let Some(report) = cli::caller_token_usage_report(&err) {
+                eprintln!("{report}");
+            }
+            std::process::exit(2);
+        }
         Err(err) if cli::server_not_running_was_reported(&err) => {
             if let Some(response) = cli::server_not_running_reported_response(&err) {
                 if let Ok(json) = serde_json::to_string(response) {

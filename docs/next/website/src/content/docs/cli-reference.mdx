@@ -449,6 +449,8 @@ HERDR_CALLER_TOKEN_FILE=PATH herdr pane send-text w1:p1 "hello"
 
 The file holds the token on one line (at most 1 KiB). If it can't be read, is empty or is oversized, the command prints `error: caller token file PATH unreadable: ...` and exits with status 2 before it connects. The token is read for the local server only. `--caller-token-file` together with `--machine` is a usage error (`--caller-token-file cannot be used with --machine`), and `HERDR_CALLER_TOKEN_FILE` is ignored for `--machine`, so a token never leaves this machine. The CLI never prints the token. A token that matches no caller is treated as no token: the request comes from outside, and a pane that lists only `caller:<name>` refuses it.
 
+Panes, the server and a handoff child do not inherit `HERDR_CALLER_TOKEN_FILE`; set it only in the shell of the caller that owns the token. A shell that exports it is classified as that caller, not as an admin, so `unset HERDR_CALLER_TOKEN_FILE` (or leave `--caller-token-file` off) before running `access` commands, which only an outside caller without a token may run.
+
 ### Addressing a pane by binding id
 
 Every bound pane has a binding id (`acc_` and 32 hex digits). An agent target that starts with `acc_` is a binding id and nothing else: it reaches the pane that holds that binding, and a target that is malformed or has no holder fails with `agent_not_found`. It is never tried as an agent name or a pane position. Agent names that start with `acc_` are refused when an agent is started or renamed.
@@ -462,7 +464,7 @@ herdr access pane set <pane> --accept-from LIST
 herdr access pane get <pane>
 ```
 
-`LIST` is `any`, or a comma-separated or repeated list of `none`, `outside` and `caller:<name>`. `set` binds the policy (keeping the pane's binding id if it has one); `any` removes it and opens the pane on purpose. `get` is open to every caller. Both print one line: the pane, its binding id (`-` when it has none) and the list (`any` when it has no policy). The API methods are `access.pane.set` and `access.pane.get`.
+`LIST` is `any`, or a comma-separated or repeated list of `none`, `outside` and `caller:<name>`. `set` binds the policy (keeping the pane's binding id if it has one); `any` removes it and opens the pane on purpose; callers bound to the old binding stay dangling (and refused) until you re-run `access caller retarget`. `get` is open to every caller and shows the whole `accept_from` list, including caller names such as `caller:ops`. Both print one line: the pane, its binding id (`-` when it has none) and the list (`any` when it has no policy). The API methods are `access.pane.set` and `access.pane.get`.
 
 ## Integrations
 

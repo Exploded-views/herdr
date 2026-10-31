@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage (socket peer -> verified process ancestry) for access classification, create_private_file and is_writable_by_others. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage (socket peer -> verified process ancestry) for access classification, create_private_file, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
 //! Platform-specific process and filesystem operations.
 //!
 //! Centralizes OS-dependent behavior behind a clean boundary so core
@@ -218,8 +218,8 @@ fn names_include_ssh_server<'a>(names: impl IntoIterator<Item = &'a str>) -> boo
 
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    create_private_file, is_writable_by_others, local_stream_peer_lineage, process_identity,
-    random_secret,
+    create_private_file, is_owned_by_other_user, is_writable_by_others, local_stream_peer_lineage,
+    process_identity, random_secret,
 };
 // Only tests and the access gate benchmark walk a lineage by pid.
 #[cfg(all(test, unix))]
@@ -250,6 +250,11 @@ pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std
 
 #[cfg(not(unix))]
 pub(crate) fn is_writable_by_others(_file: &std::fs::File) -> std::io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_owned_by_other_user(_file: &std::fs::File) -> std::io::Result<bool> {
     Ok(false)
 }
 

@@ -66,7 +66,8 @@ pub(super) fn is_remote() -> bool {
 
 /// The client for this command. A local server also gets the caller token,
 /// if one is configured; a saved machine never does (its requests go through
-/// an ssh bridge, and the token stays on this machine).
+/// an ssh bridge, and the token stays on this machine). An unusable token file
+/// is an error that `finish_cli` reports and exits 2 on.
 pub(super) fn api_client() -> io::Result<ApiClient> {
     let client = base_client()?;
     if is_remote() {
@@ -75,10 +76,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
     match super::caller_token::for_local() {
         Ok(Some(token)) => Ok(client.with_caller_token(token)),
         Ok(None) => Ok(client),
-        Err(message) => {
-            eprintln!("error: {message}");
-            std::process::exit(2);
-        }
+        Err(message) => Err(super::caller_token::unreadable_error(message)),
     }
 }
 
@@ -536,6 +534,28 @@ mod tests {
         with_test_client(ApiClient::local(), || {
             assert!(is_remote());
             assert!(!api_client().unwrap().has_caller_token());
+        });
+    }
+
+    #[test]
+    fn unreadable_token_file_is_a_usage_report_not_an_exit() {
+        let dir = crate::access::registry::TestDir::new("target-token-bad");
+        let missing = dir.path().join("missing");
+        let _flag = super::super::caller_token::set_test_flag(&missing);
+        let err = api_client().unwrap_err();
+        let report = super::super::caller_token::usage_report(&err).unwrap();
+        assert!(
+            report.starts_with(&format!(
+                "error: caller token file {} unreadable: ",
+                missing.display()
+            )),
+            "{report}"
+        );
+        // Other I/O errors are not mistaken for it.
+        assert!(super::super::caller_token::usage_report(&io::Error::other("boom")).is_none());
+        // A saved machine never reads the file, so it never fails on it.
+        with_test_client(ApiClient::local(), || {
+            assert!(api_client().is_ok());
         });
     }
 

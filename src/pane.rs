@@ -1,4 +1,4 @@
-// herdr-fork: test-only child pid setter for access classification tests. Unofficial stopgap; see FORK.md.
+// herdr-fork: test-only child pid setter for access classification tests; panes do not inherit HERDR_CALLER_TOKEN_FILE. Unofficial stopgap; see FORK.md.
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
@@ -194,6 +194,9 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_SESSION_ID",
         "CLAUDE_CODE_MESSAGING_TOKEN",
+        // The caller token file is for outside callers only; a pane's own
+        // `herdr` calls are classified by lineage and never present a token.
+        crate::cli::caller_token::ENV_VAR,
     ] {
         cmd.env_remove(key);
     }
@@ -4370,6 +4373,21 @@ mod tests {
         assert_eq!(
             cmd.get_env("ANTHROPIC_API_KEY"),
             Some(OsStr::new("fake-api-key"))
+        );
+        assert_eq!(cmd.get_env("DISPLAY"), Some(OsStr::new(":42")));
+    }
+
+    #[test]
+    fn pane_launch_env_removes_caller_token_file() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("HERDR_CALLER_TOKEN_FILE", "/outer/token");
+        cmd.env("DISPLAY", ":42");
+
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+
+        assert!(
+            cmd.get_env("HERDR_CALLER_TOKEN_FILE").is_none(),
+            "the caller token file path must not leak into panes"
         );
         assert_eq!(cmd.get_env("DISPLAY"), Some(OsStr::new(":42")));
     }

@@ -35,6 +35,13 @@ impl App {
         &self,
         target: &str,
     ) -> Result<TerminalTarget, TerminalTargetError> {
+        // `acc_` names a binding, which only agent targets address; no name,
+        // label or id here may ever match one.
+        if target.starts_with(crate::access::policy::BINDING_PREFIX) {
+            return Err(TerminalTargetError::NotFound {
+                target: target.to_string(),
+            });
+        }
         let terminal_matches: Vec<_> = self
             .terminal_targets()
             .into_iter()
@@ -129,6 +136,9 @@ impl App {
                     .and_then(|terminal| terminal.access.as_ref())
                     .is_some_and(|policy| policy.binding == binding)
             })
+            // As the pane-id path: a stale binding on a pane that used to
+            // hold an agent resolves to nothing.
+            .filter(|candidate| self.target_is_agent(candidate))
             .collect();
         self.single_terminal_match(target, holders)?
             .ok_or_else(not_found)
@@ -311,6 +321,16 @@ mod tests {
         binding
     }
 
+    fn make_agents(app: &mut App, targets: &[TerminalTarget]) {
+        for (index, target) in targets.iter().enumerate() {
+            app.state
+                .terminals
+                .get_mut(target.terminal_id.as_str())
+                .unwrap()
+                .set_agent_name(format!("agent-{index}"));
+        }
+    }
+
     fn app_with_targets() -> (App, Vec<TerminalTarget>) {
         let mut app = test_app();
         app.state = AppState::test_with_adversarial_identity_state();
@@ -322,6 +342,7 @@ mod tests {
     #[test]
     fn binding_id_target_resolves_only_its_terminal() {
         let (mut app, targets) = app_with_targets();
+        make_agents(&mut app, &targets);
         let bindings: Vec<_> = targets
             .iter()
             .map(|target| bind_to(&mut app, &target.terminal_id))
@@ -367,6 +388,56 @@ mod tests {
         app.state.unbind_access(&holder);
         assert!(matches!(
             app.resolve_agent_target(&held.to_string()),
+            Err(TerminalTargetError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn terminal_resolver_never_matches_acc_targets() {
+        let (mut app, targets) = app_with_targets();
+        let binding = bind_to(&mut app, &targets[0].terminal_id);
+        let terminal = app
+            .state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap();
+        terminal.set_agent_name(binding.to_string());
+        for target in [binding.to_string(), "acc_worker".to_string(), "acc_".into()] {
+            assert!(
+                matches!(
+                    app.resolve_terminal_target(&target),
+                    Err(TerminalTargetError::NotFound { .. })
+                ),
+                "{target} resolved"
+            );
+        }
+        // Ordinary names still resolve there.
+        app.state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name("worker".into());
+        assert_eq!(app.resolve_terminal_target("worker").unwrap(), targets[1]);
+    }
+
+    #[test]
+    fn binding_target_of_non_agent_holder_is_not_found() {
+        let (mut app, targets) = app_with_targets();
+        make_agents(&mut app, &targets);
+        let binding = bind_to(&mut app, &targets[0].terminal_id);
+        assert_eq!(
+            app.resolve_agent_target(&binding.to_string()).unwrap(),
+            targets[0]
+        );
+        // The pane stops holding an agent; the binding is stale.
+        app.state
+            .terminals
+            .get_mut(targets[0].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name(String::new());
+        assert!(!app.target_is_agent(&targets[0]));
+        assert!(matches!(
+            app.resolve_agent_target(&binding.to_string()),
             Err(TerminalTargetError::NotFound { .. })
         ));
     }
