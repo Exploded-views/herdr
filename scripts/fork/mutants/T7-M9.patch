@@ -1,9 +1,8 @@
 # herdr-fork: mutant T7-M9: a shell endpoint request is sent as an empty local caller. Unofficial stopgap; see FORK.md.
 diff --git a/src/server/headless/endpoint_requests.rs b/src/server/headless/endpoint_requests.rs
-index 3bd05d08..5a405ae6 100644
 --- a/src/server/headless/endpoint_requests.rs
 +++ b/src/server/headless/endpoint_requests.rs
-@@ -136,7 +136,12 @@ impl HeadlessServer {
+@@ -136,7 +136,13 @@
          request: api::schema::Request,
          respond_to: std::sync::mpsc::Sender<String>,
      ) -> Option<api::ApiRequestMessage> {
@@ -13,6 +12,7 @@ index 3bd05d08..5a405ae6 100644
 +            lineage: crate::platform::PeerLineage::default(),
 +            token: None,
 +            remote: false,
++            conn: 0,
 +        };
          Some(api::ApiRequestMessage {
              request,

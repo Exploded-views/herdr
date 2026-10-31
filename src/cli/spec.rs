@@ -1,4 +1,4 @@
-// herdr-fork: help spec for `herdr access caller` and `herdr access pane`. Unofficial stopgap; see FORK.md.
+// herdr-fork: help spec for `herdr access caller`, `herdr access pane` and `herdr access log`. Unofficial stopgap; see FORK.md.
 use std::io::Write;
 
 use clap::{Arg, ArgAction, Command, ValueHint};
@@ -342,6 +342,13 @@ fn access_command() -> Command {
                         .about("Show a pane's access policy")
                         .arg(required("pane", "PANE")),
                 ),
+        )
+        .subcommand(
+            Command::new("log")
+                .about("Show where each pane input came from, newest first")
+                .arg(option("limit", "N"))
+                .arg(flag("json"))
+                .arg(flag("file")),
         )
 }
 

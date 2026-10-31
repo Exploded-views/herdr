@@ -1,4 +1,4 @@
-// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default; tests the `node_name` key. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -750,6 +750,33 @@ fn access_input_log_key_is_accepted_and_defaults_on() {
     assert_eq!(bad.diagnostics.len(), 1, "{:?}", bad.diagnostics);
     assert!(bad.diagnostics[0].contains("access.input_log"));
     assert_eq!(bad.defaults.default, Some(vec![Principal::Outside]));
+}
+
+#[test]
+fn access_node_name_defaults_and_is_validated() {
+    assert_eq!(config_from("").access.resolve().node_name, "node");
+    let named = config_from("[access]\nnode_name = \"node-a\"\n")
+        .access
+        .resolve();
+    assert_eq!(named.node_name, "node-a");
+    assert!(named.diagnostics.is_empty(), "{:?}", named.diagnostics);
+    // A bad value falls back to the default and says so; the rest of the config survives.
+    for bad in ["\"has space\"", "\"\"", "7", "\"a/b\""] {
+        let resolved = config_from(&format!(
+            "[access]\nnode_name = {bad}\n[access.default]\naccept_from = [\"outside\"]\n"
+        ))
+        .access
+        .resolve();
+        assert_eq!(resolved.node_name, "node", "{bad}");
+        assert_eq!(
+            resolved.diagnostics.len(),
+            1,
+            "{bad}: {:?}",
+            resolved.diagnostics
+        );
+        assert!(resolved.diagnostics[0].contains("access.node_name"));
+        assert_eq!(resolved.defaults.default, Some(vec![Principal::Outside]));
+    }
 }
 
 #[test]

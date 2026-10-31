@@ -1,4 +1,4 @@
-// herdr-fork: restore the per-pane access policy in every restore branch. Unofficial stopgap; see FORK.md.
+// herdr-fork: restore the per-pane access policy in every restore branch; a test pins that an adopted pane caches its shell identity. Unofficial stopgap; see FORK.md.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2063,6 +2063,62 @@ mod tests {
                 state_before_handoff == AgentState::Blocked
             );
         }
+    }
+
+    /// A pane the new server adopts keeps its shell, so its identity (pid and start token)
+    /// is read when the pane is adopted. Without it the new server could not tell a caller
+    /// inside that pane from one outside, and would have to walk /proc for every input.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn inherited_pane_child_identity_computed_on_adopt() {
+        let (snapshot, _) = snapshot_with_saved_pane_history();
+        let (events, _events_rx) = mpsc::channel(32);
+        let (workspaces, _terminals, runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            4096,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events.clone(),
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let pane_id = workspaces[0].tabs[0].panes.keys().next().copied().unwrap();
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::from(runtimes);
+        let spawned = runtimes.values().next().unwrap();
+
+        // A spawned pane caches its shell's identity as it starts.
+        let pid = spawned.child_pid().expect("a running shell");
+        let identity = spawned.child_identity().expect("identity cached at spawn");
+        assert_eq!(identity.pid, pid);
+        assert_eq!(Some(identity), crate::platform::process_identity(pid));
+
+        // The adopting runtime reads it again, from the shell it inherited.
+        spawned
+            .pause_handoff_reader(std::time::Duration::from_secs(2))
+            .unwrap();
+        let state = spawned.handoff_runtime_state(pane_id.raw());
+        let state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let adopted = TerminalRuntime::from_handoff_fd(
+            crate::handoff_runtime::ImportedHandoffRuntime {
+                master_fd: spawned.duplicate_handoff_fd().unwrap(),
+                state,
+            },
+            4096,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+        assert_eq!(adopted.child_pid(), Some(pid));
+        assert_eq!(adopted.child_identity(), Some(identity));
+        drop(adopted);
+        drop(runtimes);
     }
 
     #[tokio::test]

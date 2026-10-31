@@ -1,4 +1,4 @@
-// herdr-fork: adds AccessClass and Operation.access (per-operation access class); the policy-table test lists the access.caller.* and access.pane.* rows. Unofficial stopgap; see FORK.md.
+// herdr-fork: adds AccessClass and Operation.access (per-operation access class); the policy-table test lists the access.caller.* and access.pane.* rows; lists access.log as Control and pins that no Input method rides the client-shell lane. Unofficial stopgap; see FORK.md.
 use std::sync::LazyLock;
 
 /// How much a caller can do through an operation, used to gate requests per pane.
@@ -227,6 +227,7 @@ mod tests {
             "access.caller.retarget",
             "access.caller.remove",
             "access.pane.set",
+            "access.log",
         ];
         let meta = [
             "ping",
@@ -314,6 +315,29 @@ mod tests {
         for listed in input.iter().chain(&read).chain(&control).chain(&meta) {
             assert!(names.contains(listed), "unknown operation {listed}");
         }
+    }
+
+    /// The client-shell endpoint lane carries only methods with `client_shell: true`. An
+    /// Input method there would reach a pane's PTY on a path the input log does not see, so a
+    /// new row (an upstream merge, say) fails here until the lane or the log is extended.
+    #[test]
+    fn no_input_method_on_client_shell_lane() {
+        use super::super::AccessClass;
+
+        for operation in Method::OPERATIONS {
+            assert!(
+                !(operation.client_shell && operation.access == AccessClass::Input),
+                "{} is an Input method on the client-shell lane",
+                operation.name
+            );
+        }
+        // The log itself is not reachable from the lane either.
+        let log = Method::OPERATIONS
+            .iter()
+            .find(|operation| operation.name == "access.log")
+            .unwrap();
+        assert!(!log.client_shell);
+        assert_eq!(log.access, AccessClass::Control);
     }
 
     #[test]

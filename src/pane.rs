@@ -1,4 +1,4 @@
-// herdr-fork: test-only child pid setter for access classification tests; panes do not inherit HERDR_CALLER_TOKEN_FILE. Unofficial stopgap; see FORK.md.
+// herdr-fork: test-only child pid setter for access classification tests; panes do not inherit HERDR_CALLER_TOKEN_FILE; a pane runtime caches its shell identity and counts the bytes users send. Unofficial stopgap; see FORK.md.
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
@@ -1498,6 +1498,26 @@ async fn run_terminal_compression_task(
     }
 }
 
+/// What the access classifier and the input-origin log need from a pane without a syscall.
+#[derive(Default)]
+struct InputMeta {
+    /// The pane shell's pid and start token, read once at spawn or adoption so that
+    /// classifying a caller is a comparison. Cleared when the child exits, so a reused pid
+    /// never matches.
+    child_identity: Arc<Mutex<Option<crate::platform::ProcessIdentity>>>,
+    /// Bytes written to the PTY through `try_send_bytes`, for the client-path log entries.
+    user_bytes: std::sync::atomic::AtomicU64,
+}
+
+impl InputMeta {
+    fn cache_child_identity(&self, pid: u32) {
+        let identity = crate::platform::process_identity(pid);
+        if let Ok(mut slot) = self.child_identity.lock() {
+            *slot = identity;
+        }
+    }
+}
+
 /// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
 /// Dropping this aborts async tasks and closes the PTY. An already-running bounded
 /// compression step may finish before releasing its terminal reference.
@@ -1507,6 +1527,8 @@ pub struct PaneRuntime {
     io: PaneRuntimeIo,
     current_size: Cell<(u16, u16, u32, u32)>,
     child_pid: Arc<AtomicU32>,
+    /// The child's cached identity and the bytes users sent; see `InputMeta`.
+    input_meta: InputMeta,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     persistence_cwd: Mutex<Option<std::path::PathBuf>>,
     cwd_process_exited: Arc<AtomicBool>,
@@ -2560,6 +2582,10 @@ impl PaneRuntime {
         }
         let terminal = Arc::new(PaneTerminal::new(pane_terminal));
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        // An adopted pane's shell keeps its pid and start token across the handoff: cache them
+        // so the new server classifies callers without reading /proc or calling proc_pidinfo.
+        let input_meta = InputMeta::default();
+        input_meta.cache_child_identity(child_pid);
         let child_pid = Arc::new(AtomicU32::new(child_pid));
         let reported_cwd = Arc::new(Mutex::new(None));
         let cwd_process_exited = Arc::new(AtomicBool::new(false));
@@ -2668,6 +2694,7 @@ impl PaneRuntime {
             io,
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
+            input_meta,
             reported_cwd,
             persistence_cwd: Mutex::new(None),
             cwd_process_exited,
@@ -2732,6 +2759,7 @@ impl PaneRuntime {
 
         // --- Child watcher task ---
         let child_pid = Arc::new(AtomicU32::new(0));
+        let input_meta = InputMeta::default();
         let reported_cwd = Arc::new(Mutex::new(None));
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
@@ -2740,12 +2768,14 @@ impl PaneRuntime {
         let self_reported_agent_active = Arc::new(AtomicBool::new(false));
         {
             let child_pid = child_pid.clone();
+            let child_identity = input_meta.child_identity.clone();
             let child_wait_completed = child_wait_completed.clone();
             let events = events.clone();
             let rt = tokio::runtime::Handle::current();
             let mut child = spawned.child;
             if let Some(pid) = child.process_id() {
                 child_pid.store(pid, Ordering::Release);
+                input_meta.cache_child_identity(pid);
                 crate::logging::pane_spawned(pane_id.raw(), pid);
             }
             tokio::task::spawn_blocking(move || {
@@ -2762,6 +2792,10 @@ impl PaneRuntime {
                     }
                 };
                 child_wait_completed.store(true, Ordering::Release);
+                // The pid may be reused from now on: stop matching callers against it.
+                if let Ok(mut identity) = child_identity.lock() {
+                    *identity = None;
+                }
                 // Use blocking send — PaneDied is critical, must not be dropped
                 if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
                     pane_id,
@@ -3281,6 +3315,7 @@ impl PaneRuntime {
             io,
             current_size: Cell::new((rows, cols, 0, 0)),
             child_pid,
+            input_meta,
             reported_cwd,
             persistence_cwd: Mutex::new(None),
             cwd_process_exited: child_wait_completed.clone(),
@@ -3675,7 +3710,12 @@ impl PaneRuntime {
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
-        self.io.try_send_bytes(bytes)
+        let len = bytes.len() as u64;
+        let sent = self.io.try_send_bytes(bytes);
+        if sent.is_ok() {
+            self.input_meta.user_bytes.fetch_add(len, Ordering::Relaxed);
+        }
+        sent
     }
 
     /// Preflight a complete API command without changing input queue semantics.
@@ -3848,10 +3888,36 @@ impl PaneRuntime {
         (pid > 0).then_some(pid)
     }
 
+    /// The pane shell's identity as read at spawn or adoption. `None` once the child has
+    /// exited, or when it could not be read.
+    pub(crate) fn child_identity(&self) -> Option<crate::platform::ProcessIdentity> {
+        match self.input_meta.child_identity.lock() {
+            Ok(identity) => *identity,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+
+    /// Bytes users have written to this pane through `try_send_bytes` so far.
+    pub(crate) fn user_bytes_sent(&self) -> u64 {
+        self.input_meta.user_bytes.load(Ordering::Relaxed)
+    }
+
     /// Lets an access test give a channel-backed runtime a shell pid.
     #[cfg(test)]
     pub(crate) fn test_set_child_pid(&self, pid: u32) {
         self.child_pid.store(pid, Ordering::Release);
+        self.input_meta.cache_child_identity(pid);
+    }
+
+    /// Lets an access test give a channel-backed runtime an exact cached identity.
+    #[cfg(test)]
+    pub(crate) fn test_set_child_identity(
+        &self,
+        identity: Option<crate::platform::ProcessIdentity>,
+    ) {
+        if let Ok(mut slot) = self.input_meta.child_identity.lock() {
+            *slot = identity;
+        }
     }
 
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
@@ -4081,6 +4147,7 @@ impl PaneRuntime {
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
+                input_meta: InputMeta::default(),
                 reported_cwd: Arc::new(Mutex::new(None)),
                 persistence_cwd: Mutex::new(None),
                 cwd_process_exited: Arc::new(AtomicBool::new(false)),
@@ -5451,6 +5518,7 @@ mod tests {
             },
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
+            input_meta: InputMeta::default(),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
@@ -5491,6 +5559,7 @@ mod tests {
             },
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
+            input_meta: InputMeta::default(),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),

@@ -426,6 +426,14 @@ herdr access pane get <pane>
 
 `LIST` は `any`、または `none`、`outside`、`caller:<name>` のカンマ区切りまたは繰り返し指定のリストです。`set` はポリシーをバインドします(ペインにバインド ID があればそれを維持します)。`any` はポリシーを削除し、意図的にペインを開放します。古いバインドに紐づく呼び出し元は、`access caller retarget` を再実行するまで宙に浮いた状態(かつ拒否される状態)のままです。`get` はすべての呼び出し元に開かれており、`caller:ops` のような呼び出し元名を含む `accept_from` リスト全体を表示します。どちらも 1 行を出力します。ペイン、そのバインド ID(ない場合は `-`)、リスト(ポリシーがない場合は `any`)です。API メソッドは `access.pane.set` と `access.pane.get` です。
 
+入力元ログ(フォーク専用)は既定で有効で、各ペイン入力がどこから来たかを記録します。次のコマンドで読みます。
+
+```bash
+herdr access log [--limit N] [--json] [--file]
+```
+
+新しいものから 1 行ずつ表示します。時刻(UTC)、ペイン、`path/route`(`api/pane.send_text`、`client/shell.pane_input`、`client/attach.input`)、送信者クラス(`pane:<id>`、`outside`、`outside_ssh`、`remote`、`caller:<name>`、`unknown`)、クライアント(`api:<connection>`、`shell:<id>`、`attach:<id>`)、ホスト種別(`local`、`ssh`、`remote-stamp`)、バイト数、判定、そして 1 件にまとめられた連続入力の `×count` です。入力内容は表示されません。書き込みが追いつかなかった場合は、最後の `dropped: N` 行で失われた件数が分かります。読めるのは、どのペインの外側にいる呼び出し元だけです。`--file` はサーバーが停止しているとき、herdr のデータディレクトリから `access-input.log`(とローテーションされた `.1`)を読みます。`[access] input_log = false` でログを無効にできます。API メソッドは `access.log` です。
+
 ## インテグレーション
 
 ```bash

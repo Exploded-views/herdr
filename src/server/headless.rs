@@ -1,4 +1,4 @@
-// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes; shell-client pane input and pane clipboard-image paste are checked against the pane's policy with the client's own caller class. Unofficial stopgap; see FORK.md.
+// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes; shell-client pane input and pane clipboard-image paste are checked against the pane's policy with the client's own caller class; client input is recorded in the input log. Unofficial stopgap; see FORK.md.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -78,6 +78,7 @@ use crate::server::terminal_attach::paste_payload_for_runtime;
 mod bootstrap;
 mod client_views;
 mod endpoint_requests;
+mod input_origin;
 mod lifecycle;
 mod native_graphics;
 mod notifications;
@@ -1273,8 +1274,11 @@ impl HeadlessServer {
                 };
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                     let payload = paste_payload_for_runtime(runtime, &path);
+                    let sent = payload.len() as u64;
                     if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
                         warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach clipboard image paste failed");
+                    } else {
+                        self.log_attach_input(client_id, terminal_id, "attach.input", sent);
                     }
                 }
                 true
@@ -1294,6 +1298,13 @@ impl HeadlessServer {
                 };
                 let result = self.shell_client_input_allowed(client_id, &pane_id);
                 if !self.client_input_permitted(client_id, &pane_id, result) {
+                    self.log_shell_pane_input(
+                        client_id,
+                        &pane_id,
+                        "shell.clipboard_image",
+                        path.len() as u64,
+                        false,
+                    );
                     return false;
                 }
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
@@ -1312,12 +1323,20 @@ impl HeadlessServer {
                 ) else {
                     return foreground_changed | geometry_changed;
                 };
+                let bytes_before = runtime.user_bytes_sent();
                 if let Err(err) = apply_client_pane_input_events(
                     runtime,
                     &[protocol::ClientPaneInputEvent::Paste(path)],
                 ) {
                     warn!(client_id, pane_id, err = %err, "client shell clipboard image paste failed");
                 }
+                self.log_shell_pane_input(
+                    client_id,
+                    &pane_id,
+                    "shell.clipboard_image",
+                    runtime.user_bytes_sent().saturating_sub(bytes_before),
+                    true,
+                );
                 true
             }
             protocol::ClientClipboardImageTarget::Popup(terminal_id) => {
@@ -1507,9 +1526,16 @@ impl HeadlessServer {
             modifiers,
             lines: lines.max(1),
         };
+        let bytes_before = runtime.user_bytes_sent();
         if let Err(err) = apply_client_pane_input_events(runtime, &[event]) {
             warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach mouse input failed");
         }
+        self.log_attach_input(
+            client_id,
+            &terminal_id,
+            "attach.mouse",
+            runtime.user_bytes_sent().saturating_sub(bytes_before),
+        );
         true
     }
 
@@ -2201,9 +2227,16 @@ impl HeadlessServer {
                     return false;
                 };
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
+                    let bytes_before = runtime.user_bytes_sent();
                     if let Err(err) = apply_terminal_attach_input(runtime, data) {
                         warn!(client_id, terminal_id = %terminal_id, err = %err);
                     }
+                    self.log_attach_input(
+                        client_id,
+                        terminal_id,
+                        "attach.input",
+                        runtime.user_bytes_sent().saturating_sub(bytes_before),
+                    );
                 }
                 true
             }
@@ -2482,7 +2515,15 @@ impl HeadlessServer {
                     return false;
                 };
                 let result = self.shell_client_input_allowed(client_id, &pane_id);
+                let payload_len = input_origin::client_events_payload_len(&events);
                 if !self.client_input_permitted(client_id, &pane_id, result) {
+                    self.log_shell_pane_input(
+                        client_id,
+                        &pane_id,
+                        "shell.pane_input",
+                        payload_len,
+                        false,
+                    );
                     return false;
                 }
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
@@ -2492,6 +2533,7 @@ impl HeadlessServer {
                 ) else {
                     return false;
                 };
+                let bytes_before = runtime.user_bytes_sent();
                 super::pane_input::downgrade_ineligible_pixel_mouse(
                     &mut events,
                     pixel_mouse,
@@ -2527,6 +2569,13 @@ impl HeadlessServer {
                     if let Err(err) = apply_client_pane_input_events(runtime, &releases) {
                         warn!(client_id, pane_id, err = %err, "targeted client shell release failed");
                     }
+                    self.log_shell_pane_input(
+                        client_id,
+                        &pane_id,
+                        "shell.pane_input",
+                        runtime.user_bytes_sent().saturating_sub(bytes_before),
+                        true,
+                    );
                     return runtime.scroll_metrics() != scroll_before;
                 }
                 let interaction = client_pane_input_has_interaction(&events);
@@ -2554,6 +2603,13 @@ impl HeadlessServer {
                     &mut keyboard_forwarded,
                 );
                 let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                self.log_shell_pane_input(
+                    client_id,
+                    &pane_id,
+                    "shell.pane_input",
+                    runtime.user_bytes_sent().saturating_sub(bytes_before),
+                    true,
+                );
                 if keyboard_forwarded {
                     self.note_interactive_input(runtime_pane_id, Instant::now());
                 }
@@ -2592,12 +2648,15 @@ impl HeadlessServer {
                     return false;
                 }
                 let result = self.shell_client_popup_input_allowed(client_id, &popup_terminal_id);
+                let payload_len = input_origin::client_events_payload_len(&events);
                 if !self.client_input_permitted(client_id, "popup", result) {
+                    self.log_shell_popup_input(client_id, &popup_terminal_id, payload_len, false);
                     return false;
                 }
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
                     return false;
                 };
+                let bytes_before = runtime.user_bytes_sent();
                 super::pane_input::downgrade_ineligible_pixel_mouse(
                     &mut events,
                     pixel_mouse,
@@ -2622,6 +2681,12 @@ impl HeadlessServer {
                     if let Err(err) = apply_client_popup_input_events(runtime, &releases) {
                         warn!(client_id, terminal_id, err = %err, "targeted client popup release failed");
                     }
+                    self.log_shell_popup_input(
+                        client_id,
+                        &popup_terminal_id,
+                        runtime.user_bytes_sent().saturating_sub(bytes_before),
+                        true,
+                    );
                     return runtime.scroll_metrics() != scroll_before;
                 }
                 let interaction = client_pane_input_has_interaction(&events);
@@ -2647,6 +2712,12 @@ impl HeadlessServer {
                     &mut keyboard_forwarded,
                 );
                 let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                self.log_shell_popup_input(
+                    client_id,
+                    &popup_terminal_id,
+                    runtime.user_bytes_sent().saturating_sub(bytes_before),
+                    true,
+                );
                 if keyboard_forwarded {
                     self.note_interactive_input(popup_pane_id, Instant::now());
                 }
@@ -3063,7 +3134,7 @@ impl HeadlessServer {
 
         // The access gate: every request passes it before anything reads or
         // writes a pane, including the alt-screen defer below.
-        if let Err(denied) = self.app.check_access(&msg.request.method, &msg.caller) {
+        if let Err(denied) = self.app.gate_input(&msg.request.method, &msg.caller, false) {
             Self::reject_api_request_for_access(msg, &denied);
             return false;
         }
@@ -3188,7 +3259,7 @@ impl HeadlessServer {
         // ids (a closed workspace) or make a target resolvable, so decide again
         // on the state the handler will resolve against. Nothing between here
         // and the handler mutates it.
-        if let Err(denied) = self.app.check_access(&msg.request.method, &msg.caller) {
+        if let Err(denied) = self.app.gate_input(&msg.request.method, &msg.caller, true) {
             Self::reject_api_request_for_access(msg, &denied);
             return changed;
         }

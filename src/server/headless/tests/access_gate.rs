@@ -1,4 +1,4 @@
-// herdr-fork: tests for the per-pane access gate in the api request path and for shell-client input. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for the per-pane access gate in the api request path and for shell-client input; tests the input-origin log (api, shell client, attach, popup, flush) and a policy bound in the harvest phase. Unofficial stopgap; see FORK.md.
 // access gate
 use super::*;
 use crate::access::caller::Caller;
@@ -216,6 +216,7 @@ fn peer(via_ssh: bool, remote: bool) -> Caller {
         },
         token: None,
         remote,
+        conn: 0,
     }
 }
 
@@ -523,6 +524,41 @@ async fn defaults_leave_behaviour_unchanged() {
         "{response}"
     );
 
+    // Delta R2 amends "off" by one exception: with `input_log` on (the default) each Input
+    // request is classified once, from cached identities, to name its sender in the log.
+    // The seven requests above are Input class; the log records them (bursts from one sender
+    // merge into one entry), and nothing else is classified.
+    assert_eq!(
+        crate::app::access_gate::classify_calls() - before,
+        7,
+        "only the Input requests are classified, once each"
+    );
+    let recorded: u32 = f
+        .server
+        .app
+        .input_log_snapshot(usize::MAX)
+        .0
+        .iter()
+        .map(|event| event.count)
+        .sum();
+    assert_eq!(recorded, 7);
+
+    // With `[access] input_log = false` the zero-classification off path holds exactly.
+    while f.inputs[0].try_recv().is_ok() {}
+    f.server.app.state.input_log = false;
+    let before = crate::app::access_gate::classify_calls();
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, send_text(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    for caller in [peer(true, true), peer(false, false)] {
+        let response = f.call(caller, send_text(&target));
+        assert!(error_code(&response).is_none(), "{response}");
+        assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    }
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, agent_start(&target));
+    assert_ne!(error_code(&response).as_deref(), Some("access_denied"));
     assert_eq!(
         crate::app::access_gate::classify_calls(),
         before,
@@ -791,7 +827,8 @@ async fn shell_endpoint_request_carries_its_clients_stored_caller() {
         Caller::Peer {
             lineage: remote_lineage,
             token: None,
-            remote: false
+            remote: false,
+            conn: 0,
         }
     );
     assert_eq!(
@@ -799,7 +836,8 @@ async fn shell_endpoint_request_carries_its_clients_stored_caller() {
         Caller::Peer {
             lineage: local_lineage,
             token: None,
-            remote: false
+            remote: false,
+            conn: 0,
         }
     );
     assert_ne!(
@@ -807,7 +845,8 @@ async fn shell_endpoint_request_carries_its_clients_stored_caller() {
         Caller::Peer {
             lineage: PeerLineage::default(),
             token: None,
-            remote: false
+            remote: false,
+            conn: 0,
         }
     );
     assert!(server
@@ -985,6 +1024,7 @@ fn token_peer(token: &str) -> Caller {
         lineage,
         token: Some(token.to_string()),
         remote,
+        conn: 0,
     }
 }
 
@@ -1748,5 +1788,516 @@ async fn shell_client_input_for_a_missing_client_is_refused() {
     type_into(&mut f.server, 999, &pane);
     f.assert_no_bytes(0);
     assert!(popup_input.try_recv().is_err());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// ---- the input-origin log ----
+
+fn logged(f: &Fixture) -> Vec<crate::access::input_log::InputEvent> {
+    f.server.app.input_log_snapshot(usize::MAX).0
+}
+
+/// Pane 0's runtime reports the mouse, so a click is written to it.
+fn mouse_tracking_runtime(f: &mut Fixture) -> tokio::sync::mpsc::Receiver<bytes::Bytes> {
+    let (runtime, input) = crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+        80,
+        24,
+        0,
+        b"\x1b[?1000h\x1b[?1006h",
+        4,
+    );
+    f.server
+        .app
+        .terminal_runtimes
+        .insert(f.terminals[0].clone(), runtime);
+    input
+}
+
+fn attach_client(f: &mut Fixture, client_id: u64, index: usize, lineage: PeerLineage) {
+    let mut client = ClientConnection::new_with_mode(
+        ClientConnectionMode::TerminalAttach {
+            terminal_id: f.terminals[index].to_string(),
+        },
+        (80, 24),
+        crate::kitty_graphics::HostCellSize::default(),
+        1,
+        RenderEncoding::TerminalAnsi,
+        None,
+    );
+    client.set_peer_lineage(lineage);
+    f.server.clients.insert(client_id, client);
+}
+
+#[tokio::test]
+async fn api_input_logged_with_path_class_and_bytes() {
+    use crate::access::input_log::{InputPath, LoggedClass};
+    let mut f = gate_fixture(2);
+    let target = f.public(0);
+    let sender = f.public(1);
+    let before = crate::app::access_gate::classify_calls();
+
+    let response = f.call(
+        outside(),
+        Method::PaneSendText(PaneSendTextParams {
+            pane_id: target.clone(),
+            text: "héllo".into(),
+        }),
+    );
+    assert!(error_code(&response).is_none(), "{response}");
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, send_keys(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+
+    let events = logged(&f);
+    assert_eq!(events.len(), 2, "{events:?}");
+    // Newest first.
+    let keys = &events[0];
+    assert_eq!(keys.path, InputPath::Api);
+    assert_eq!(keys.route, "pane.send_keys");
+    assert_eq!(keys.class, LoggedClass::Pane);
+    assert_eq!(keys.principal.as_deref(), Some(sender.as_str()));
+    assert_eq!(keys.bytes, 1);
+    let text = &events[1];
+    assert_eq!(text.route, "pane.send_text");
+    assert_eq!(text.class, LoggedClass::Outside);
+    assert_eq!(text.principal, None);
+    assert_eq!(text.bytes, "héllo".len() as u64);
+    for event in &events {
+        assert_eq!(event.pane, target);
+        assert_eq!(event.terminal, f.terminals[0].as_str());
+        assert_eq!(event.client, "api:0");
+        assert_eq!(event.host, "local");
+        assert_eq!(event.decision, "allow");
+        assert_eq!(event.count, 1);
+    }
+    // One classification per request, from cached identities.
+    assert_eq!(crate::app::access_gate::classify_calls() - before, 2);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn api_denial_is_logged_as_its_own_entry() {
+    use crate::access::input_log::LoggedClass;
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+
+    for _ in 0..2 {
+        let caller = f.pane_caller(1);
+        let response = f.call(caller, send_text(&target));
+        assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    }
+    let response = f.call(outside(), send_text(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+
+    let events = logged(&f);
+    // Two refusals never merge; the allow after them is its own entry.
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[0].decision, "allow");
+    for denied in &events[1..] {
+        assert_eq!(denied.decision, "deny");
+        assert_eq!(denied.class, LoggedClass::Pane);
+        assert_eq!(denied.count, 1);
+    }
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn read_and_meta_requests_not_logged() {
+    let mut f = gate_fixture(2);
+    let target = f.public(0);
+    let before = crate::app::access_gate::classify_calls();
+
+    f.call(outside(), interactive_read(&target));
+    f.call(
+        outside(),
+        Method::Ping(crate::api::schema::PingParams::default()),
+    );
+    let caller = f.pane_caller(1);
+    f.call(caller, Method::WorkspaceList(Default::default()));
+
+    assert!(logged(&f).is_empty());
+    assert_eq!(
+        crate::app::access_gate::classify_calls(),
+        before,
+        "reads and meta requests are neither classified nor logged"
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn input_log_false_restores_off_path() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.input_log = false;
+    let target = f.public(0);
+    let before = crate::app::access_gate::classify_calls();
+
+    for _ in 0..3 {
+        let caller = f.pane_caller(1);
+        let response = f.call(caller, send_text(&target));
+        assert!(error_code(&response).is_none(), "{response}");
+        assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    }
+    let _client = connect_shell_client(&mut f.server, 61, lineage_for(false, true));
+    type_into(&mut f.server, 61, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+
+    assert_eq!(crate::app::access_gate::classify_calls(), before);
+    assert!(logged(&f).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn shell_client_input_logged_as_client_path() {
+    use crate::access::input_log::{InputPath, LoggedClass};
+    let mut f = gate_fixture(2);
+    let target = f.public(0);
+    let _typed = connect_shell_client(&mut f.server, 81, lineage_for(false, true));
+
+    type_into(&mut f.server, 81, &target);
+
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert_eq!(event.path, InputPath::Client);
+    assert_eq!(event.route, "shell.pane_input");
+    assert_eq!(event.class, LoggedClass::Outside);
+    assert_eq!(event.client, "shell:81");
+    assert_eq!(event.host, "local");
+    assert_eq!(event.bytes, "typed".len() as u64);
+    assert_eq!(event.decision, "allow");
+    assert_eq!(event.pane, target);
+    assert_eq!(event.terminal, f.terminals[0].as_str());
+
+    // A refused client is logged too, once per refused input, with the class that was judged.
+    f.protect(0, vec![Principal::None]);
+    let _refused = connect_shell_client(&mut f.server, 82, PeerLineage::default());
+    type_into(&mut f.server, 82, &target);
+    let events = logged(&f);
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0].decision, "deny");
+    assert_eq!(events[0].class, LoggedClass::Unknown);
+    assert_eq!(events[0].client, "shell:82");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn clipboard_image_paste_logged() {
+    let mut f = gate_fixture(2);
+    let target = f.public(0);
+    let _client = connect_shell_client(&mut f.server, 85, lineage_for(false, true));
+    let path = "/tmp/client-image.png";
+
+    assert!(f.server.paste_client_clipboard_image_path(
+        85,
+        crate::protocol::ClientClipboardImageTarget::Pane(target.clone()),
+        path.into(),
+    ));
+
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "shell.clipboard_image");
+    assert_eq!(events[0].path, crate::access::input_log::InputPath::Client);
+    assert_eq!(events[0].client, "shell:85");
+    assert_eq!(events[0].bytes, path.len() as u64);
+    assert_eq!(events[0].decision, "allow");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn attach_input_logged_as_client_path() {
+    use crate::access::input_log::{InputPath, LoggedClass};
+    let mut f = gate_fixture(2);
+    attach_client(&mut f, 5, 0, lineage_for(false, true));
+
+    assert!(f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 5,
+        data: b"ls\r".to_vec(),
+    }));
+
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"ls\r");
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    // Attach input is not gated, but it is logged as the client path.
+    assert_eq!(event.path, InputPath::Client);
+    assert_eq!(event.route, "attach.input");
+    assert_eq!(event.client, "attach:5");
+    assert_eq!(event.class, LoggedClass::Outside);
+    assert_eq!(event.bytes, 3);
+    assert_eq!(event.decision, "allow");
+    assert_eq!(event.pane, f.public(0));
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn popup_and_attach_mouse_logged() {
+    use crate::access::input_log::LoggedClass;
+    // The popup route: logged as shell.popup_input, never gated by a pane policy.
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let _local = connect_shell_client(&mut f.server, 100, lineage_for(false, true));
+    f.server
+        .handle_server_event(ServerEvent::ClientShellPopupInput {
+            client_id: 100,
+            terminal_id: popup_id.to_string(),
+            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+                "typed".into(),
+            )],
+        });
+    assert!(popup_input.try_recv().is_ok());
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "shell.popup_input");
+    assert_eq!(events[0].client, "shell:100");
+    assert_eq!(events[0].bytes, 5);
+    assert_eq!(events[0].class, LoggedClass::Outside);
+    shutdown_test_runtimes(&mut f.server);
+
+    // The attach mouse route: the SGR report written into the pane is what is counted.
+    let mut f = gate_fixture(2);
+    let mut input = mouse_tracking_runtime(&mut f);
+    attach_client(&mut f, 6, 0, lineage_for(false, true));
+    assert!(f
+        .server
+        .handle_server_event(ServerEvent::ClientAttachMouse {
+            client_id: 6,
+            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
+            position: crate::protocol::ClientMousePosition::Cell { column: 10, row: 5 },
+            geometry: None,
+            modifiers: 0,
+            lines: 1,
+        }));
+    assert_eq!(input.try_recv().unwrap().as_ref(), b"\x1b[<0;11;6M");
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "attach.mouse");
+    assert_eq!(events[0].client, "attach:6");
+    assert_eq!(events[0].bytes, 10);
+    shutdown_test_runtimes(&mut f.server);
+
+    // Mouse reports the pane did not ask for write nothing, so nothing is logged.
+    let mut f = gate_fixture(2);
+    attach_client(&mut f, 7, 0, lineage_for(false, true));
+    f.server
+        .handle_server_event(ServerEvent::ClientAttachMouse {
+            client_id: 7,
+            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
+            position: crate::protocol::ClientMousePosition::Cell { column: 1, row: 1 },
+            geometry: None,
+            modifiers: 0,
+            lines: 1,
+        });
+    f.assert_no_bytes(0);
+    assert!(logged(&f).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn access_log_refused_from_pane_remote_and_caller() {
+    let mut f = gate_fixture(2);
+    f.make_agent(0, "bridge");
+    f.set_policy(0, &["caller:ops"]);
+    let token = f.mint_token("ops", 0);
+    let target = f.public(0);
+    // Something is in the log to be read.
+    let response = f.call(outside(), send_text(&target));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    let log = || Method::AccessLog(crate::api::schema::AccessLogParams::default());
+
+    // An outside caller reads it, newest first.
+    let answer = json(&f.call(outside(), log()));
+    assert_eq!(answer["result"]["type"], "access_input_log", "{answer}");
+    assert_eq!(answer["result"]["node"], "node");
+    assert_eq!(answer["result"]["events"][0]["route"], "pane.send_text");
+    assert_eq!(answer["result"]["events"][0]["decision"], "deny");
+    assert!(answer["result"]["events"][0].get("text").is_none());
+
+    for (who, caller) in [
+        ("pane", f.pane_caller(1)),
+        ("remote stamp", peer(false, true)),
+        ("caller token", token_peer(&token)),
+        (
+            "unknown",
+            Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+        ),
+    ] {
+        let response = f.call(caller, log());
+        assert_eq!(
+            error_code(&response).as_deref(),
+            Some("access_denied"),
+            "{who}: {response}"
+        );
+        assert!(!response.contains("events"), "{who}: {response}");
+        assert!(!response.contains("pane.send_text"), "{who}: {response}");
+    }
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn log_flushed_on_shutdown_and_handoff() {
+    use crate::access::registry::TestDir;
+    let dir = TestDir::new("flush-server");
+    let read = || std::fs::read_to_string(dir.path().join("access-input.log")).unwrap_or_default();
+    let mut f = gate_fixture(2);
+    f.server
+        .app
+        .input_log
+        .lock()
+        .unwrap()
+        .attach_writer(dir.path().to_path_buf(), "node-a".into())
+        .unwrap();
+    let target = f.public(0);
+
+    // A lone allow entry is still open (a burst may yet extend it). Server stop writes it.
+    let response = f.call(outside(), send_text(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert!(!read().contains("pane.send_text"), "{}", read());
+    f.server.initiate_shutdown();
+    let text = read();
+    assert!(text.contains(r#""route":"pane.send_text""#), "{text}");
+    assert!(text.starts_with(r#"{"node":"node-a""#), "{text}");
+    shutdown_test_runtimes(&mut f.server);
+
+    // A live handoff flushes the log before it starts the replacement; one that fails
+    // starts the writer again. The handoff here fails at the replacement's spawn.
+    #[cfg(unix)]
+    {
+        let dir = TestDir::new("flush-handoff");
+        // The handoff socket lives in the data dir: point it at a scratch dir (each test
+        // runs in its own process under nextest).
+        // (Kept short: a unix socket path is limited to about 100 bytes.)
+        let config_home = std::path::PathBuf::from(format!("/tmp/hd{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::fs::create_dir_all(crate::session::data_dir()).unwrap();
+        let read =
+            || std::fs::read_to_string(dir.path().join("access-input.log")).unwrap_or_default();
+        let mut server = test_headless_server();
+        server
+            .app
+            .input_log
+            .lock()
+            .unwrap()
+            .attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        server
+            .app
+            .input_log
+            .lock()
+            .unwrap()
+            .record(crate::access::input_log::InputEvent {
+                at_ms: 1,
+                pane: "1-1".into(),
+                terminal: "term_x".into(),
+                path: crate::access::input_log::InputPath::Api,
+                route: "pane.send_text",
+                class: crate::access::input_log::LoggedClass::Outside,
+                principal: None,
+                client: "api:1".into(),
+                host: "local",
+                bytes: 3,
+                decision: "allow",
+                count: 1,
+            });
+        let result = server.perform_live_handoff(crate::api::schema::ServerLiveHandoffParams {
+            import_exe: Some("/nonexistent/herdr-import".into()),
+            ..Default::default()
+        });
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&config_home);
+        assert!(
+            read().contains(r#""bytes":3"#),
+            "flushed before the import ({result:?}): {}",
+            read()
+        );
+        // The server carries on, and its log writes again.
+        server
+            .app
+            .input_log
+            .lock()
+            .unwrap()
+            .record(crate::access::input_log::InputEvent {
+                at_ms: 2,
+                pane: "1-1".into(),
+                terminal: "term_y".into(),
+                path: crate::access::input_log::InputPath::Api,
+                route: "pane.send_text",
+                class: crate::access::input_log::LoggedClass::Outside,
+                principal: None,
+                client: "api:1".into(),
+                host: "local",
+                bytes: 4,
+                decision: "deny",
+                count: 1,
+            });
+        server.app.flush_input_log();
+        assert!(read().contains(r#""terminal":"term_y""#), "{}", read());
+    }
+}
+
+#[tokio::test]
+async fn a_policy_bound_during_the_harvest_phase_stops_the_wheel_up_bytes() {
+    let mut f = alt_screen_fixture();
+    let target = f.public(0);
+    let caller = f.pane_caller(1);
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    f.server
+        .handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            caller,
+            request: api::schema::Request {
+                id: "read".into(),
+                method: interactive_read(&target),
+            },
+            respond_to,
+            response_write_complete: None,
+        });
+    assert_eq!(f.server.pending_alt_screen_reads.len(), 1);
+
+    // Poll until the read is walking the history upward, in its Harvest phase.
+    let mut now = Instant::now();
+    for _ in 0..8 {
+        now += Duration::from_millis(500);
+        f.server.poll_pending_alt_screen_reads(now);
+        if f.server
+            .pending_alt_screen_reads
+            .first()
+            .is_some_and(|read| read.in_harvest_phase())
+        {
+            break;
+        }
+    }
+    assert!(
+        f.server
+            .pending_alt_screen_reads
+            .first()
+            .is_some_and(|read| read.in_harvest_phase()),
+        "the read never reached its harvest phase"
+    );
+    while f.inputs[0].try_recv().is_ok() {}
+
+    // Detection binds a policy that refuses the reader, mid-harvest.
+    f.protect(0, vec![Principal::Outside]);
+    for _ in 0..8 {
+        now += Duration::from_millis(500);
+        f.server.poll_pending_alt_screen_reads(now);
+    }
+
+    // No wheel-up event follows (SGR button 64). Putting the screen back (button 65) may.
+    let mut sent = Vec::new();
+    while let Ok(bytes) = f.inputs[0].try_recv() {
+        sent.extend_from_slice(&bytes);
+    }
+    let sent = String::from_utf8_lossy(&sent);
+    assert!(
+        !sent.contains("\x1b[<64;"),
+        "wheel-up after the bind: {sent:?}"
+    );
+    assert!(
+        f.server.pending_alt_screen_reads.is_empty(),
+        "the read must end once input is refused"
+    );
+    assert!(
+        response_rx.try_recv().is_ok(),
+        "the reader still gets an answer"
+    );
     shutdown_test_runtimes(&mut f.server);
 }

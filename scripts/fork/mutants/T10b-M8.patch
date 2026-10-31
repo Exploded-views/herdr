@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M8. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -303,7 +303,7 @@
+             // tighten it and even when nothing is protected yet.
+             Method::AccessPaneSet(_) => GateTarget::AccessAdmin,
+             // Admin: the input log names every sender, so only an outside caller reads it.
+-            Method::AccessLog(_) => GateTarget::AccessAdmin,
++            Method::AccessLog(_) => GateTarget::Open,
+             // Open (Meta): reading a policy writes nothing into any pane.
+             Method::AccessPaneGet(_) => GateTarget::Open,
+             // Open: nothing here writes caller-chosen bytes into an existing pane.

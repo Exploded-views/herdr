@@ -1,4 +1,4 @@
-// herdr-fork: params and results for the `access.caller.*` and `access.pane.*` methods. Unofficial stopgap; see FORK.md.
+// herdr-fork: params and results for the `access.caller.*`, `access.pane.*` and `access.log` methods. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -33,6 +33,43 @@ pub struct AccessPaneSetParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AccessPaneGetParams {
     pub pane_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AccessLogParams {
+    /// How many entries to return, newest first. Default 100, at most 4096.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One entry of the input-origin log. There is no field for the input itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AccessInputEvent {
+    /// Unix milliseconds of the first input in the entry.
+    pub at_ms: u64,
+    /// Public pane id at the time.
+    pub pane: String,
+    pub terminal: String,
+    /// `api` or `client`.
+    pub path: String,
+    /// Method name, or `shell.pane_input`, `shell.clipboard_image`, `shell.popup_input`,
+    /// `attach.input`, `attach.mouse`.
+    pub route: String,
+    /// `pane`, `outside`, `outside_ssh`, `remote`, `caller` or `unknown`.
+    pub class: String,
+    /// Caller name, or the sending pane's public id for a pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// `api:<connection>`, `shell:<client>` or `attach:<client>`.
+    pub client: String,
+    /// `local`, `ssh` or `remote-stamp`.
+    pub host: String,
+    /// Payload bytes, summed over the entry.
+    pub bytes: u64,
+    /// `allow` or `deny`.
+    pub decision: String,
+    /// Repeats merged into the entry.
+    pub count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

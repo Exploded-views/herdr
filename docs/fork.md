@@ -50,11 +50,16 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   3. Push `master`.
   4. The admin lists the workflows, disables any newly registered one that would act in the
      fork, and turns Actions back on.
-- **The one default-on addition: the input-origin log** (lands with the v1 input-log task).
+- **The one default-on addition: the input-origin log.**
   Every node records who sent each pane input (the path, the sender's class, the client, the
   host kind and the byte count; never the content) to a local file, mode 0600, capped at about
   2.5 MiB. Every other fork feature is off by default. The owner's decision, verbatim: "keep it
-  on" (2026-10-28). `[access] input_log = false` turns it off.
+  on" (2026-10-28). `[access] input_log = false` turns it off. `herdr access log` prints it
+  (newest first; `--file` reads the files when the server is down), and only a caller
+  outside every pane may read it. The file's header names the node by `[access] node_name`
+  (default `node`), never the hostname. A burst of typing is one entry per 2 seconds; a
+  refusal is always its own entry and is written at once. The server flushes the log before
+  it stops or hands off.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 
@@ -98,6 +103,20 @@ stop a process that sets out to get around it:
   init, and the lineage walk then reports a short, complete chain (observed on macOS and on
   Linux: `complete=true`, two links). Reaching init proves the chain is intact, not that the
   caller was never inside a pane.
+- **What the input log can tell.** It tells input sent through the herdr API apart from
+  keystrokes from an attached client. It does not tell the owner from an agent driving a TUI
+  from outside every pane, local or remote (`expect`, `script`, or a remote `herdr
+  --remote`): keystrokes from an outside client count as human. A process that escapes its
+  pane's ancestry (`setsid`, `tmux`, and so on) and then attaches counts as an outside client.
+- **What the input log does not cover.** Input that reaches a PTY outside herdr (`TIOCSTI`,
+  `ptrace`) is not seen or logged. Popup input is logged under `shell.popup_input` and is
+  never gated. Attach wheel scrolling is not logged (attach keystrokes and mouse reports are).
+  `agent.start` records the command line before shell quoting.
+- **What the input log is.** A local guardrail record, not an audit trail. Any process at the
+  same uid can edit or delete it, and it is not synced to disk, so it survives a crash only up
+  to the writer's last write: a crash loses at most the one open entry, up to 2 seconds of
+  typing. When the writer falls behind, entries are dropped and a `dropped` marker is written;
+  `access log` shows the count.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.
 

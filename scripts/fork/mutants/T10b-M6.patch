@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M6. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -52,6 +52,7 @@
+     /// Terminal id, stable through moves.
+     pub terminal: String,
+     pub path: InputPath,
++    #[serde(rename = "keys")]
+     /// Method name, or `shell.pane_input`, `shell.clipboard_image`, `shell.popup_input`,
+     /// `attach.input`, `attach.mouse`.
+     pub route: &'static str,

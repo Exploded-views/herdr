@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M3. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -274,7 +274,7 @@
+             }
+             self.unreported = 0;
+         }
+-        if tx.try_send(LogMsg::Event(ev)).is_err() {
++        if tx.send(LogMsg::Event(ev)).is_err() {
+             self.dropped += 1;
+             self.unreported += 1;
+         }

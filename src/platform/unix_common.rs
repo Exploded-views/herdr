@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file, open_private_append, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ChildPipe(std::fs::File);
@@ -506,6 +506,22 @@ pub(crate) fn create_private_file(path: &Path) -> std::io::Result<std::fs::File>
         .create_new(true)
         .mode(0o600)
         .open(path)
+}
+
+/// Open `path` for appending, creating it with mode 0600 if it is missing. A symlink at
+/// `path` is refused (`O_NOFOLLOW`), and an existing file is set to 0600 (`fchmod`). Holds
+/// the input-origin log.
+pub(crate) fn open_private_append(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 /// True when group or others can write `file` (mode bits 022). The caller

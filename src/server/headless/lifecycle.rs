@@ -1,3 +1,4 @@
+// herdr-fork: the input log is flushed at shutdown and before a live handoff, and resumed if the handoff fails. Unofficial stopgap; see FORK.md.
 use super::*;
 
 const LIVE_HANDOFF_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(6);
@@ -113,6 +114,8 @@ impl HeadlessServer {
             self.api_window_title.clone(),
             self.host_shutdown_intent.get(),
         );
+        // The replacement opens the input log, so this server finishes writing it first.
+        self.app.flush_input_log();
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
             &socket_path,
@@ -285,6 +288,8 @@ impl HeadlessServer {
         }
         self.handoff_in_progress = false;
         let _ = std::fs::remove_file(socket_path);
+        // This server carries on, so its input log writes again.
+        self.app.resume_input_log();
     }
 
     #[cfg(unix)]
@@ -314,6 +319,8 @@ impl HeadlessServer {
         };
         info!(%reason, "server shutdown initiated");
         self.shutting_down = true;
+        // Everything recorded so far reaches the file before the server stops.
+        self.app.flush_input_log();
 
         // Clear client-local host graphics, then send ServerShutdown to all connected clients.
         let shutdown_msg = ServerMessage::ServerShutdown {

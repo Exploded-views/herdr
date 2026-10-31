@@ -1,4 +1,4 @@
-// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config or starting with `acc_` are refused. Unofficial stopgap; see FORK.md.
+// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config or starting with `acc_` are refused; `input_log` and `node_name` are reserved agent names. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -14,7 +14,13 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
 /// Names the access config uses as keys; an agent may not take one.
-const RESERVED_AGENT_NAMES: [&str; 3] = ["remote_input", "bridge_agent", "remote_owner_tui"];
+const RESERVED_AGENT_NAMES: [&str; 5] = [
+    "remote_input",
+    "bridge_agent",
+    "remote_owner_tui",
+    "input_log",
+    "node_name",
+];
 
 fn valid_agent_name(name: &str) -> bool {
     // `acc_...` is how a pane's binding id is addressed; a name that starts
@@ -525,7 +531,13 @@ mod tests {
 
     #[test]
     fn reserved_agent_names_refused() {
-        for name in ["remote_input", "bridge_agent", "remote_owner_tui"] {
+        for name in [
+            "remote_input",
+            "bridge_agent",
+            "remote_owner_tui",
+            "input_log",
+            "node_name",
+        ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be refused");
         }
         // Only the exact reserved words; near misses stay valid.

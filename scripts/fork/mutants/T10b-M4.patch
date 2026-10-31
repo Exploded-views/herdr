@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M4. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -79,7 +79,6 @@
+             && self.class == other.class
+             && self.principal == other.principal
+             && self.client == other.client
+-            && self.decision == other.decision
+     }
+ }
+ 

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10b-M5. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -241,9 +241,6 @@
+     }
+ 
+     fn push_ring(&mut self, ev: InputEvent) {
+-        if self.ring.len() >= RING_CAP {
+-            self.ring.pop_front();
+-        }
+         self.ring.push_back(ev);
+     }
+ 

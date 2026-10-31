@@ -1,16 +1,17 @@
 # herdr-fork: mutant T7f1-M13: the re-check right before dispatch is removed. Unofficial stopgap; see FORK.md.
 diff --git a/src/server/headless.rs b/src/server/headless.rs
-index a3077dc8..7c834ebc 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -3082,10 +3082,6 @@ impl HeadlessServer {
+@@ -3259,11 +3259,7 @@
          // ids (a closed workspace) or make a target resolvable, so decide again
          // on the state the handler will resolve against. Nothing between here
          // and the handler mutates it.
--        if let Err(denied) = self.app.check_access(&msg.request.method, &msg.caller) {
+-        if let Err(denied) = self.app.gate_input(&msg.request.method, &msg.caller, true) {
 -            Self::reject_api_request_for_access(msg, &denied);
 -            return changed;
 -        }
-         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
+-        let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
++                let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
          if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
              let deferred_changed = self
+                 .app

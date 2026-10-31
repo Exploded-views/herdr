@@ -1,4 +1,4 @@
-// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys; an invalid `remote_owner_tui` under bridge-only fails closed). Unofficial stopgap; see FORK.md.
+// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys; an invalid `remote_owner_tui` under bridge-only fails closed); `[access] input_log` is wired and `node_name` is read. Unofficial stopgap; see FORK.md.
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use crossterm::event::KeyModifiers;
@@ -1091,8 +1091,10 @@ pub struct AccessConfig {
     pub bridge_agent: Option<String>,
     /// "allow" (default) or "deny"; only meaningful with `remote_input = "bridge-only"`.
     pub remote_owner_tui: Option<String>,
-    /// Log where each Input request came from. Default true; read by a later task.
+    /// Log where each pane input came from. Default true.
     pub input_log: Option<bool>,
+    /// Name written in the input log's header line, never the hostname. Default "node".
+    pub node_name: Option<String>,
     pub sections: std::collections::BTreeMap<String, AccessSection>,
     /// Problems met while reading the table, reported by `resolve`.
     read_diagnostics: Vec<String>,
@@ -1123,6 +1125,10 @@ impl<'de> Deserialize<'de> for AccessConfig {
                 ("input_log", _) => out
                     .read_diagnostics
                     .push("access.input_log must be true or false; using true".to_string()),
+                ("node_name", toml::Value::String(text)) => out.node_name = Some(text),
+                ("node_name", _) => out
+                    .read_diagnostics
+                    .push("access.node_name must be a string; using \"node\"".to_string()),
                 ("bridge_agent", toml::Value::String(text)) => out.bridge_agent = Some(text),
                 ("bridge_agent", _) => out
                     .read_diagnostics
@@ -1150,8 +1156,10 @@ pub(crate) struct ResolvedAccess {
     pub defaults: crate::access::policy::AccessDefaults,
     pub remote: crate::access::policy::RemoteSettings,
     pub remote_owner_tui: crate::access::policy::RemoteOwnerTui,
-    /// `[access] input_log`, default true. Stored with the other node keys; nothing reads it yet.
+    /// `[access] input_log`, default true.
     pub input_log: bool,
+    /// `[access] node_name`, default "node".
+    pub node_name: String,
     pub diagnostics: Vec<String>,
 }
 
@@ -1160,9 +1168,26 @@ impl AccessConfig {
         use crate::access::policy::{parse_accept_from, AcceptFrom, RemoteInput, RemoteOwnerTui};
         let mut out = ResolvedAccess {
             input_log: self.input_log.unwrap_or(true),
+            node_name: "node".to_string(),
             diagnostics: self.read_diagnostics.clone(),
             ..ResolvedAccess::default()
         };
+        if let Some(name) = self.node_name.as_deref() {
+            let name = name.trim();
+            let valid = !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if valid {
+                out.node_name = name.to_string();
+            } else {
+                out.diagnostics.push(
+                    "access.node_name must be 1-64 letters, digits, '-', '_' or '.'; using \"node\""
+                        .to_string(),
+                );
+            }
+        }
         match self.remote_input.as_deref() {
             None | Some("any") => {}
             Some("bridge-only") => out.remote.input = RemoteInput::BridgeOnly,

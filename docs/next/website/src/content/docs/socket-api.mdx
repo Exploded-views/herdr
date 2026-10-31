@@ -939,6 +939,10 @@ Errors look like this:
 }
 ```
 
+Fork-only: `access.log` returns the input-origin log, newest first, as `{"type":"access_input_log","node":"...","events":[...],"dropped":N}` (params: an optional `limit`, default 100, at most 4096). Each event has `at_ms`, `pane`, `terminal`, `path` (`api` or `client`), `route`, `class`, `principal`, `client`, `host`, `bytes`, `decision` and `count`, and no field that could hold what was typed. It is a Control method gated as `AccessAdmin`: a pane, a remote host, another caller or an unknown peer is refused with `access_denied`. The log is on by default (`[access] input_log`), is written to `access-input.log` in the herdr data directory (mode 0600, at most 2 MiB), and names the node by `[access] node_name`, never the hostname.
+
+What the log can and cannot tell: it tells input sent through the API apart from keystrokes from an attached client, but it does not tell the owner from an agent driving a TUI from outside every pane (`expect`, `script`, a remote `herdr --remote`); keystrokes from an outside client count as human, and so do those of a process that escaped its pane's ancestry and then attached. Input that reaches a PTY outside herdr (`TIOCSTI`, `ptrace`) is not seen, and popup input is logged but never gated. The log is a local guardrail record, not an audit trail: any process at the same uid can edit or delete it, and it is not synced to disk, so a crash loses at most the one open entry (up to 2 seconds of typing).
+
 ## Protocol stability
 
 The client-rendered Herdr UI uses a stable endpoint generation for local and SSH

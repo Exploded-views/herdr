@@ -1,4 +1,4 @@
-// herdr-fork: each client connection keeps the Caller captured from its socket peer at accept. Unofficial stopgap; see FORK.md.
+// herdr-fork: each client connection keeps the Caller captured from its socket peer at accept; a client socket caller has no connection number (conn 0). Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -269,6 +269,7 @@ impl ClientConnection {
                 lineage: crate::platform::PeerLineage::default(),
                 token: None,
                 remote: false,
+                conn: 0,
             },
             refused_pane: None,
             writer,
@@ -284,6 +285,7 @@ impl ClientConnection {
             lineage,
             token: None,
             remote: false,
+            conn: 0,
         };
     }
 
