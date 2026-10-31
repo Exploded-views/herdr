@@ -1230,7 +1230,8 @@ impl HeadlessServer {
                 true
             }
             Err(denied) => {
-                let first = self.clients.get_mut(&client_id).is_none_or(|client| {
+                // A client that is gone has nobody to tell; the helper already logged it.
+                let first = self.clients.get_mut(&client_id).is_some_and(|client| {
                     let first = client.refused_pane.as_deref() != Some(pane_id);
                     if first {
                         client.refused_pane = Some(pane_id.to_owned());

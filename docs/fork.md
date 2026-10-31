@@ -81,7 +81,7 @@ stop a process that sets out to get around it:
   Callers under an SSH login, TUI clients included, count as another host under `bridge-only`;
   only herdr's `--machine` route is stamped `remote`.
 - **Remote client bridge.** The server can't tell at accept that a TUI came in through the
-  remote client bridge, so `remote` comes from `via_ssh` only. A bridge launched under
+  remote client bridge, so a TUI's remote origin comes from `via_ssh` only. A bridge launched under
   something other than an SSH server looks local. This matches the decision that remote TUIs
   keep typing in v1.
   A TUI client's typing and image paste into a pane are checked against that pane's policy

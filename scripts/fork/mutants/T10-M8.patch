@@ -1,0 +1,17 @@
+# herdr-fork: mutant T10-M8. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 262c3419..c8461f49 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1183,10 +1183,7 @@ impl HeadlessServer {
+                 client_id,
+                 "client shell input from a missing client refused"
+             );
+-            return Err(crate::access::policy::AccessDenied::Input {
+-                label: pane_id.to_owned(),
+-                from: "unknown".to_owned(),
+-            });
++            return Ok(());
+         };
+         self.app.check_client_shell_input(&client.caller, pane_id)
+     }

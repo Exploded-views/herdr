@@ -1637,7 +1637,7 @@ async fn invalid_remote_owner_tui_config_makes_a_remote_tui_view_only() {
 }
 
 // Under remote_input = "any" nothing remote is refused: the same via_ssh TUI gets the same
-// answer for its API input and its typing into an open pane.
+// answer for its API input and its typing into a pane that accepts outside callers.
 #[tokio::test]
 async fn via_ssh_tui_api_and_typing_agree_under_remote_input_any() {
     let mut f = gate_fixture(2);
@@ -1665,5 +1665,88 @@ async fn via_ssh_tui_api_and_typing_agree_under_remote_input_any() {
     let response = response_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(error_code(&response).is_none(), "{response}");
     assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+/// A popup with a recording runtime, under bridge-only + deny. The first client to connect
+/// becomes the popup's owner tab, so the tests connect the client they care about first.
+fn popup_fixture() -> (
+    Fixture,
+    tokio::sync::mpsc::Receiver<bytes::Bytes>,
+    TerminalId,
+) {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    bridge_only(&mut f, RemoteOwnerTui::Deny);
+    let (popup_runtime, popup_input) = crate::terminal::TerminalRuntime::test_with_channel(40, 12);
+    let (_, popup_id) = f.server.app.install_test_popup_runtime(popup_runtime);
+    (f, popup_input, popup_id)
+}
+
+#[tokio::test]
+async fn local_shell_client_popup_input_reaches_the_popup_when_deny() {
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let local = connect_shell_client(&mut f.server, 100, lineage_for(false, true));
+
+    f.server
+        .handle_server_event(ServerEvent::ClientShellPopupInput {
+            client_id: 100,
+            terminal_id: popup_id.to_string(),
+            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+                "typed".into(),
+            )],
+        });
+    assert_eq!(popup_input.try_recv().unwrap().as_ref(), b"typed");
+
+    // So does an image paste from the same client.
+    assert!(f.server.paste_client_clipboard_image_path(
+        100,
+        crate::protocol::ClientClipboardImageTarget::Popup(popup_id.to_string()),
+        "/tmp/client-image.png".into(),
+    ));
+    assert!(popup_input.try_recv().is_ok());
+    assert!(shell_errors(&local).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn remote_shell_client_popup_clipboard_image_denied_when_deny() {
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let remote = connect_shell_client(&mut f.server, 101, lineage_for(true, true));
+
+    let routed = f.server.paste_client_clipboard_image_path(
+        101,
+        crate::protocol::ClientClipboardImageTarget::Popup(popup_id.to_string()),
+        "/tmp/client-image.png".into(),
+    );
+
+    assert!(!routed);
+    assert!(popup_input.try_recv().is_err(), "bytes reached the popup");
+    let errors = shell_errors(&remote);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("another host"), "{}", errors[0]);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// The handlers only reach the helpers for an active shell client, so this path is checked
+// directly: a client that is gone is refused, whether or not anything is protected.
+#[tokio::test]
+async fn shell_client_input_for_a_missing_client_is_refused() {
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let pane = f.public(0);
+
+    assert!(f.server.shell_client_input_allowed(999, &pane).is_err());
+    assert!(f
+        .server
+        .shell_client_popup_input_allowed(999, &popup_id)
+        .is_err());
+    assert!(!f.server.paste_client_clipboard_image_path(
+        999,
+        crate::protocol::ClientClipboardImageTarget::Pane(pane.clone()),
+        "/tmp/client-image.png".into(),
+    ));
+    type_into(&mut f.server, 999, &pane);
+    f.assert_no_bytes(0);
+    assert!(popup_input.try_recv().is_err());
     shutdown_test_runtimes(&mut f.server);
 }

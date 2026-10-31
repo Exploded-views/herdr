@@ -532,7 +532,7 @@ impl App {
         }
         let class = self.classify_caller(caller);
         let target = GateTarget::Input {
-            label: "popup".to_string(),
+            label: terminal.as_str().to_string(),
             terminal,
             policy: None,
         };

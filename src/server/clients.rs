@@ -194,7 +194,8 @@ pub(crate) struct ClientConnection {
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Who this connection is, as the access gate sees it: its own peer lineage, captured
-    /// when the connection was accepted, and whether it arrived through the remote bridge.
+    /// when the connection was accepted (`via_ssh` on the lineage marks an SSH login; the
+    /// `remote` stamp is always false here).
     pub(crate) caller: crate::access::caller::Caller,
     /// The pane whose input was last refused for this client, so a held key tells the
     /// client once and logs once. Cleared when an input is allowed.

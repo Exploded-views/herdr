@@ -1,6 +1,6 @@
 # herdr-fork: mutant T8-M3: only the admin check runs for a loosening start. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
-index 665ffe07..5913a2a3 100644
+index ecea39d1..a6a8934e 100644
 --- a/src/app/access_gate.rs
 +++ b/src/app/access_gate.rs
 @@ -148,7 +148,12 @@ impl App {
@@ -14,6 +14,6 @@ index 665ffe07..5913a2a3 100644
 +            pane_result
 +        })
 +        .map_err(|denied| {
-             let denied = self.with_public_pane_id(&class, denied);
+             let denied = self.with_bridge_binding(self.with_public_pane_id(&class, denied));
              let terminal = match &target {
                  GateTarget::Input { terminal, .. } | GateTarget::PaneControl { terminal, .. } => {
