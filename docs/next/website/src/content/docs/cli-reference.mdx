@@ -453,7 +453,7 @@ Panes, the server and a handoff child do not inherit `HERDR_CALLER_TOKEN_FILE`; 
 
 ### Addressing a pane by binding id
 
-Every bound pane has a binding id (`acc_` and 32 hex digits). An agent target that starts with `acc_` is a binding id and nothing else: it reaches the pane that holds that binding, and a target that is malformed or has no holder fails with `agent_not_found`. It is never tried as an agent name or a pane position. Agent names that start with `acc_` are refused when an agent is started or renamed.
+Every bound pane has a binding id (`acc_` and 32 hex digits). An agent target that starts with `acc_` is a binding id and nothing else: it reaches the pane that holds that binding, and a target that is malformed or has no holder fails with `agent_not_found`. It is never tried as an agent name or a pane position. Agent names that start with `acc_` are refused when an agent is started or renamed. A binding id resolves only while its holder pane runs an agent; otherwise it is not found.
 
 ## Pane access policies
 

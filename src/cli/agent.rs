@@ -543,6 +543,11 @@ fn print_agent_transport_error(
     if super::protocol_mismatch_was_reported(&err) {
         return Ok(1);
     }
+    // An unusable caller token file is a usage error: `finish_cli` prints it
+    // and exits 2, like every other command.
+    if super::caller_token::usage_report(&err).is_some() {
+        return Err(err);
+    }
     // A dead-server marker reaches here from `send_request` in the agent
     // startup path; surface its deferred response exactly once instead of
     // printing a second, generic transport-error line.
@@ -616,4 +621,33 @@ fn agent_read(params: AgentReadParams) -> std::io::Result<i32> {
         method: Method::AgentRead(params),
     })?;
     super::print_read_response(&response)
+}
+
+#[cfg(test)]
+mod transport_error_tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_caller_token_file_is_left_for_finish_cli_to_exit_2() {
+        let err = super::super::caller_token::unreadable_error(
+            "caller token file /x/tok unreadable: nope".into(),
+        );
+        let result =
+            print_agent_transport_error(err, "cli:agent:start", "agent_start_transport_failed");
+        let err = result.expect_err("the typed error is propagated, not printed");
+        assert_eq!(
+            super::super::caller_token::usage_report(&err).as_deref(),
+            Some("error: caller token file /x/tok unreadable: nope")
+        );
+    }
+
+    #[test]
+    fn other_transport_errors_still_print_and_exit_1() {
+        let result = print_agent_transport_error(
+            std::io::Error::other("boom"),
+            "cli:agent:start",
+            "agent_start_transport_failed",
+        );
+        assert_eq!(result.unwrap(), 1);
+    }
 }

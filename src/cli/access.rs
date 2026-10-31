@@ -158,11 +158,12 @@ fn run_caller(
                 }
                 Err(e) => return Err(e),
             };
-            let outcome = send(&request(Method::AccessCallerAdd(
-                crate::api::schema::AccessCallerAddParams { name, target_pane },
-            )))
-            .map_err(|e| e.to_string())
-            .and_then(|response| result_of(&response));
+            let outcome = call(
+                send,
+                &request(Method::AccessCallerAdd(
+                    crate::api::schema::AccessCallerAddParams { name, target_pane },
+                )),
+            );
             deliver_token(outcome, file, &token_file, None, out, err)
         }
         "rotate" => {
@@ -173,11 +174,12 @@ fn run_caller(
             // A leftover from a crashed run is ours to clear.
             let _ = std::fs::remove_file(&tmp);
             let file = crate::platform::create_private_file(&tmp)?;
-            let outcome = send(&request(Method::AccessCallerRotate(
-                crate::api::schema::AccessCallerNameParams { name },
-            )))
-            .map_err(|e| e.to_string())
-            .and_then(|response| result_of(&response));
+            let outcome = call(
+                send,
+                &request(Method::AccessCallerRotate(
+                    crate::api::schema::AccessCallerNameParams { name },
+                )),
+            );
             deliver_token(outcome, file, &tmp, Some(&token_file), out, err)
         }
         "list" => {
@@ -185,9 +187,7 @@ fn run_caller(
             {
                 return usage(err, "list takes no arguments");
             }
-            let outcome = send(&request(Method::AccessCallerList(Default::default())))
-                .map_err(|e| e.to_string())
-                .and_then(|response| result_of(&response));
+            let outcome = call(send, &request(Method::AccessCallerList(Default::default())));
             match outcome {
                 Ok(ResponseResult::AccessCallers { callers }) => {
                     for caller in callers {
@@ -202,29 +202,31 @@ fn run_caller(
                     Ok(0)
                 }
                 Ok(_) => fail(err, "unexpected response from the server"),
-                Err(message) => fail(err, &message),
+                Err(failure) => report(err, &failure),
             }
         }
         "retarget" => {
             let (Some(name), Some(target_pane)) = (parsed.name, parsed.target_pane) else {
                 return usage(err, "retarget needs <name> and --target-pane");
             };
-            let outcome = send(&request(Method::AccessCallerRetarget(
-                crate::api::schema::AccessCallerRetargetParams { name, target_pane },
-            )))
-            .map_err(|e| e.to_string())
-            .and_then(|response| result_of(&response));
+            let outcome = call(
+                send,
+                &request(Method::AccessCallerRetarget(
+                    crate::api::schema::AccessCallerRetargetParams { name, target_pane },
+                )),
+            );
             acknowledge(outcome, err)
         }
         "remove" => {
             let Some(name) = parsed.name else {
                 return usage(err, "remove needs <name>");
             };
-            let outcome = send(&request(Method::AccessCallerRemove(
-                crate::api::schema::AccessCallerNameParams { name },
-            )))
-            .map_err(|e| e.to_string())
-            .and_then(|response| result_of(&response));
+            let outcome = call(
+                send,
+                &request(Method::AccessCallerRemove(
+                    crate::api::schema::AccessCallerNameParams { name },
+                )),
+            );
             acknowledge(outcome, err)
         }
         _ => usage(err, &format!("unknown access caller command {action}")),
@@ -265,9 +267,7 @@ fn run_pane(
         },
         _ => return usage(err, &format!("unknown access pane command {action}")),
     };
-    let outcome = send(&request(method))
-        .map_err(|e| e.to_string())
-        .and_then(|response| result_of(&response));
+    let outcome = call(send, &request(method));
     match outcome {
         Ok(ResponseResult::AccessPolicy {
             pane_id,
@@ -283,8 +283,38 @@ fn run_pane(
             Ok(0)
         }
         Ok(_) => fail(err, "unexpected response from the server"),
-        Err(message) => fail(err, &message),
+        Err(failure) => report(err, &failure),
     }
+}
+
+/// Why a request failed, and the exit status for it. A caller token file that
+/// cannot be used is a usage error (exit 2), like everywhere else in the CLI.
+struct Failure {
+    message: String,
+    code: i32,
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self { message, code: 1 }
+    }
+}
+
+fn transport_failure(error: io::Error) -> Failure {
+    match super::caller_token::usage_report(&error) {
+        Some(message) => Failure { message, code: 2 },
+        None => error.to_string().into(),
+    }
+}
+
+fn call(send: &mut Send<'_>, request: &Request) -> Result<ResponseResult, Failure> {
+    let response = send(request).map_err(transport_failure)?;
+    Ok(result_of(&response)?)
+}
+
+fn report(err: &mut dyn Write, failure: &Failure) -> io::Result<i32> {
+    writeln!(err, "{}", failure.message)?;
+    Ok(failure.code)
 }
 
 fn fail(err: &mut dyn Write, message: &str) -> io::Result<i32> {
@@ -292,10 +322,10 @@ fn fail(err: &mut dyn Write, message: &str) -> io::Result<i32> {
     Ok(1)
 }
 
-fn acknowledge(outcome: Result<ResponseResult, String>, err: &mut dyn Write) -> io::Result<i32> {
+fn acknowledge(outcome: Result<ResponseResult, Failure>, err: &mut dyn Write) -> io::Result<i32> {
     match outcome {
         Ok(_) => Ok(0),
-        Err(message) => fail(err, &message),
+        Err(failure) => report(err, &failure),
     }
 }
 
@@ -310,7 +340,7 @@ fn sibling_tmp(path: &Path) -> PathBuf {
 /// replaces that path once the token is in it. On any failure `written` is
 /// removed. The token goes nowhere else.
 fn deliver_token(
-    outcome: Result<ResponseResult, String>,
+    outcome: Result<ResponseResult, Failure>,
     mut file: std::fs::File,
     written: &Path,
     rename_to: Option<&Path>,
@@ -324,10 +354,10 @@ fn deliver_token(
             let _ = std::fs::remove_file(written);
             return fail(err, "unexpected response from the server");
         }
-        Err(message) => {
+        Err(failure) => {
             drop(file);
             let _ = std::fs::remove_file(written);
-            return fail(err, &message);
+            return report(err, &failure);
         }
     };
     let saved = writeln!(file, "{}", token.expose())
@@ -388,6 +418,47 @@ mod tests {
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    #[test]
+    fn unreadable_caller_token_file_exits_2_with_the_shared_message() {
+        let unreadable = || {
+            super::super::caller_token::unreadable_error(
+                "caller token file /x/tok unreadable: nope".into(),
+            )
+        };
+        let dir = TestDir::new("cli-unreadable-caller");
+        let file = dir.path().join("out-token");
+        let out_file = file.to_string_lossy().into_owned();
+        let cases: Vec<Vec<&str>> = vec![
+            vec!["caller", "list"],
+            vec!["caller", "remove", "ops"],
+            vec!["pane", "get", "p_1"],
+            vec![
+                "caller",
+                "add",
+                "ops",
+                "--target-pane",
+                "p_1",
+                "--token-file",
+                &out_file,
+            ],
+        ];
+        for argv in cases {
+            let (code, out, err) = run(&argv, |_| Err(unreadable()));
+            assert_eq!(code, 2, "{argv:?}");
+            assert!(out.is_empty(), "{argv:?}");
+            assert_eq!(
+                err.trim_end(),
+                "error: caller token file /x/tok unreadable: nope",
+                "{argv:?}"
+            );
+        }
+        // The half-made token file is not left behind.
+        assert!(!file.exists());
+        // Other transport errors still exit 1.
+        let (code, _, _) = run(&["caller", "list"], |_| Err(io::Error::other("boom")));
+        assert_eq!(code, 1);
     }
 
     #[test]
