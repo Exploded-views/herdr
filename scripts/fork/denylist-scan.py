@@ -15,7 +15,9 @@ text or the denylist; a path whose own name matches is withheld.
 
 Denylist: $SCRUB_DENYLIST or ~/.config/crewkit/denylist.txt, one case-insensitive extended
 regex per line. CR line endings are ignored. Blank lines and lines starting with "#" are
-comments, so a pattern that must start with "#" is written "[#]...".
+comments, so a pattern that must start with "#" is written "[#]...". A line may end in a label,
+whitespace then "#class=<word>" (letters, digits, "_" or "-"); the pattern is what comes before
+it. Any other "#class=" on a pattern line is an error, never a pattern.
 
 Matching uses grep -E, in the C locale and in a UTF-8 locale, so a term next to a byte that is
 not valid UTF-8 is still found. Exit 0 = clean, 1 = hits, 2 = usage or scan error. An error is
@@ -23,6 +25,7 @@ never reported as clean.
 """
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +60,19 @@ def utf8_locale():
     raise ScanError("no UTF-8 locale available")
 
 
+CLASS_TAG = re.compile(rb"(.*\S)[ \t]+#class=[A-Za-z0-9_-]+")
+
+
+def strip_class_tag(line):
+    # Read whole, a tagged line is a regex that never matches, which silently blinds the scan.
+    if b"#class=" not in line:
+        return line
+    m = CLASS_TAG.fullmatch(line)
+    if not m or b"#class=" in m.group(1):
+        raise ScanError("denylist has a malformed class tag")
+    return m.group(1)
+
+
 def load_patterns(denylist, tmp):
     try:
         with open(denylist, "rb") as f:
@@ -64,7 +80,7 @@ def load_patterns(denylist, tmp):
     except OSError:
         raise ScanError("no readable denylist")
     lines = [l.rstrip(b"\r") for l in raw.split(b"\n")]
-    pats = [l for l in lines if l.strip() and not l.lstrip().startswith(b"#")]
+    pats = [strip_class_tag(l) for l in lines if l.strip() and not l.lstrip().startswith(b"#")]
     if not pats:
         raise ScanError("denylist has no patterns")
     path = os.path.join(tmp, "patterns")

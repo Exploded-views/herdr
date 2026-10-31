@@ -125,6 +125,20 @@ printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
 check "a CRLF denylist still matches" 1 "$tmp/crlf"
 reset
 
+# A trailing " #class=<word>" tag labels a line; the pattern is what comes before it.
+printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
+printf '%s #class=client\n' "$term" >"$tmp/tagged"
+check "a class-tagged line still matches its pattern" 1 "$tmp/tagged"
+printf '%s #class=crew-host\r\n' "$term" >"$tmp/tagged-crlf"
+check "a class-tagged CRLF line still matches" 1 "$tmp/tagged-crlf"
+printf '%s\t#class=client\n' "$term" >"$tmp/tagged-tab"
+check "a tab before the class tag still matches" 1 "$tmp/tagged-tab"
+reset
+for bad in "$term #class=" "$term #class=a b" "$term #class=a #class=b" "$term #class=cl!ent"; do
+  printf '%s\n' "$bad" >"$tmp/badtag"
+  check "a malformed class tag is an error: ${bad#"$term"}" 2 "$tmp/badtag"
+done
+
 got=0; PATH=/nonexistent SCRUB_DENYLIST=$tmp/denylist "$(command -v python3)" "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
 if [[ $got == 2 ]]; then echo "  ok    a missing git is an error, not hits"; else echo "  FAIL  missing git (exit $got, want 2)"; fail=1; fi
 
