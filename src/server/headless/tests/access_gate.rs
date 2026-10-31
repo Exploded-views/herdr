@@ -1,4 +1,4 @@
-// herdr-fork: tests for the per-pane access gate in the api request path. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for the per-pane access gate in the api request path and for shell-client input. Unofficial stopgap; see FORK.md.
 // access gate
 use super::*;
 use crate::access::caller::Caller;
@@ -1232,5 +1232,283 @@ async fn access_pane_set_refused_from_pane_even_when_unprotected() {
     assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
     let state = &f.server.app.state.terminals[&f.terminals[0]];
     assert!(state.access.is_some());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// Shell-client pane input and clipboard-image paste are checked against the pane's policy,
+// with the client's own caller class.
+
+fn lineage_for(via_ssh: bool, complete: bool) -> PeerLineage {
+    PeerLineage {
+        chain: vec![
+            ProcessIdentity {
+                pid: 4_000_001,
+                start_token: 11,
+            },
+            ProcessIdentity {
+                pid: 1,
+                start_token: 1,
+            },
+        ],
+        complete,
+        via_ssh,
+    }
+}
+
+/// Connect a shell client and keep its control channel, to read the notices it gets.
+fn connect_shell_client(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    lineage: PeerLineage,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    server.handle_server_event(ServerEvent::ClientShellConnected {
+        client_id,
+        surface_cols: 80,
+        surface_rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+        direct_graphics: false,
+        endpoint_keybindings: false,
+        mouse_capture: false,
+        surface_active: true,
+        surface_reuse: false,
+        surface_delta: false,
+        surface_scroll: false,
+        peer_lineage: lineage,
+        writer,
+    });
+    control_rx
+}
+
+fn shell_errors(control_rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> Vec<String> {
+    // The test writer hands messages over on its own thread, so wait briefly for them.
+    let mut errors = Vec::new();
+    while let Ok(bytes) = control_rx.recv_timeout(Duration::from_millis(150)) {
+        if let ServerMessage::ClientShellError { message } = read_server_message(bytes) {
+            errors.push(message);
+        }
+    }
+    errors
+}
+
+fn type_into(server: &mut HeadlessServer, client_id: u64, pane_id: &str) {
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id,
+        pane_id: pane_id.into(),
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "typed".into(),
+        )],
+    });
+}
+
+#[tokio::test]
+async fn shell_client_pane_input_to_protected_pane_refused() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    // An empty lineage proves nothing, so the client is unknown and not admitted.
+    let notices = connect_shell_client(&mut f.server, 81, PeerLineage::default());
+
+    type_into(&mut f.server, 81, &target);
+
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&target, "unknown")]
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn client_connected_before_activation_is_checked() {
+    let mut f = gate_fixture(2);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 82, lineage_for(false, true));
+
+    // Nothing is protected yet, so the typing goes through.
+    type_into(&mut f.server, 82, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+
+    // The policy is bound after the client connected; the next input is checked.
+    f.protect(0, vec![Principal::Caller("ops".into())]);
+    type_into(&mut f.server, 82, &target);
+
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&target, "outside")]
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn outside_shell_client_types_into_protected_pane() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 83, lineage_for(false, true));
+
+    type_into(&mut f.server, 83, &target);
+
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&notices).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn shell_client_pane_input_to_open_pane_allowed() {
+    let mut f = gate_fixture(2);
+    // Pane 1 is protected, so the gate is live; pane 0 holds no policy.
+    f.protect(1, vec![Principal::None]);
+    let open = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 84, PeerLineage::default());
+
+    type_into(&mut f.server, 84, &open);
+
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&notices).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn shell_client_clipboard_image_to_protected_pane_refused() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 85, PeerLineage::default());
+
+    let routed = f.server.paste_client_clipboard_image_path(
+        85,
+        crate::protocol::ClientClipboardImageTarget::Pane(target.clone()),
+        "/tmp/client-image.png".into(),
+    );
+
+    assert!(!routed);
+    f.assert_no_bytes(0);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&target, "unknown")]
+    );
+
+    // The same paste from an outside client reaches the pane.
+    let _notices = connect_shell_client(&mut f.server, 86, lineage_for(false, true));
+    assert!(f.server.paste_client_clipboard_image_path(
+        86,
+        crate::protocol::ClientClipboardImageTarget::Pane(target),
+        "/tmp/client-image.png".into(),
+    ));
+    assert_eq!(
+        f.inputs[0].try_recv().unwrap().as_ref(),
+        b"/tmp/client-image.png"
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn client_shell_api_request_uses_client_caller() {
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    let _unknown = connect_shell_client(&mut f.server, 87, PeerLineage::default());
+    let _outside = connect_shell_client(&mut f.server, 88, lineage_for(false, true));
+
+    let call_as_client = |f: &mut Fixture, client_id: u64| {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        let message = f
+            .server
+            .shell_endpoint_message(
+                client_id,
+                api::schema::Request {
+                    id: "shell".into(),
+                    method: send_text(&target),
+                },
+                respond_to,
+            )
+            .expect("client");
+        f.server.handle_api_request_with_shutdown_check(message);
+        response_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("api response")
+    };
+
+    // The request is judged as the client that sent it, not as a default caller.
+    let response = call_as_client(&mut f, 87);
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert_eq!(error_message(&response), input_denial(&target, "unknown"));
+    f.assert_no_bytes(0);
+    let response = call_as_client(&mut f, 88);
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+fn bridge_only(f: &mut Fixture, owner_tui: crate::access::policy::RemoteOwnerTui) {
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("relay".into());
+    f.server.app.state.remote_owner_tui = owner_tui;
+}
+
+#[tokio::test]
+async fn remote_shell_client_typing_allowed_by_default() {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    bridge_only(&mut f, RemoteOwnerTui::Allow);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 89, lineage_for(true, true));
+
+    // The owner's remote TUI types as an outside client does.
+    type_into(&mut f.server, 89, &target);
+
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&notices).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn remote_shell_client_denied_when_deny() {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    f.protect(0, vec![Principal::Outside]);
+    bridge_only(&mut f, RemoteOwnerTui::Deny);
+    let target = f.public(0);
+    let notices = connect_shell_client(&mut f.server, 90, lineage_for(true, true));
+    let local = connect_shell_client(&mut f.server, 91, lineage_for(false, true));
+
+    type_into(&mut f.server, 90, &target);
+
+    f.assert_no_bytes(0);
+    let errors = shell_errors(&notices);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("does not accept input from another host"),
+        "{}",
+        errors[0]
+    );
+    // A local client is untouched by the setting.
+    type_into(&mut f.server, 91, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&local).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn remote_denial_names_the_bridge_binding() {
+    let (mut f, token, bridge_binding, _) = bridge_fixture();
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("bridge".into());
+    let other = f.public(1);
+    let _ = token;
+
+    let response = f.call(peer(true, false), send_text(&other));
+
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    let message = error_message(&response);
+    assert!(
+        message.contains(&format!("(bridge {bridge_binding})")),
+        "{message}"
+    );
     shutdown_test_runtimes(&mut f.server);
 }

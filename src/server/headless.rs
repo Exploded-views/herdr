@@ -1,4 +1,4 @@
-// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes. Unofficial stopgap; see FORK.md.
+// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes; shell-client pane input and pane clipboard-image paste are checked against the pane's policy with the client's own caller class. Unofficial stopgap; see FORK.md.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -1166,6 +1166,36 @@ impl HeadlessServer {
         Ok(staged)
     }
 
+    /// May this shell client type into, or paste an image into, `pane_id`? Both shell-client
+    /// input routes ask here (`ClientShellPaneInput` and the pane clipboard-image paste).
+    /// Judged as `Input` against the pane's policy with the client's own class. Not gated, on
+    /// purpose: `ClientShellPopupInput` (it targets only the popup terminal, which can't
+    /// carry a binding) and `ClientInput` (attach mode only, the documented attach bypass).
+    fn shell_client_input_allowed(
+        &self,
+        client_id: u64,
+        pane_id: &str,
+    ) -> Result<(), crate::access::policy::AccessDenied> {
+        let Some(client) = self.clients.get(&client_id) else {
+            return Ok(());
+        };
+        self.app.check_client_shell_input(&client.caller, pane_id)
+    }
+
+    /// Drop a refused shell-client input and tell that client why.
+    fn refuse_client_shell_input(
+        &mut self,
+        client_id: u64,
+        denied: &crate::access::policy::AccessDenied,
+    ) {
+        self.send_to_client(
+            client_id,
+            ServerMessage::ClientShellError {
+                message: denied.message(),
+            },
+        );
+    }
+
     fn paste_client_clipboard_image_path(
         &mut self,
         client_id: u64,
@@ -1202,6 +1232,10 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if let Err(denied) = self.shell_client_input_allowed(client_id, &pane_id) {
+                    self.refuse_client_shell_input(client_id, &denied);
+                    return false;
+                }
                 let popup_blocks_input = self.app.state.popup_pane.is_some()
                     && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
                 if popup_blocks_input
@@ -2383,6 +2417,10 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                if let Err(denied) = self.shell_client_input_allowed(client_id, &pane_id) {
+                    self.refuse_client_shell_input(client_id, &denied);
+                    return false;
+                }
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                     &self.app.terminal_runtimes,
                     workspace_index,

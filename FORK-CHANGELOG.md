@@ -68,3 +68,7 @@ a plan to send it upstream, and nothing has been proposed upstream.
   The registry's directory is synced after each save. *fork-only*
 - Caller token files stay out of child environments: panes, the server daemon and the handoff child no longer inherit `HERDR_CALLER_TOKEN_FILE`; an `acc_` target never matches a name in the terminal resolver and resolves only to an agent holder; a caller registry owned by another user is refused; an unreadable token file exits 2 through the normal CLI exit path. *fork-only*
 - Binding ids and caller tokens can be minted on Windows (`BCryptGenRandom`); the Japanese and Chinese CLI references document the access commands and `agent start --accept-from`; a test checks that no caller token or token hash reaches the log, and `AccessBindingId` no longer prints its id through `Debug`. *fork-only*
+- A TUI client's typing and image paste into a pane are now checked against the pane's policy,
+  using the client's own caller class. Under `remote_input = "bridge-only"`, `remote_owner_tui =
+  "deny"` refuses a client that came in over SSH, an invalid `remote_owner_tui` counts as `"deny"`,
+  and a remote refusal names the bridge's binding id. Terminal attach stays ungated. *fork-only*

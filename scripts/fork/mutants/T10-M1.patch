@@ -1,0 +1,15 @@
+# herdr-fork: mutant T10-M1. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 28506aa0..54eb4e4d 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1179,7 +1179,8 @@ impl HeadlessServer {
+         let Some(client) = self.clients.get(&client_id) else {
+             return Ok(());
+         };
+-        self.app.check_client_shell_input(&client.caller, pane_id)
++        let _ = (&client.caller, pane_id);
++        Ok(())
+     }
+ 
+     /// Drop a refused shell-client input and tell that client why.

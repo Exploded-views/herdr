@@ -114,3 +114,5 @@ agents**, not a security boundary. [docs/fork.md](docs/fork.md#limits) lists wha
 stop.
 
 An orphaned caller (parent exited, re-parented to init) gets a short lineage that still reports `complete`; see [docs/fork.md](docs/fork.md#limits).
+| `src/server/headless.rs`, `src/app/access_gate.rs`, `src/config/model.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs`, `docs/fork.md`, `docs/next/website/src/data/config-reference.json` | changed | Shell-client pane input and pane clipboard-image paste are checked by `shell_client_input_allowed`; `remote_owner_tui` is read; an invalid value fails closed under bridge-only; a remote denial names the bridge binding |
+| `scripts/fork/mutants/T10-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10-M1 to T10-M4 |
