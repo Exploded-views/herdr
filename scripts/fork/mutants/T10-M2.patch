@@ -1,0 +1,27 @@
+# herdr-fork: mutant T10-M2. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 3c4b63b1..15d16942 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1992,7 +1992,9 @@ impl HeadlessServer {
+                     Some(writer),
+                 );
+                 connection.pixel_mouse = pixel_mouse;
+-                connection.set_peer_lineage(peer_lineage);
++                if self.app.any_access_protected() {
++                    connection.set_peer_lineage(peer_lineage);
++                }
+                 self.clients.insert(client_id, connection);
+                 false
+             }
+@@ -2052,7 +2054,9 @@ impl HeadlessServer {
+                     Some(writer),
+                 );
+                 connection.pixel_mouse = pixel_mouse && observed.is_known();
+-                connection.set_peer_lineage(peer_lineage);
++                if self.app.any_access_protected() {
++                    connection.set_peer_lineage(peer_lineage);
++                }
+                 connection.direct_graphics = direct_graphics;
+                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
+                 connection.shell_mouse_capture = mouse_capture;

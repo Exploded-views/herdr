@@ -751,3 +751,29 @@ fn access_input_log_key_is_accepted_and_defaults_on() {
     assert!(bad.diagnostics[0].contains("access.input_log"));
     assert_eq!(bad.defaults.default, Some(vec![Principal::Outside]));
 }
+
+#[test]
+fn invalid_remote_owner_tui_denies_remote_shell_client_under_bridge_only() {
+    // Under bridge-only a value that is neither "allow" nor "deny" fails closed.
+    let config =
+        config_from("[access]\nremote_input = \"bridge-only\"\nremote_owner_tui = \"maybe\"\n");
+    let resolved = config.access.resolve();
+
+    assert_eq!(resolved.remote_owner_tui, RemoteOwnerTui::Deny);
+    assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
+    assert!(resolved.diagnostics[0].contains("remote_owner_tui"));
+    assert!(resolved.diagnostics[0].contains("deny"));
+
+    // A non-string value is kept as text and fails closed the same way.
+    let config = config_from("[access]\nremote_input = \"bridge-only\"\nremote_owner_tui = 3\n");
+    assert_eq!(
+        config.access.resolve().remote_owner_tui,
+        RemoteOwnerTui::Deny
+    );
+
+    // With remote input left at any, the value has no effect.
+    let config = config_from("[access]\nremote_owner_tui = \"maybe\"\n");
+    let resolved = config.access.resolve();
+    assert_eq!(resolved.remote_owner_tui, RemoteOwnerTui::Allow);
+    assert_eq!(resolved.remote.input, RemoteInput::Any);
+}

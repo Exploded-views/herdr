@@ -1,3 +1,4 @@
+// herdr-fork: also checks that an access refusal shows as an input refusal, not a paste rejection. Unofficial stopgap; see FORK.md.
 use super::*;
 use crate::input::TerminalKey;
 
@@ -739,6 +740,14 @@ fn generic_endpoint_failures_and_control_errors_are_visible() {
             .map(|notice| notice.body.as_str()),
         Some("Paste rejected again")
     );
+
+    // An access refusal arrives the same way and is named as what it is.
+    assert!(state.receive_endpoint_error("access_denied: pane w1:p1 does not accept input".into()));
+    let notice = state
+        .visible_endpoint_notice
+        .as_ref()
+        .expect("access refusal notice");
+    assert_eq!(notice.key.code, "input_refused");
 }
 
 #[test]

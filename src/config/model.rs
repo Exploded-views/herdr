@@ -1,4 +1,4 @@
-// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys). Unofficial stopgap; see FORK.md.
+// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys; an invalid `remote_owner_tui` under bridge-only fails closed). Unofficial stopgap; see FORK.md.
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use crossterm::event::KeyModifiers;
@@ -1192,8 +1192,15 @@ impl AccessConfig {
                     );
                 }
             }
+            // Under bridge-only the user plainly meant to restrict, so a bad value fails closed.
+            Some(other) if out.remote.input == RemoteInput::BridgeOnly => {
+                out.remote_owner_tui = RemoteOwnerTui::Deny;
+                out.diagnostics.push(format!(
+                    "access.remote_owner_tui must be \"allow\" or \"deny\" (got {other:?}); treating it as \"deny\""
+                ));
+            }
             Some(other) => out.diagnostics.push(format!(
-                "access.remote_owner_tui must be \"allow\" or \"deny\" (got {other:?}); using \"allow\""
+                "access.remote_owner_tui must be \"allow\" or \"deny\" (got {other:?}); it has no effect unless access.remote_input is \"bridge-only\""
             )),
         }
         for (name, section) in &self.sections {

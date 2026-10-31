@@ -194,8 +194,12 @@ pub(crate) struct ClientConnection {
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Who this connection is, as the access gate sees it: its own peer lineage, captured
-    /// when the connection was accepted, and whether it arrived through the remote bridge.
+    /// when the connection was accepted (`via_ssh` on the lineage marks an SSH login; the
+    /// `remote` stamp is always false here).
     pub(crate) caller: crate::access::caller::Caller,
+    /// The pane whose input was last refused for this client, so a held key tells the
+    /// client once and logs once. Cleared when an input is allowed.
+    pub(crate) refused_pane: Option<String>,
     /// Channels for sending framed ServerMessage data to the client writer thread.
     pub(crate) writer: Option<ClientWriter>,
 }
@@ -266,20 +270,20 @@ impl ClientConnection {
                 token: None,
                 remote: false,
             },
+            refused_pane: None,
             writer,
         }
     }
 
-    /// Record the peer lineage walked when the connection was accepted. The bridge
-    /// that carries a remote client runs under a remote-login server, which the walk
-    /// sees as `via_ssh`; that is the only remote signal the server has for a client
-    /// socket, so `remote` follows it.
+    /// Record the peer lineage walked when the connection was accepted. The `remote` stamp
+    /// (`--machine`, a bridge's `caller_origin`) is a separate signal and stays false for a
+    /// client socket; a TUI that came in over SSH carries `via_ssh` on its lineage, which
+    /// only rule 0 reads.
     pub(crate) fn set_peer_lineage(&mut self, lineage: crate::platform::PeerLineage) {
-        let remote = lineage.via_ssh;
         self.caller = crate::access::caller::Caller::Peer {
             lineage,
             token: None,
-            remote,
+            remote: false,
         };
     }
 
