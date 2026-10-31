@@ -1,0 +1,13 @@
+# herdr-fork: mutant T9b-M5: lookup stops at the first match. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/registry.rs b/src/access/registry.rs
+index 15d36ca8..1f8fee0e 100644
+--- a/src/access/registry.rs
++++ b/src/access/registry.rs
+@@ -271,6 +271,7 @@ impl CallerRegistry {
+         for entry in &self.entries {
+             if ct_eq(&entry.hash, &presented) {
+                 found = Some(entry);
++                break;
+             }
+         }
+         found.map(|entry| (entry.name.clone(), entry.binding.clone()))

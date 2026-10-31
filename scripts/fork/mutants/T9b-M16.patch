@@ -1,0 +1,13 @@
+# herdr-fork: mutant T9b-M16: drop_caller_token_env leaves HERDR_CALLER_TOKEN_FILE in the server environment. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless/bootstrap.rs b/src/server/headless/bootstrap.rs
+index 1f9f0df2..4c9ca0e0 100644
+--- a/src/server/headless/bootstrap.rs
++++ b/src/server/headless/bootstrap.rs
+@@ -138,7 +138,6 @@ fn drop_caller_token_env() {
+     // Edition 2021: `remove_var` is safe to call. This runs first in
+     // `run_server`, before any thread or child process exists, so nothing can
+     // race the environment.
+-    std::env::remove_var(crate::cli::caller_token::ENV_VAR);
+ }
+ 
+ fn take_startup_cwd() -> Option<PathBuf> {

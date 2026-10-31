@@ -1272,6 +1272,37 @@
           ],
           "type": "object"
         },
+        "AccessPaneGetParams": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id"
+          ],
+          "type": "object"
+        },
+        "AccessPaneSetParams": {
+          "properties": {
+            "accept_from": {
+              "description": "Who the pane accepts input from: `none`, `outside`, `caller:<name>`, or\n`any` alone, which removes the policy and opens the pane on purpose.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pane_id": {
+              "description": "Public id of the pane whose policy is set.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "accept_from"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -6446,6 +6477,38 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.pane.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessPaneSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.pane.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessPaneGetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -6934,7 +6997,7 @@
           "type": "string"
         },
         "CallerToken": {
-          "description": "A caller token. It appears on the wire in exactly one result, when it is\nminted; its `Debug` never shows it.",
+          "description": "A caller token. It appears on the wire in exactly one result, when it is\nminted; its `Debug` never shows it. There is no derived `==`: the only\nequality is the constant-time one below, and tokens are matched through\nthe registry's hashes, never compared as text.",
           "type": "string"
         },
         "ClientWindowTitleReason": {
@@ -9418,6 +9481,36 @@
               "required": [
                 "type",
                 "callers"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A pane's access policy. `binding` is absent when the pane holds none;\n`accept_from` is then `[\"any\"]`.",
+              "properties": {
+                "accept_from": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "binding": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "access_policy",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id",
+                "accept_from"
               ],
               "type": "object"
             },

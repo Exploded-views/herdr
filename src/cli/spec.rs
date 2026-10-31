@@ -1,4 +1,4 @@
-// herdr-fork: help spec for `herdr access caller`. Unofficial stopgap; see FORK.md.
+// herdr-fork: help spec for `herdr access caller` and `herdr access pane`. Unofficial stopgap; see FORK.md.
 use std::io::Write;
 
 use clap::{Arg, ArgAction, Command, ValueHint};
@@ -326,6 +326,21 @@ fn access_command() -> Command {
                     Command::new("remove")
                         .about("Remove a caller")
                         .arg(required("name", "NAME")),
+                ),
+        )
+        .subcommand(
+            Command::new("pane")
+                .about("Set or read a pane's access policy")
+                .subcommand(
+                    Command::new("set")
+                        .about("Set who a pane accepts input from (`any` removes the policy)")
+                        .arg(required("pane", "PANE"))
+                        .arg(option("accept-from", "WHO").required(true)),
+                )
+                .subcommand(
+                    Command::new("get")
+                        .about("Show a pane's access policy")
+                        .arg(required("pane", "PANE")),
                 ),
         )
 }

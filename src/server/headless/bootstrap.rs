@@ -1,7 +1,9 @@
+// herdr-fork: the server drops HERDR_CALLER_TOKEN_FILE from its own environment at start. Unofficial stopgap; see FORK.md.
 use super::*;
 
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server() -> io::Result<()> {
+    drop_caller_token_env();
     let launcher_warning = crate::platform::leave_launcher_job();
     crate::platform::ignore_server_hangup();
     let args: Vec<String> = std::env::args().collect();
@@ -128,6 +130,17 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
     }
 }
 
+/// Drop `HERDR_CALLER_TOKEN_FILE` from the server's own environment, so a server
+/// started by hand from a shell that exports it does not pass the variable to
+/// non-pane children (plugin and custom commands). Pane shells and the
+/// daemon and handoff launchers strip it themselves.
+fn drop_caller_token_env() {
+    // Edition 2021: `remove_var` is safe to call. This runs first in
+    // `run_server`, before any thread or child process exists, so nothing can
+    // race the environment.
+    std::env::remove_var(crate::cli::caller_token::ENV_VAR);
+}
+
 fn take_startup_cwd() -> Option<PathBuf> {
     let cwd = std::env::var_os(crate::server::autodetect::STARTUP_CWD_ENV_VAR)?;
     std::env::remove_var(crate::server::autodetect::STARTUP_CWD_ENV_VAR);
@@ -241,4 +254,17 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
 /// Initialize logging for the server process.
 fn init_logging() {
     crate::logging::init_file_logging("herdr-server.log");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_drops_the_caller_token_file_variable() {
+        let var = crate::cli::caller_token::ENV_VAR;
+        std::env::set_var(var, "/x/tok");
+        drop_caller_token_env();
+        assert!(std::env::var_os(var).is_none());
+    }
 }

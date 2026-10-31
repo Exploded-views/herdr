@@ -1,3 +1,4 @@
+// herdr-fork: random_secret (BCryptGenRandom) for binding ids and caller tokens. Unofficial stopgap; see FORK.md.
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
@@ -24,6 +25,31 @@ pub(crate) use notifications::{
 pub(crate) use power::monitor_host_power;
 
 static ALLOW_UNELEVATED_CLIENTS: OnceLock<bool> = OnceLock::new();
+
+/// 32 bytes from the system-preferred random number generator.
+pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+
+    let mut secret = [0u8; 32];
+    // SAFETY: the buffer is valid for `secret.len()` bytes, and a null algorithm
+    // handle is what BCRYPT_USE_SYSTEM_PREFERRED_RNG requires.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            secret.as_mut_ptr(),
+            secret.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status != 0 {
+        return Err(std::io::Error::other(format!(
+            "BCryptGenRandom failed with NTSTATUS {status:#010x}"
+        )));
+    }
+    Ok(secret)
+}
 
 pub(crate) struct PrivateLocalListener {
     listener: interprocess::os::windows::named_pipe::PipeListener<
@@ -3468,6 +3494,16 @@ impl Drop for InputSourceRestore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn random_secret_fills_the_buffer_and_differs_per_call() {
+        let (a, b) = (
+            super::random_secret().unwrap(),
+            super::random_secret().unwrap(),
+        );
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b);
+    }
+
     use std::{
         fs,
         process::{Command, Stdio},

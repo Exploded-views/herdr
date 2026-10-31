@@ -1,3 +1,4 @@
+// herdr-fork: an agent target starting with `acc_` is a binding id and resolves only to the pane that holds it. Unofficial stopgap; see FORK.md.
 use super::{api_helpers::pane_agent_status, App};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,13 @@ impl App {
         &self,
         target: &str,
     ) -> Result<TerminalTarget, TerminalTargetError> {
+        // `acc_` names a binding, which only agent targets address; no name,
+        // label or id here may ever match one.
+        if target.starts_with(crate::access::policy::BINDING_PREFIX) {
+            return Err(TerminalTargetError::NotFound {
+                target: target.to_string(),
+            });
+        }
         let terminal_matches: Vec<_> = self
             .terminal_targets()
             .into_iter()
@@ -75,6 +83,12 @@ impl App {
         &self,
         target: &str,
     ) -> Result<TerminalTarget, TerminalTargetError> {
+        // A binding id is not a name and not a position: it is tried as
+        // nothing else, so a stale or malformed one can never land on another
+        // pane.
+        if target.starts_with(crate::access::policy::BINDING_PREFIX) {
+            return self.resolve_binding_target(target);
+        }
         if let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(target) {
             if let Some(resolved) = self
                 .terminal_target_for_pane(ws_idx, pane_id)
@@ -101,6 +115,33 @@ impl App {
         Err(TerminalTargetError::NotFound {
             target: target.to_string(),
         })
+    }
+
+    /// The terminal that holds the binding `target` names. Only a well-formed
+    /// id with a holder resolves; a binding is minted per pane, so a second
+    /// holder (which should not exist) is ambiguous and delivers nowhere.
+    fn resolve_binding_target(&self, target: &str) -> Result<TerminalTarget, TerminalTargetError> {
+        let not_found = || TerminalTargetError::NotFound {
+            target: target.to_string(),
+        };
+        let binding =
+            crate::access::policy::AccessBindingId::parse(target).ok_or_else(not_found)?;
+        let holders: Vec<_> = self
+            .terminal_targets()
+            .into_iter()
+            .filter(|candidate| {
+                self.state
+                    .terminals
+                    .get(candidate.terminal_id.as_str())
+                    .and_then(|terminal| terminal.access.as_ref())
+                    .is_some_and(|policy| policy.binding == binding)
+            })
+            // As the pane-id path: a stale binding on a pane that used to
+            // hold an agent resolves to nothing.
+            .filter(|candidate| self.target_is_agent(candidate))
+            .collect();
+        self.single_terminal_match(target, holders)?
+            .ok_or_else(not_found)
     }
 
     fn target_is_agent(&self, target: &TerminalTarget) -> bool {
@@ -268,6 +309,228 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
         }
+    }
+
+    fn bind_to(app: &mut App, terminal_id: &str) -> crate::access::policy::AccessBindingId {
+        let binding = crate::access::policy::AccessBindingId::mint().unwrap();
+        app.state.terminals.get_mut(terminal_id).unwrap().access =
+            Some(crate::access::policy::AccessPolicy {
+                binding: binding.clone(),
+                accept_from: vec![crate::access::policy::Principal::None],
+            });
+        binding
+    }
+
+    fn make_agents(app: &mut App, targets: &[TerminalTarget]) {
+        for (index, target) in targets.iter().enumerate() {
+            app.state
+                .terminals
+                .get_mut(target.terminal_id.as_str())
+                .unwrap()
+                .set_agent_name(format!("agent-{index}"));
+        }
+    }
+
+    fn app_with_targets() -> (App, Vec<TerminalTarget>) {
+        let mut app = test_app();
+        app.state = AppState::test_with_adversarial_identity_state();
+        let targets = app.terminal_targets();
+        assert!(targets.len() >= 2);
+        (app, targets)
+    }
+
+    #[test]
+    fn binding_id_target_resolves_only_its_terminal() {
+        let (mut app, targets) = app_with_targets();
+        make_agents(&mut app, &targets);
+        let bindings: Vec<_> = targets
+            .iter()
+            .map(|target| bind_to(&mut app, &target.terminal_id))
+            .collect();
+        // A different terminal wears the first binding's id as its agent name
+        // (set directly, past the name check); the id still means its holder.
+        app.state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name(bindings[0].to_string());
+        for (target, binding) in targets.iter().zip(&bindings) {
+            assert_eq!(
+                app.resolve_agent_target(&binding.to_string()).unwrap(),
+                *target
+            );
+        }
+    }
+
+    #[test]
+    fn stale_binding_target_is_not_found() {
+        let (mut app, targets) = app_with_targets();
+        let stale = crate::access::policy::AccessBindingId::mint().unwrap();
+        let held = bind_to(&mut app, &targets[0].terminal_id);
+        // Even a terminal that carries the stale id as its name is not it.
+        app.state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name(stale.to_string());
+        assert!(matches!(
+            app.resolve_agent_target(&stale.to_string()),
+            Err(TerminalTargetError::NotFound { .. })
+        ));
+        // A binding that was dropped is stale too.
+        let holder = app
+            .state
+            .terminals
+            .keys()
+            .find(|id| id.as_str() == targets[0].terminal_id)
+            .cloned()
+            .unwrap();
+        app.state.unbind_access(&holder);
+        assert!(matches!(
+            app.resolve_agent_target(&held.to_string()),
+            Err(TerminalTargetError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn terminal_resolver_never_matches_acc_targets() {
+        let (mut app, targets) = app_with_targets();
+        let binding = bind_to(&mut app, &targets[0].terminal_id);
+        let terminal = app
+            .state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap();
+        terminal.set_agent_name(binding.to_string());
+        for (index, target) in [binding.to_string(), "acc_worker".to_string(), "acc_".into()]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(
+                matches!(
+                    app.resolve_terminal_target(&target),
+                    Err(TerminalTargetError::NotFound { .. })
+                ),
+                "target #{index} resolved"
+            );
+        }
+        // Ordinary names still resolve there.
+        app.state
+            .terminals
+            .get_mut(targets[1].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name("worker".into());
+        assert_eq!(app.resolve_terminal_target("worker").unwrap(), targets[1]);
+    }
+
+    #[test]
+    fn binding_target_of_non_agent_holder_is_not_found() {
+        let (mut app, targets) = app_with_targets();
+        make_agents(&mut app, &targets);
+        let binding = bind_to(&mut app, &targets[0].terminal_id);
+        assert_eq!(
+            app.resolve_agent_target(&binding.to_string()).unwrap(),
+            targets[0]
+        );
+        // The pane stops holding an agent; the binding is stale.
+        app.state
+            .terminals
+            .get_mut(targets[0].terminal_id.as_str())
+            .unwrap()
+            .set_agent_name(String::new());
+        assert!(!app.target_is_agent(&targets[0]));
+        assert!(matches!(
+            app.resolve_agent_target(&binding.to_string()),
+            Err(TerminalTargetError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_binding_target_never_matches_name() {
+        let (mut app, targets) = app_with_targets();
+        let id = "0123456789abcdef0123456789abcdef";
+        let malformed = [
+            format!("acc_{}", &id[..31]),
+            format!("acc_{id}0"),
+            format!("acc_{}", id.to_uppercase()),
+            "acc_".to_string(),
+            "acc_worker".to_string(),
+            format!("acc_{id}-x"),
+        ];
+        for (index, name) in malformed.iter().enumerate() {
+            let target = &targets[index % targets.len()];
+            // The name is set directly, past the name check.
+            app.state
+                .terminals
+                .get_mut(target.terminal_id.as_str())
+                .unwrap()
+                .set_agent_name(name.clone());
+            assert!(
+                matches!(
+                    app.resolve_agent_target(name),
+                    Err(TerminalTargetError::NotFound { .. })
+                ),
+                "{name} resolved"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_name_with_acc_prefix_refused() {
+        use crate::api::schema::{AgentRenameParams, AgentStartParams, Method, Request};
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("acc-name");
+        let pane = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+        terminal.set_agent_name("worker".into());
+        fn call(app: &mut App, method: Method) -> serde_json::Value {
+            serde_json::from_str(&app.handle_api_request(Request {
+                id: "t".into(),
+                method,
+            }))
+            .unwrap()
+        }
+        for name in ["acc_0123456789abcdef0123456789abcdef", "acc_worker", "acc_"] {
+            let renamed = call(
+                &mut app,
+                Method::AgentRename(AgentRenameParams {
+                    target: "worker".into(),
+                    name: Some(name.into()),
+                }),
+            );
+            assert_eq!(renamed["error"]["code"], "invalid_agent_name", "{name}");
+            let started = call(
+                &mut app,
+                Method::AgentStart(AgentStartParams {
+                    name: name.into(),
+                    kind: "pi".into(),
+                    pane_id: "1".into(),
+                    args: Vec::new(),
+                    timeout_ms: None,
+                    accept_from: None,
+                }),
+            );
+            assert_eq!(started["error"]["code"], "invalid_agent_name", "{name}");
+        }
+        // The rename was refused, so the old name still holds, and a name
+        // that merely contains the prefix is still fine.
+        assert!(app.resolve_agent_target("worker").is_ok());
+        let ok = call(
+            &mut app,
+            Method::AgentRename(AgentRenameParams {
+                target: "worker".into(),
+                name: Some("my-acc_worker".into()),
+            }),
+        );
+        assert_eq!(ok["result"]["type"], "agent_info", "{ok}");
     }
 
     #[test]

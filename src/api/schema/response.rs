@@ -1,4 +1,4 @@
-// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers). Unofficial stopgap; see FORK.md.
+// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy). Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 use super::access::{AccessCallerInfo, CallerToken};
@@ -61,6 +61,14 @@ pub enum ResponseResult {
     },
     AccessCallers {
         callers: Vec<AccessCallerInfo>,
+    },
+    /// A pane's access policy. `binding` is absent when the pane holds none;
+    /// `accept_from` is then `["any"]`.
+    AccessPolicy {
+        pane_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        binding: Option<String>,
+        accept_from: Vec<String>,
     },
     WorkspaceInfo {
         workspace: WorkspaceInfo,

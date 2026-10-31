@@ -46,7 +46,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `FORK.md` | new | This list |
 | `FORK-CHANGELOG.md` | new | Fork changes, labelled *upstream candidate* or *fork-only* |
 | `docs/fork.md`, `docs/ci.md`, `docs/releases.md` | new | Relationship to upstream, fork CI, fork releases |
-| `.github/workflows/fork-ci.yml` | new | Fork CI; every job skips in upstream's repository |
+| `.github/workflows/fork-ci.yml` | new | Fork CI (linux, mutants, macos, windows); every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
 | `scripts/fork/run-mutants.sh` | new | Runs a shard of the security-guard mutants in a writable copy of the tree: each mutant's patch must apply, compile, and make its named test fail |
@@ -77,7 +77,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/app/access.rs`, `src/app/access_tests.rs` | new | `bind_access`, `unbind_access`, sticky `bind_default_access`; their tests; `start_baseline_access` and `bind_access_for_start` for `agent start` |
 | `src/app/mod.rs`, `src/app/state.rs`, `src/app/actions.rs`, `src/access/policy.rs` | changed | Startup-resolved `access_defaults` and remote settings on `AppState`; default bound on first agent detection and after restore; serde for policy types |
 | `src/app/agents.rs`, `src/app/api/agents.rs`, `src/api/schema/agents.rs`, `src/api/schema/tests.rs`, `src/cli/agent.rs`, `src/cli/agent/bindings.rs`, `src/cli/agent/bindings_tests.rs`, `src/platform/macos/input_tests.rs`, `docs/next/website/src/content/docs/cli-reference.mdx` | changed | `agent start --accept-from` / `AgentStartParams.accept_from`: binds, keeps or opens the pane's policy as the agent starts (restored if the send fails); `invalid_accept_from`; tests; CLI reference |
-| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains `accept_from` on `agent.start` |
+| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains `accept_from` on `agent.start` and the `access.caller.*` and `access.pane.*` methods and results (regenerated, not hand-edited) |
 | `src/app/access_gate.rs` | new | `check_access`: classifies the caller and calls `decide` for every Input-class method; exhaustive `gate_target`; an `agent.start` whose `accept_from` is looser than the pane's baseline is `AccessAdmin`; the `access_gate_profile` budget benchmark |
 | `src/server/headless.rs`, `src/server/alt_screen_read.rs`, `src/server/headless/endpoint_requests.rs`, `src/server/clients.rs`, `src/server/client_transport.rs` | changed | The gate runs right after the shutdown check and again right before dispatch (after queued events are applied); a refusal is `access_denied` and writes no bytes; reads skip the alt-screen wheel harvest when Input would be refused; each client connection keeps the caller captured from its socket peer at accept, and shell-endpoint requests use it |
 | `src/server/headless/tests/access_gate.rs`, `src/server/headless/tests/mod.rs`, `src/server/headless/tests/surface_interest.rs` | new / changed | Gate tests for every Input method, legacy and moved pane ids, bridge-only, restore, alt-screen reads and client callers |
@@ -91,10 +91,21 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/app/agents.rs` | changed | `remote_input`, `bridge_agent` and `remote_owner_tui` are refused as agent names (start and rename) |
 | `src/cli/access.rs`, `src/cli.rs`, `src/cli/spec.rs` | new / changed | `herdr access caller add/list/rotate/retarget/remove`; the token goes to a 0600 file and is never printed |
 | `src/platform/mod.rs`, `src/platform/unix_common.rs` | changed | `create_private_file` (create-new, mode 0600) |
-| `docs/next/website/src/content/docs/cli-reference.mdx` | changed | Documents `herdr access caller` |
-| `docs/next/api/herdr-api.schema.json` | changed *(generated)* | Schema gains the `access.caller.*` methods and results |
-
-Follow-up: the ja and zh-cn `cli-reference.mdx` still show the old `agent start` usage line without `--accept-from`; only the English page is updated.
+| `docs/next/website/src/content/docs/cli-reference.mdx` | changed | Documents `herdr access caller`, `herdr access pane`, the caller token file and binding-id targets |
+| `src/api/schema/access.rs`, `src/api/schema/response.rs`, `src/api/schema.rs`, `src/api/schema/operations.rs` | changed | `access.pane.set` (Control) and `access.pane.get` (Meta); `AccessPolicy` result; `CallerToken` loses its derived `PartialEq` (constant-time `==` only) and its `new`/`expose` are crate-private; the policy-table test lists the new rows |
+| `src/app/api/access_panes.rs`, `src/app/api.rs` | new / changed | Handlers for `access.pane.set` (`any` unbinds and opens the pane on purpose; any other list binds, keeping the binding id) and `access.pane.get` |
+| `src/app/access_gate.rs` | changed | `access.pane.set` is `AccessAdmin`, `access.pane.get` is open; tests for the pane methods and for token confinement |
+| `src/api/client.rs` | changed | `ApiClient` carries an optional `CallerToken` (redacted in `Debug`); `write_request` puts it in the request line as `caller_token`; without one the bytes are unchanged |
+| `src/cli/caller_token.rs`, `src/cli/target.rs`, `src/cli.rs`, `src/main.rs` | new / changed | `HERDR_CALLER_TOKEN_FILE` or a leading `--caller-token-file PATH` (the flag wins); read for the local server only; `--caller-token-file` with `--machine` is a usage error; an unreadable file is `error: caller token file PATH unreadable: ...`, exit 2 |
+| `src/pane.rs`, `src/server/autodetect.rs`, `src/server/handoff.rs` | changed | `HERDR_CALLER_TOKEN_FILE` is removed from pane shells, the server daemon and the handoff import child (a new `build_handoff_import_command`), so the path never reaches a child environment |
+| `src/cli/access.rs`, `src/cli/spec.rs` | changed | `herdr access pane set <pane> --accept-from LIST` and `herdr access pane get <pane>` |
+| `src/app/terminal_targets.rs`, `src/access/policy.rs`, `src/app/agents.rs` | changed | An agent target starting with `acc_` is a binding id only (a stale or malformed one is not found, never a name or position), and it resolves only while its holder is an agent terminal; the terminal resolver (`pane.read`, pane wait, attach) returns not found for any `acc_` target; agent names starting with `acc_` are refused for start and rename |
+| `src/access/registry.rs`, `src/platform/mod.rs`, `src/platform/unix_common.rs`, `src/app/mod.rs` | changed | The registry file is refused when group or others can write it, or when another user owns it (fail closed, logged with a `chmod 600` hint); the registry directory is synced after a save (a directory that will not open is logged at debug); tests for the startup load and for constant-time `lookup` |
+| `src/server/headless/tests/access_gate.rs` | changed | Whole-request-path tests for caller tokens (confined to the bridge, unknown/rotated/removed tokens, retarget) and for `access.pane.set` from a pane |
+| `src/server/headless/bootstrap.rs`, `src/cli/access.rs`, `src/cli/agent.rs`, `docs/next/website/src/content/docs/cli-reference.mdx` | changed | The server drops `HERDR_CALLER_TOKEN_FILE` from its own environment at start; `herdr access ...` and the agent commands exit 2 (not 1) on an unreadable caller token file; the page says a binding id resolves only while its holder pane runs an agent |
+| `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx` | changed | Translations of the access sections (`Access callers`, `Pane access policies`) and the `agent start --accept-from` usage and paragraph, so the heading outlines match English |
+| `src/platform/windows.rs`, `src/platform/mod.rs`, `Cargo.toml` | changed | `random_secret` on Windows is `BCryptGenRandom` (system-preferred RNG), so binding ids and caller tokens can be minted there; the `Unsupported` stub remains only for targets that are neither unix nor windows |
+| `src/app/access_gate.rs`, `src/access/policy.rs`, `src/app/terminal_targets.rs` | changed | A log-capture test that no caller token or token hash reaches the log; `AccessBindingId` Debug prints `AccessBindingId(acc_...)`; the resolver test's assert message names the target index, not the id |
 
 ## Limits
 

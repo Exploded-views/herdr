@@ -1,4 +1,4 @@
-// herdr-fork: dispatches `herdr access`. Unofficial stopgap; see FORK.md.
+// herdr-fork: dispatches `herdr access`; takes a leading `--caller-token-file`; an unusable token file reaches `finish_cli` as a typed error. Unofficial stopgap; see FORK.md.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -23,6 +23,7 @@ macro_rules! println {
 mod access;
 pub(crate) mod agent;
 mod api;
+pub(crate) mod caller_token;
 mod completion;
 mod integration;
 mod machine;
@@ -93,6 +94,12 @@ pub(super) fn print_read_response(response: &serde_json::Value) -> std::io::Resu
         print!("{text}");
     }
     Ok(0)
+}
+
+/// Take a leading `--caller-token-file <path>` out of the arguments and
+/// remember it for the API client.
+pub(crate) fn extract_caller_token_flag(args: &[String]) -> Result<Vec<String>, String> {
+    caller_token::extract_flag(args)
 }
 
 pub(crate) fn maybe_run_machine(args: &[String]) -> Option<std::io::Result<CommandOutcome>> {
@@ -813,6 +820,11 @@ fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> st
 
 pub(crate) fn protocol_mismatch_was_reported(err: &std::io::Error) -> bool {
     protocol_guard::was_reported(err)
+}
+
+/// The line to print, and exit 2 on, when `err` is an unusable caller token file.
+pub(crate) fn caller_token_usage_report(err: &std::io::Error) -> Option<String> {
+    caller_token::usage_report(err)
 }
 
 pub(crate) fn server_not_running_was_reported(err: &std::io::Error) -> bool {

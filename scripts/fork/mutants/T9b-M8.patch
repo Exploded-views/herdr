@@ -1,0 +1,16 @@
+# herdr-fork: mutant T9b-M8: acc_ agent names allowed. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index 7cba8269..6b5866bb 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -19,9 +19,7 @@ const RESERVED_AGENT_NAMES: [&str; 3] = ["remote_input", "bridge_agent", "remote
+ fn valid_agent_name(name: &str) -> bool {
+     // `acc_...` is how a pane's binding id is addressed; a name that starts
+     // that way could only ever be reached as an id.
+-    if RESERVED_AGENT_NAMES.contains(&name)
+-        || name.starts_with(crate::access::policy::BINDING_PREFIX)
+-    {
++    if RESERVED_AGENT_NAMES.contains(&name) {
+         return false;
+     }
+     let mut chars = name.chars();

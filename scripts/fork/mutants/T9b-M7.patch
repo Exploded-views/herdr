@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M7: registry mode check removed. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/registry.rs b/src/access/registry.rs
+index 15d36ca8..94af19c8 100644
+--- a/src/access/registry.rs
++++ b/src/access/registry.rs
+@@ -123,7 +123,7 @@ impl CallerRegistry {
+             Err(err) => return Err(err),
+         };
+         // Whoever can write this file can mint callers. Fail closed, and say why.
+-        if crate::platform::is_writable_by_others(&file)? {
++        if false && crate::platform::is_writable_by_others(&file)? {
+             return Err(io::Error::new(
+                 io::ErrorKind::PermissionDenied,
+                 format!(

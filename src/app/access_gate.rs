@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method are admin only, and a caller token is matched against the caller registry. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -247,6 +247,11 @@ impl App {
             | Method::AccessCallerRotate(_)
             | Method::AccessCallerRetarget(_)
             | Method::AccessCallerRemove(_) => GateTarget::AccessAdmin,
+            // Admin: only an outside caller changes a pane's policy, even to
+            // tighten it and even when nothing is protected yet.
+            Method::AccessPaneSet(_) => GateTarget::AccessAdmin,
+            // Open (Meta): reading a policy writes nothing into any pane.
+            Method::AccessPaneGet(_) => GateTarget::Open,
             // Open: nothing here writes caller-chosen bytes into an existing pane.
             Method::Ping(_)
             | Method::ServerStop(_)
@@ -1354,5 +1359,393 @@ mod tests {
         ] {
             assert!(!text.contains(&token), "{text}");
         }
+    }
+    fn pane_set(pane: &str, accept_from: &[&str]) -> Method {
+        Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+            pane_id: pane.into(),
+            accept_from: accept_from.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    fn pane_get(pane: &str) -> Method {
+        Method::AccessPaneGet(crate::api::schema::AccessPaneGetParams {
+            pane_id: pane.into(),
+        })
+    }
+
+    #[test]
+    fn gate_access_pane_set_refused_from_pane_even_when_unprotected() {
+        // Nothing is protected, so the gate is otherwise idle.
+        let app = app_with_panes(2);
+        assert!(!app.any_access_protected());
+        let panes = pane_ids(&app);
+        let pane_id = app.public_pane_id(0, panes[1]).unwrap();
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])));
+        let binding = AccessBindingId::mint().unwrap();
+        let refused = [
+            from_pane,
+            Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+            Caller::Classified(CallerClass::Remote),
+            Caller::Classified(CallerClass::Caller {
+                name: "ops".into(),
+                target: binding,
+                via_ssh: false,
+            }),
+        ];
+        // Even `any`, and even a list that only tightens, is an admin act.
+        for accept_from in [&["any"][..], &["none"], &["outside"]] {
+            let method = pane_set(&pane_id, accept_from);
+            for caller in &refused {
+                let denied = app.check_access(&method, caller).unwrap_err();
+                assert!(matches!(denied, AccessDenied::Control { .. }));
+                assert!(denied
+                    .message()
+                    .contains("does not accept control requests from"));
+            }
+            assert!(app.check_access(&method, &outside()).is_ok());
+        }
+        // Reading a policy is Meta: open to every class.
+        for caller in refused.iter().chain([&outside()]) {
+            assert!(app.check_access(&pane_get(&pane_id), caller).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_pane_policy_cannot_be_changed_by_a_pane_a_token_or_a_protected_pane_peer() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let (bridge, other) = (terminal_of(&app, panes[0]), terminal_of(&app, panes[1]));
+        protect(&mut app, &bridge, vec![Principal::Caller("ops".into())]);
+        protect(&mut app, &other, vec![Principal::Outside]);
+        let bridge_id = app.public_pane_id(0, panes[0]).unwrap();
+        let other_id = app.public_pane_id(0, panes[1]).unwrap();
+        let binding = app.state.terminals[&bridge]
+            .access
+            .as_ref()
+            .unwrap()
+            .binding
+            .clone();
+        let token = app.state.access_callers.add("ops", binding).unwrap();
+        for target in [&bridge_id, &other_id] {
+            let method = pane_set(target, &["any"]);
+            assert!(app.check_access(&method, &token_peer(&token)).is_err());
+            assert!(app
+                .check_access(
+                    &method,
+                    &Caller::Classified(CallerClass::Pane(bridge.clone()))
+                )
+                .is_err());
+            assert!(app.check_access(&method, &outside()).is_ok());
+        }
+    }
+
+    #[test]
+    fn pane_set_binds_keeps_the_binding_and_any_unbinds() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let terminal = terminal_of(&app, panes[0]);
+        let pane_id = app.public_pane_id(0, panes[0]).unwrap();
+        let policy = |app: &App| app.state.terminals[&terminal].access.clone();
+
+        // Nothing yet: open, no binding.
+        let got = call(&mut app, pane_get(&pane_id));
+        assert_eq!(got["result"]["type"], "access_policy", "{got}");
+        assert_eq!(got["result"]["pane_id"], pane_id);
+        assert!(got["result"].get("binding").is_none());
+        assert_eq!(got["result"]["accept_from"], serde_json::json!(["any"]));
+
+        let set = call(&mut app, pane_set(&pane_id, &["outside", "caller:ops"]));
+        assert_eq!(set["result"]["type"], "access_policy", "{set}");
+        let bound = policy(&app).unwrap();
+        assert_eq!(
+            bound.accept_from,
+            vec![Principal::Outside, Principal::Caller("ops".into())]
+        );
+        assert_eq!(set["result"]["binding"], bound.binding.to_string());
+        assert_eq!(set["result"]["pane_id"], pane_id);
+        assert_eq!(
+            set["result"]["accept_from"],
+            serde_json::json!(["outside", "caller:ops"])
+        );
+        assert!(!app.state.terminals[&terminal].access_opened_explicitly);
+
+        // A rebind keeps the binding id.
+        let again = call(&mut app, pane_set(&pane_id, &["none"]));
+        assert_eq!(again["result"]["binding"], bound.binding.to_string());
+        assert_eq!(policy(&app).unwrap().accept_from, vec![Principal::None]);
+        let got = call(&mut app, pane_get(&pane_id));
+        assert_eq!(got["result"]["binding"], bound.binding.to_string());
+        assert_eq!(got["result"]["accept_from"], serde_json::json!(["none"]));
+
+        // The other pane is untouched.
+        assert!(app.state.terminals[&terminal_of(&app, panes[1])]
+            .access
+            .is_none());
+
+        // A bad list changes nothing.
+        let bad_lists: [&[&str]; 5] = [
+            &[],
+            &["any", "none"],
+            &["bogus"],
+            &["caller:Bad Name"],
+            &["*"],
+        ];
+        for bad in bad_lists {
+            let refused = call(&mut app, pane_set(&pane_id, bad));
+            assert_eq!(refused["error"]["code"], "invalid_accept_from", "{bad:?}");
+            assert_eq!(policy(&app).unwrap().accept_from, vec![Principal::None]);
+        }
+        let missing = call(&mut app, pane_set("no-such-pane", &["none"]));
+        assert_eq!(missing["error"]["code"], "pane_not_found");
+        let missing = call(&mut app, pane_get("no-such-pane"));
+        assert_eq!(missing["error"]["code"], "pane_not_found");
+
+        // `any` removes the policy and opens the pane on purpose.
+        let opened = call(&mut app, pane_set(&pane_id, &["any"]));
+        assert_eq!(opened["result"]["type"], "access_policy", "{opened}");
+        assert!(opened["result"].get("binding").is_none());
+        assert_eq!(opened["result"]["accept_from"], serde_json::json!(["any"]));
+        assert!(policy(&app).is_none());
+        assert!(app.state.terminals[&terminal].access_opened_explicitly);
+
+        // Binding again clears that mark and mints a fresh binding.
+        let rebound = call(&mut app, pane_set(&pane_id, &["outside"]));
+        assert_ne!(rebound["result"]["binding"], bound.binding.to_string());
+        assert!(!app.state.terminals[&terminal].access_opened_explicitly);
+    }
+
+    /// Two protected panes: the first accepts `caller:ops`, the second `outside`.
+    /// Returns the app, both public ids, and a token for `ops` bound to the first.
+    fn bridge_and_other() -> (App, String, String, String) {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let bridge_id = app.public_pane_id(0, panes[0]).unwrap();
+        let other_id = app.public_pane_id(0, panes[1]).unwrap();
+        // Binding-id targets resolve only to agent terminals, so both panes are agents.
+        for (index, pane) in panes.iter().enumerate() {
+            let terminal = terminal_of(&app, *pane);
+            app.state
+                .terminals
+                .get_mut(&terminal)
+                .unwrap()
+                .set_agent_name(format!("agent-{index}"));
+        }
+        for (id, list) in [(&bridge_id, "caller:ops"), (&other_id, "outside")] {
+            let set = call(&mut app, pane_set(id, &[list]));
+            assert_eq!(set["result"]["type"], "access_policy", "{set}");
+        }
+        let token = token_of(&call(
+            &mut app,
+            Method::AccessCallerAdd(crate::api::schema::AccessCallerAddParams {
+                name: "ops".into(),
+                target_pane: bridge_id.clone(),
+            }),
+        ));
+        (app, bridge_id, other_id, token)
+    }
+
+    fn binding_of(app: &mut App, pane_id: &str) -> String {
+        let got = call(app, pane_get(pane_id));
+        got["result"]["binding"].as_str().unwrap().to_string()
+    }
+
+    fn prompt_to(target: &str) -> Method {
+        Method::AgentPrompt(AgentPromptParams {
+            target: target.into(),
+            text: "x".into(),
+            wait: None,
+        })
+    }
+
+    #[test]
+    fn gate_caller_token_reaches_bridge_only() {
+        let (mut app, bridge_id, other_id, token) = bridge_and_other();
+        let peer = token_peer(&token);
+        assert!(app.check_access(&send_text(&bridge_id), &peer).is_ok());
+        let denied = app.check_access(&send_text(&other_id), &peer).unwrap_err();
+        assert!(denied.message().contains("caller:ops"));
+        assert!(!denied.message().contains(&token));
+        // By binding id, too: the bridge's id is reachable, the other pane's is not.
+        let (bridge_binding, other_binding) = (
+            binding_of(&mut app, &bridge_id),
+            binding_of(&mut app, &other_id),
+        );
+        assert!(app.check_access(&prompt_to(&bridge_binding), &peer).is_ok());
+        assert!(app.check_access(&prompt_to(&other_binding), &peer).is_err());
+        // An outside caller reaches the other pane and not the bridge.
+        assert!(app.check_access(&send_text(&other_id), &outside()).is_ok());
+        assert!(app
+            .check_access(&send_text(&bridge_id), &outside())
+            .is_err());
+    }
+
+    #[test]
+    fn gate_unknown_token_from_outside_is_denied_by_bridge() {
+        let (mut app, bridge_id, _other_id, token) = bridge_and_other();
+        let denied_for = |app: &App, peer: &Caller| {
+            app.check_access(&send_text(&bridge_id), peer)
+                .unwrap_err()
+                .message()
+        };
+        // A token nobody holds is only an outside caller, and the bridge does not take those.
+        for peer in [token_peer(&"0".repeat(64)), token_peer("")] {
+            let message = denied_for(&app, &peer);
+            assert!(
+                message.contains("does not accept input from outside"),
+                "{message}"
+            );
+        }
+        assert!(app
+            .check_access(&send_text(&bridge_id), &token_peer(&token))
+            .is_ok());
+
+        // A rotated token's predecessor, and a removed caller's token, stop working.
+        let rotated = token_of(&call(
+            &mut app,
+            Method::AccessCallerRotate(crate::api::schema::AccessCallerNameParams {
+                name: "ops".into(),
+            }),
+        ));
+        assert!(denied_for(&app, &token_peer(&token)).contains("outside"));
+        assert!(app
+            .check_access(&send_text(&bridge_id), &token_peer(&rotated))
+            .is_ok());
+        call(
+            &mut app,
+            Method::AccessCallerRemove(crate::api::schema::AccessCallerNameParams {
+                name: "ops".into(),
+            }),
+        );
+        assert!(denied_for(&app, &token_peer(&rotated)).contains("outside"));
+    }
+
+    /// Everything the caller-token path logs, at TRACE, while a caller is
+    /// registered, authenticates, is turned away with a wrong token and a
+    /// malformed one, is rotated and is removed. Neither a token nor its hex
+    /// sha256 may appear.
+    #[test]
+    fn caller_token_and_hash_never_reach_the_log() {
+        use sha2::{Digest, Sha256};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SharedLog(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedLog {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        fn sha_hex(token: &str) -> String {
+            Sha256::digest(token.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        }
+
+        let log = SharedLog::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let secrets = tracing::subscriber::with_default(subscriber, || {
+            let (mut app, bridge_id, other_id, token) = bridge_and_other();
+            let good = token_peer(&token);
+            assert!(app.check_access(&send_text(&bridge_id), &good).is_ok());
+            assert!(app.check_access(&send_text(&other_id), &good).is_err());
+            let wrong = "f".repeat(64);
+            let oversized = "x".repeat(5000);
+            let bad_tokens = [
+                wrong.as_str(),
+                "",
+                "not a token\n",
+                "tok\u{0}en",
+                oversized.as_str(),
+            ];
+            for bad in bad_tokens {
+                assert!(app
+                    .check_access(&send_text(&bridge_id), &token_peer(bad))
+                    .is_err());
+            }
+            let rotated = token_of(&call(
+                &mut app,
+                Method::AccessCallerRotate(crate::api::schema::AccessCallerNameParams {
+                    name: "ops".into(),
+                }),
+            ));
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&token))
+                .is_err());
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&rotated))
+                .is_ok());
+            call(
+                &mut app,
+                Method::AccessCallerRemove(crate::api::schema::AccessCallerNameParams {
+                    name: "ops".into(),
+                }),
+            );
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&rotated))
+                .is_err());
+            vec![token, rotated, wrong]
+        });
+
+        let logged = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("access denied"),
+            "the denials were logged: {logged}"
+        );
+        for secret in &secrets {
+            assert!(!logged.contains(secret.as_str()), "token leaked: {logged}");
+            assert!(
+                !logged.contains(&sha_hex(secret)),
+                "token hash leaked: {logged}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_retarget_moves_caller_to_new_binding() {
+        let (mut app, bridge_id, other_id, token) = bridge_and_other();
+        let peer = token_peer(&token);
+        // A pane with no policy cannot be a caller's target, and nothing moves.
+        let opened = call(&mut app, pane_set(&other_id, &["any"]));
+        assert_eq!(opened["result"]["type"], "access_policy");
+        let refused = call(
+            &mut app,
+            Method::AccessCallerRetarget(crate::api::schema::AccessCallerRetargetParams {
+                name: "ops".into(),
+                target_pane: other_id.clone(),
+            }),
+        );
+        assert_eq!(refused["error"]["code"], "no_access_policy", "{refused}");
+        assert!(app.check_access(&send_text(&bridge_id), &peer).is_ok());
+
+        // Once the other pane holds a policy that admits the caller, it can move.
+        call(&mut app, pane_set(&other_id, &["caller:ops"]));
+        let moved = call(
+            &mut app,
+            Method::AccessCallerRetarget(crate::api::schema::AccessCallerRetargetParams {
+                name: "ops".into(),
+                target_pane: other_id.clone(),
+            }),
+        );
+        assert_eq!(moved["result"]["type"], "ok", "{moved}");
+        // The same token now reaches the new pane and no longer the old one.
+        assert!(app.check_access(&send_text(&other_id), &peer).is_ok());
+        assert!(app.check_access(&send_text(&bridge_id), &peer).is_err());
+        let listed = call(&mut app, Method::AccessCallerList(Default::default()));
+        assert_eq!(listed["result"]["callers"][0]["pane_id"], other_id);
+        assert_eq!(
+            listed["result"]["callers"][0]["binding"],
+            binding_of(&mut app, &other_id)
+        );
     }
 }

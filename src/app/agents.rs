@@ -1,4 +1,4 @@
-// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config are refused. Unofficial stopgap; see FORK.md.
+// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config or starting with `acc_` are refused. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -17,7 +17,11 @@ const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase
 const RESERVED_AGENT_NAMES: [&str; 3] = ["remote_input", "bridge_agent", "remote_owner_tui"];
 
 fn valid_agent_name(name: &str) -> bool {
-    if RESERVED_AGENT_NAMES.contains(&name) {
+    // `acc_...` is how a pane's binding id is addressed; a name that starts
+    // that way could only ever be reached as an id.
+    if RESERVED_AGENT_NAMES.contains(&name)
+        || name.starts_with(crate::access::policy::BINDING_PREFIX)
+    {
         return false;
     }
     let mut chars = name.chars();
@@ -526,6 +530,22 @@ mod tests {
         }
         // Only the exact reserved words; near misses stay valid.
         for name in ["remote_inputs", "bridge-agent", "remote"] {
+            assert!(valid_agent_name(name), "expected {name:?} to be valid");
+        }
+    }
+
+    #[test]
+    fn binding_ids_are_not_agent_names() {
+        for name in [
+            "acc_0123456789abcdef0123456789abcdef",
+            "acc_",
+            "acc_worker",
+            "acc_x",
+        ] {
+            assert!(!valid_agent_name(name), "expected {name:?} to be refused");
+        }
+        // Only the prefix is reserved; near misses stay valid.
+        for name in ["acc", "acc-worker", "accx", "my-acc_worker", "a_acc_"] {
             assert!(valid_agent_name(name), "expected {name:?} to be valid");
         }
     }

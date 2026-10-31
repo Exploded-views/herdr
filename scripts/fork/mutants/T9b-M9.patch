@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M9: write_request drops the token. Unofficial stopgap; see FORK.md.
+diff --git a/src/api/client.rs b/src/api/client.rs
+index 46fd26b7..378b5fd3 100644
+--- a/src/api/client.rs
++++ b/src/api/client.rs
+@@ -211,7 +211,7 @@ fn write_request(
+         None => serde_json::to_string(request)?,
+         Some(token) => {
+             let mut value = serde_json::to_value(request)?;
+-            if let Some(fields) = value.as_object_mut() {
++            if let Some(fields) = value.as_object_mut().filter(|_| false) {
+                 fields.insert(
+                     "caller_token".into(),
+                     serde_json::Value::String(token.expose().to_owned()),

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M3: only well-formed ids are binding-only. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/terminal_targets.rs b/src/app/terminal_targets.rs
+index 4e3b2cd9..e2e1ef7a 100644
+--- a/src/app/terminal_targets.rs
++++ b/src/app/terminal_targets.rs
+@@ -86,7 +86,7 @@ impl App {
+         // A binding id is not a name and not a position: it is tried as
+         // nothing else, so a stale or malformed one can never land on another
+         // pane.
+-        if target.starts_with(crate::access::policy::BINDING_PREFIX) {
++        if crate::access::policy::AccessBindingId::parse(target).is_some() {
+             return self.resolve_binding_target(target);
+         }
+         if let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(target) {

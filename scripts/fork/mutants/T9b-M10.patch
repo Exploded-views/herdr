@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9b-M10: access.pane.set any does not unbind. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/api/access_panes.rs b/src/app/api/access_panes.rs
+index 7d0bd273..3807f3e7 100644
+--- a/src/app/api/access_panes.rs
++++ b/src/app/api/access_panes.rs
+@@ -73,7 +73,7 @@ impl App {
+             Err(message) => return responses::encode_error(id, "invalid_accept_from", message),
+         };
+         match accept {
+-            AcceptFrom::Any => self.state.unbind_access(&terminal),
++            AcceptFrom::Any => {}
+             AcceptFrom::Only(list) => {
+                 if let Err(err) = self.state.bind_access(&terminal, list) {
+                     tracing::error!(%err, pane = %pane_id, "could not bind a pane's access policy");

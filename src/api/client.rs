@@ -1,3 +1,4 @@
+// herdr-fork: the client can attach a caller token to every request (`caller_token` beside the request fields). Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -7,7 +8,7 @@ use interprocess::local_socket::traits::Stream as _;
 use serde::de::DeserializeOwned;
 
 use crate::api::schema::{
-    ErrorResponse, Method, PingParams, Request, ResponseResult, SuccessResponse,
+    CallerToken, ErrorResponse, Method, PingParams, Request, ResponseResult, SuccessResponse,
 };
 use crate::ipc::LocalStream;
 
@@ -32,6 +33,8 @@ impl ConnectionTarget {
 #[derive(Debug, Clone)]
 pub struct ApiClient {
     target: ConnectionTarget,
+    /// Sent with every request. Its `Debug` is redacted, so this derive is safe.
+    caller_token: Option<CallerToken>,
 }
 
 impl ApiClient {
@@ -40,7 +43,22 @@ impl ApiClient {
     }
 
     pub fn for_target(target: ConnectionTarget) -> Self {
-        Self { target }
+        Self {
+            target,
+            caller_token: None,
+        }
+    }
+
+    /// Send `token` with every request (a local server only; the CLI never
+    /// calls this for a `--machine` target).
+    pub fn with_caller_token(mut self, token: CallerToken) -> Self {
+        self.caller_token = Some(token);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_caller_token(&self) -> bool {
+        self.caller_token.is_some()
     }
 
     pub fn socket_path(&self) -> PathBuf {
@@ -54,7 +72,7 @@ impl ApiClient {
 
     pub fn request_value(&self, request: &Request) -> Result<serde_json::Value, ApiClientError> {
         let mut stream = self.connect()?;
-        write_request(&mut stream, request)?;
+        write_request(&mut stream, request, self.caller_token.as_ref())?;
 
         let mut reader = BufReader::new(stream);
         read_json_line(&mut reader)
@@ -68,7 +86,7 @@ impl ApiClient {
         let mut stream = self.connect()?;
         set_timeout_best_effort(&stream, TimeoutKind::Send, timeout)?;
         set_timeout_best_effort(&stream, TimeoutKind::Recv, timeout)?;
-        write_request(&mut stream, request)?;
+        write_request(&mut stream, request, self.caller_token.as_ref())?;
 
         let mut reader = BufReader::new(stream);
         read_json_line(&mut reader)
@@ -96,7 +114,7 @@ impl ApiClient {
         let response = match timeout {
             Some(timeout) => {
                 let mut stream = self.connect()?;
-                write_request(&mut stream, &request)?;
+                write_request(&mut stream, &request, self.caller_token.as_ref())?;
                 crate::ipc::set_local_stream_polling(&mut stream, true)?;
                 let mut reader = BufReader::new(DeadlineReader {
                     stream: &mut stream,
@@ -182,8 +200,27 @@ impl From<serde_json::Error> for ApiClientError {
     }
 }
 
-fn write_request(stream: &mut LocalStream, request: &Request) -> Result<(), ApiClientError> {
-    stream.write_all(serde_json::to_string(request)?.as_bytes())?;
+/// One JSON line. With a token, `caller_token` rides beside `id`, `method`
+/// and `params`; without one the bytes are exactly the upstream request.
+fn write_request(
+    stream: &mut impl Write,
+    request: &Request,
+    token: Option<&CallerToken>,
+) -> Result<(), ApiClientError> {
+    let line = match token {
+        None => serde_json::to_string(request)?,
+        Some(token) => {
+            let mut value = serde_json::to_value(request)?;
+            if let Some(fields) = value.as_object_mut() {
+                fields.insert(
+                    "caller_token".into(),
+                    serde_json::Value::String(token.expose().to_owned()),
+                );
+            }
+            serde_json::to_string(&value)?
+        }
+    };
+    stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())
@@ -280,6 +317,84 @@ mod tests {
             matches!(error, ApiClientError::Io(error) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock))
         );
         server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    const TOKEN: &str = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
+
+    fn ping_request() -> Request {
+        Request {
+            id: "t".into(),
+            method: Method::Ping(PingParams::default()),
+        }
+    }
+
+    #[test]
+    fn write_request_injects_caller_token() {
+        let mut wire = Vec::new();
+        let token = CallerToken::new(TOKEN.into());
+        write_request(&mut wire, &ping_request(), Some(&token)).unwrap();
+        let text = String::from_utf8(wire).unwrap();
+        // One line, so the server reads the token with the request.
+        assert_eq!(text.matches('\n').count(), 1);
+        assert!(text.ends_with('\n'));
+        let value: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(value["caller_token"], TOKEN);
+        // The request itself is unchanged.
+        assert_eq!(value["id"], "t");
+        assert_eq!(value["method"], "ping");
+        let request: Request = serde_json::from_value(value).unwrap();
+        assert_eq!(request, ping_request());
+    }
+
+    #[test]
+    fn write_request_omits_absent_token() {
+        let mut wire = Vec::new();
+        write_request(&mut wire, &ping_request(), None).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(String::from_utf8(wire).unwrap().trim_end()).unwrap();
+        assert!(value.get("caller_token").is_none());
+        assert_eq!(
+            value,
+            serde_json::to_value(ping_request()).unwrap(),
+            "no token: the bytes are exactly the upstream request"
+        );
+    }
+
+    #[test]
+    fn client_sends_its_token_on_the_wire_and_hides_it_in_debug() {
+        #[cfg(unix)]
+        use interprocess::local_socket::traits::Listener as _;
+        let path =
+            std::env::temp_dir().join(format!("herdr-token-wire-{}.sock", std::process::id()));
+        let listener = crate::ipc::bind_private_local_listener(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut lines = Vec::new();
+            for _ in 0..2 {
+                let stream = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let mut stream = reader.into_inner();
+                stream
+                    .write_all(b"{\"id\":\"t\",\"result\":{\"type\":\"ok\"}}\n")
+                    .unwrap();
+                lines.push(line);
+            }
+            lines
+        });
+        let plain = ApiClient::for_target(ConnectionTarget::SocketPath(path.clone()));
+        assert!(!plain.has_caller_token());
+        let tokened = plain
+            .clone()
+            .with_caller_token(CallerToken::new(TOKEN.into()));
+        assert!(tokened.has_caller_token());
+        assert!(!format!("{tokened:?}").contains(TOKEN));
+        plain.request_value(&ping_request()).unwrap();
+        tokened.request_value(&ping_request()).unwrap();
+        let lines = server.join().unwrap();
+        assert!(!lines[0].contains("caller_token"));
+        assert!(lines[1].contains(TOKEN));
         std::fs::remove_file(path).unwrap();
     }
 

@@ -1,0 +1,13 @@
+# herdr-fork: mutant T9b-M12: apply_pane_launch_env keeps HERDR_CALLER_TOKEN_FILE in the pane environment. Unofficial stopgap; see FORK.md.
+diff --git a/src/pane.rs b/src/pane.rs
+index 5d8ad346..236e68ff 100644
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -196,7 +196,6 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+         "CLAUDE_CODE_MESSAGING_TOKEN",
+         // The caller token file is for outside callers only; a pane's own
+         // `herdr` calls are classified by lineage and never present a token.
+-        crate::cli::caller_token::ENV_VAR,
+     ] {
+         cmd.env_remove(key);
+     }

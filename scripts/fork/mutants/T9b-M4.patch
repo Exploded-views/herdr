@@ -1,0 +1,18 @@
+# herdr-fork: mutant T9b-M4: ct_eq becomes ==. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/registry.rs b/src/access/registry.rs
+index 15d36ca8..8ccb1c28 100644
+--- a/src/access/registry.rs
++++ b/src/access/registry.rs
+@@ -79,11 +79,7 @@ fn unhex_hash(text: &str) -> Option<TokenHash> {
+ 
+ /// Compare two hashes without stopping at the first difference.
+ fn ct_eq(a: &TokenHash, b: &TokenHash) -> bool {
+-    let mut diff = 0u8;
+-    for (x, y) in a.iter().zip(b.iter()) {
+-        diff |= x ^ y;
+-    }
+-    std::hint::black_box(diff) == 0
++    a == b
+ }
+ 
+ /// Flush a directory's entries to disk. A directory can't be opened on every

@@ -1,4 +1,4 @@
-// herdr-fork: access policy types and the `decide` function; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
+// herdr-fork: access policy types and the `decide` function; `AccessBindingId` has a redacting Debug; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io;
 
@@ -87,10 +87,22 @@ pub(crate) fn is_looser(explicit: &AcceptFrom, current: Option<&[Principal]>) ->
     }
 }
 
+/// What every binding id starts with. A target that starts with it is a
+/// binding id and nothing else, and no agent name may start with it.
+pub(crate) const BINDING_PREFIX: &str = "acc_";
+
 /// `acc_` followed by 32 lowercase hex characters.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct AccessBindingId(String);
+
+// Not derived: a binding id is minted from the OS random source, so keep it out
+// of `{:?}` output. `access pane get` still shows it on purpose, via `Display`.
+impl fmt::Debug for AccessBindingId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AccessBindingId(acc_...)")
+    }
+}
 
 impl From<AccessBindingId> for String {
     fn from(id: AccessBindingId) -> String {
@@ -108,7 +120,7 @@ impl TryFrom<String> for AccessBindingId {
 impl AccessBindingId {
     pub(crate) fn mint() -> io::Result<Self> {
         let secret = crate::platform::random_secret()?;
-        let mut s = String::from("acc_");
+        let mut s = String::from(BINDING_PREFIX);
         for b in &secret[..16] {
             s.push_str(&format!("{b:02x}"));
         }
@@ -116,7 +128,7 @@ impl AccessBindingId {
     }
 
     pub(crate) fn parse(text: &str) -> Option<Self> {
-        let hex = text.strip_prefix("acc_")?;
+        let hex = text.strip_prefix(BINDING_PREFIX)?;
         let ok = hex.len() == 32 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
         ok.then(|| Self(text.to_string()))
     }

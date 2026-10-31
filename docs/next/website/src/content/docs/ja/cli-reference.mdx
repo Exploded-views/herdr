@@ -3,6 +3,8 @@ title: CLI リファレンス
 description: セッション、ワークスペース、タブ、ペイン、通知、エージェント、wait、インテグレーション、ステータスのための Herdr コマンド。
 ---
 
+{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` and the caller token file; see FORK.md */}
+
 Herdr の CLI は、インテグレーションやエージェントが使うのと同じローカルソケット API を通じて、実行中のサーバーと通信します。
 
 ほとんどのコマンドは JSON レスポンスを出力します。決定的な自動化が欲しいときはスクリプトから使ってください。
@@ -326,7 +328,7 @@ herdr agent rename <target> <name>|--clear
 herdr agent focus <target>
 herdr agent wait <target> [--until STATUS]... [--timeout MS]
 herdr agent attach <target> [--takeover]
-herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]
+herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--accept-from WHO]... [-- <agent-args...>]
 herdr agent explain <target> [--json|--verbose]
 herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 ```
@@ -334,6 +336,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 エージェントターゲットは、一意なライブエージェント名、または現在そのエージェントをホストしているペイン ID です。ターミナル ID とエージェント kind のラベルだけでは指定できません。`agent start` で起動するエージェントには名前が必須で、手動で起動したエージェントは名前なしのままペイン ID で指定します。
 
 `agent start` は既存の利用可能なシェルペインを起動対象にします。対話シェル自身がフォアグラウンドを所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていない必要があります。トポロジーは別に作成します。名前はライブエージェント間で一意で、`[a-z][a-z0-9_-]{0,31}` に一致する必要があります。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`letta`、`maki`、`muse` です。名前は現在のペイン占有者に属し、そのエージェントの終了、release、置換で消えます。一時的に検出できないだけでは消えません。
+
+`--accept-from`(フォーク)は、エージェントの起動後にそのペインが誰からの入力を受け付けるかを設定します。`any`、または `none`、`outside`、`caller:<name>` のカンマ区切りまたは繰り返し指定のリストです。指定しない場合、すでにポリシーを持つペインはそれを維持し、意図的に開放されたペインは開放のままで、それ以外のペインにはエージェント名に対応する `[access.<name>]` セクションが、なければ `[access.default]` が適用されます。`any` は意図的にペインを開放します。ペインが現在(またはこれから)持つ以上のアクセスを求めるのは管理者リクエストであり、どのペインの外側にいる呼び出し元だけが行えます。絞り込みには、通常のペイン制御以上の権限は必要ありません。
 
 成功した start は、期待したエージェントが同じターミナルを所有し、対話入力の準備ができてから返ります。起動中の検出状態が `blocked` の場合、コマンドは直ちに `agent_not_ready` を返します。名前は `agent read` と `agent send-keys` で引き続き使用でき、検出状態が `idle` になるとプロンプトを送信できるようになります。デフォルトの起動タイムアウトは 30000 ミリ秒で、明示する値は 3000 より大きく 300000 以下でなければなりません。
 
@@ -379,6 +383,48 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 タイムアウトや `agent_prompt_stalled` は未送信を保証しません。再試行前にエージェントを確認してください。
 
 `pane wait-output` と `agent wait` は、`--timeout` を省略すると無期限に待ちます。`agent prompt --wait` では、活動を観測した後、またはプロンプト開始時に `working` だった場合の安定状態待機は無期限です。non-working 状態から開始して活動を観測できない場合は、5 秒後に `agent_prompt_stalled` を返します。タイムアウトまたはサーバーエラーは JSON として stderr に出力され、終了コード 1 になります。CLI 使用法のエラーは終了コード 2 です。
+
+## アクセス呼び出し元
+
+フォーク専用の機能です。名前付きの呼び出し元(caller)は秘密のトークンを持ち、バインドされた 1 つのペインにだけ入力を送れます。そのペインには、`caller:<name>` を含むアクセスポリシーがすでに設定されている必要があります。呼び出し元を管理できるのは、どのペインの外側にいる呼び出し元だけです。ペイン、リモートホスト、別の呼び出し元は拒否されます。
+
+```bash
+herdr access caller add <name> --target-pane ID --token-file PATH
+herdr access caller list
+herdr access caller rotate <name> --token-file PATH
+herdr access caller retarget <name> --target-pane ID
+herdr access caller remove <name>
+```
+
+名前は `[a-z0-9][a-z0-9_-]{0,63}` に一致する必要があります。`add` はモード 0600 でトークンファイルを作成し、すでに存在するファイルは拒否します。出力するのはバインド ID(`acc_...`)だけで、トークンは出力しません。`rotate` は新しいトークンを非公開の一時ファイルに書き込み、古いファイルの上にリネームします。古いトークンは使えなくなります。各トークンは sha256 だけが、Herdr のデータディレクトリにある `access-callers.json`(モード 0600)に保存されます。`retarget` は、呼び出し元をポリシーを持つ別のペインへ移します。
+
+### トークンの提示
+
+呼び出し元はすべてのリクエストでトークンを送ります。CLI には `HERDR_CALLER_TOKEN_FILE` でトークンファイルを指定するか、コマンドラインの先頭に `--caller-token-file PATH` を置きます(フラグが優先されます)。
+
+```bash
+herdr --caller-token-file PATH agent prompt acc_0123456789abcdef0123456789abcdef "hello"
+HERDR_CALLER_TOKEN_FILE=PATH herdr pane send-text w1:p1 "hello"
+```
+
+ファイルにはトークンを 1 行で書きます(最大 1 KiB)。ファイルを読めない、空である、またはサイズが大きすぎる場合、コマンドは `error: caller token file PATH unreadable: ...` を出力し、接続する前に終了コード 2 で終了します。トークンはローカルサーバーに対してだけ読み込まれます。`--caller-token-file` と `--machine` の併用は使用法エラー(`--caller-token-file cannot be used with --machine`)になり、`--machine` では `HERDR_CALLER_TOKEN_FILE` は無視されるため、トークンがこのマシンの外に出ることはありません。CLI はトークンを出力しません。どの呼び出し元にも一致しないトークンはトークンなしとして扱われます。リクエストは外側からのものになり、`caller:<name>` だけを許可するペインはそれを拒否します。
+
+ペイン、サーバー、ハンドオフの子プロセスは `HERDR_CALLER_TOKEN_FILE` を継承しません。トークンを所有する呼び出し元のシェルでだけ設定してください。これをエクスポートしているシェルは管理者ではなくその呼び出し元として分類されるため、`access` コマンド(トークンを持たない外側の呼び出し元だけが実行できます)を実行する前に `unset HERDR_CALLER_TOKEN_FILE` を実行するか、`--caller-token-file` を付けないでください。
+
+### バインド ID でペインを指定する
+
+バインドされたペインにはすべてバインド ID(`acc_` と 16 進数 32 桁)があります。`acc_` で始まるエージェントターゲットはバインド ID であり、それ以外の意味はありません。その ID を持つペインに届きます。形式が不正なターゲットや、保持するペインがないターゲットは `agent_not_found` で失敗します。エージェント名やペイン位置として試されることはありません。`acc_` で始まるエージェント名は、エージェントの起動時と名前変更時に拒否されます。バインド ID が解決されるのは、保持するペインでエージェントが動いている間だけです。それ以外では見つかりません。
+
+## ペインのアクセスポリシー
+
+フォーク専用の機能です。ペインのポリシーを変更できるのは、どのペインの外側にいる呼び出し元だけです。
+
+```bash
+herdr access pane set <pane> --accept-from LIST
+herdr access pane get <pane>
+```
+
+`LIST` は `any`、または `none`、`outside`、`caller:<name>` のカンマ区切りまたは繰り返し指定のリストです。`set` はポリシーをバインドします(ペインにバインド ID があればそれを維持します)。`any` はポリシーを削除し、意図的にペインを開放します。古いバインドに紐づく呼び出し元は、`access caller retarget` を再実行するまで宙に浮いた状態(かつ拒否される状態)のままです。`get` はすべての呼び出し元に開かれており、`caller:ops` のような呼び出し元名を含む `accept_from` リスト全体を表示します。どちらも 1 行を出力します。ペイン、そのバインド ID(ない場合は `-`)、リスト(ポリシーがない場合は `any`)です。API メソッドは `access.pane.set` と `access.pane.get` です。
 
 ## インテグレーション
 

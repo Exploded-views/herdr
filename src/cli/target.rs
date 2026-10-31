@@ -1,4 +1,4 @@
-// herdr-fork: --machine refuses access commands (they act on the local server only). Unofficial stopgap; see FORK.md.
+// herdr-fork: --machine refuses access commands (they act on the local server only) and `--caller-token-file`; the caller token is attached to the local client only. Unofficial stopgap; see FORK.md.
 use std::cell::RefCell;
 use std::io;
 
@@ -64,7 +64,23 @@ pub(super) fn is_remote() -> bool {
     TARGET.with(|target| target.borrow().is_some())
 }
 
+/// The client for this command. A local server also gets the caller token,
+/// if one is configured; a saved machine never does (its requests go through
+/// an ssh bridge, and the token stays on this machine). An unusable token file
+/// is an error that `finish_cli` reports and exits 2 on.
 pub(super) fn api_client() -> io::Result<ApiClient> {
+    let client = base_client()?;
+    if is_remote() {
+        return Ok(client);
+    }
+    match super::caller_token::for_local() {
+        Ok(Some(token)) => Ok(client.with_caller_token(token)),
+        Ok(None) => Ok(client),
+        Err(message) => Err(super::caller_token::unreadable_error(message)),
+    }
+}
+
+fn base_client() -> io::Result<ApiClient> {
     TARGET.with(|target| {
         let mut target = target.borrow_mut();
         let Some(target) = target.as_mut() else {
@@ -218,6 +234,7 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
     let mut index = 1;
     let mut machine = None;
     let mut other_prefix = false;
+    let mut caller_token_file = false;
     while let Some(arg) = args.get(index) {
         if arg == "--machine" || arg.starts_with("--machine=") {
             if machine.is_some() {
@@ -235,6 +252,11 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
                 return Err("--machine requires a saved machine label or profile ID".into());
             }
             machine = Some(value);
+        } else if arg == "--caller-token-file" || arg.starts_with("--caller-token-file=") {
+            caller_token_file = true;
+            if arg == "--caller-token-file" {
+                index += 1;
+            }
         } else if arg.starts_with('-') && arg != "--" {
             other_prefix = true;
             if matches!(
@@ -251,6 +273,9 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
     let Some(machine) = machine else {
         return Ok(None);
     };
+    if caller_token_file {
+        return Err("--caller-token-file cannot be used with --machine".into());
+    }
     if other_prefix {
         return Err("--machine cannot be combined with other launch options; it uses the saved machine's session".into());
     }
@@ -416,6 +441,122 @@ mod tests {
         ] {
             assert!(parse_machine_prefix(&input).is_err(), "{input:?}");
         }
+    }
+
+    #[test]
+    fn caller_token_file_with_machine_is_usage_error() {
+        let refused = "--caller-token-file cannot be used with --machine";
+        for input in [
+            args(&[
+                "herdr",
+                "--machine",
+                "mac",
+                "--caller-token-file",
+                "/t",
+                "agent",
+                "list",
+            ]),
+            args(&[
+                "herdr",
+                "--caller-token-file",
+                "/t",
+                "--machine",
+                "mac",
+                "agent",
+                "list",
+            ]),
+            args(&[
+                "herdr",
+                "--machine=mac",
+                "--caller-token-file=/t",
+                "agent",
+                "list",
+            ]),
+            args(&[
+                "herdr",
+                "--caller-token-file=/t",
+                "--machine=mac",
+                "agent",
+                "list",
+            ]),
+        ] {
+            assert_eq!(
+                parse_machine_prefix(&input).unwrap_err(),
+                refused,
+                "{input:?}"
+            );
+        }
+        // Without --machine the flag is not this parser's business, and its
+        // value is not mistaken for the command.
+        assert_eq!(
+            parse_machine_prefix(&args(&[
+                "herdr",
+                "--caller-token-file",
+                "/t",
+                "agent",
+                "list"
+            ]))
+            .unwrap(),
+            None
+        );
+        // After the command it belongs to the command.
+        assert_eq!(
+            parse_machine_prefix(&args(&[
+                "herdr",
+                "--machine",
+                "mac",
+                "agent",
+                "list",
+                "--caller-token-file",
+                "/t"
+            ]))
+            .unwrap(),
+            Some((
+                "mac".into(),
+                args(&["herdr", "agent", "list", "--caller-token-file", "/t"])
+            ))
+        );
+    }
+
+    fn token_file_with(dir: &crate::access::registry::TestDir) -> std::path::PathBuf {
+        let path = dir.path().join("token");
+        std::fs::write(&path, "ab12cd34\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn local_client_carries_the_token_file_and_a_machine_client_never_does() {
+        let dir = crate::access::registry::TestDir::new("target-token");
+        let path = token_file_with(&dir);
+        let _flag = super::super::caller_token::set_test_flag(&path);
+        assert!(api_client().unwrap().has_caller_token());
+        // A saved machine is reached through a bridge: nothing secret goes there.
+        with_test_client(ApiClient::local(), || {
+            assert!(is_remote());
+            assert!(!api_client().unwrap().has_caller_token());
+        });
+    }
+
+    #[test]
+    fn unreadable_token_file_is_a_usage_report_not_an_exit() {
+        let dir = crate::access::registry::TestDir::new("target-token-bad");
+        let missing = dir.path().join("missing");
+        let _flag = super::super::caller_token::set_test_flag(&missing);
+        let err = api_client().unwrap_err();
+        let report = super::super::caller_token::usage_report(&err).unwrap();
+        assert!(
+            report.starts_with(&format!(
+                "error: caller token file {} unreadable: ",
+                missing.display()
+            )),
+            "{report}"
+        );
+        // Other I/O errors are not mistaken for it.
+        assert!(super::super::caller_token::usage_report(&io::Error::other("boom")).is_none());
+        // A saved machine never reads the file, so it never fails on it.
+        with_test_client(ApiClient::local(), || {
+            assert!(api_client().is_ok());
+        });
     }
 
     #[test]
