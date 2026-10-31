@@ -16,18 +16,31 @@ text or the denylist; a path whose own name matches is withheld.
 Denylist: $SCRUB_DENYLIST or ~/.config/crewkit/denylist.txt, one case-insensitive extended
 regex per line. CR line endings are ignored. Blank lines and lines starting with "#" are
 comments, so a pattern that must start with "#" is written "[#]...". A line may end in a label,
-whitespace then "#class=<word>" (letters, digits, "_" or "-"); the pattern is what comes before
-it. Any other "#class=" on a pattern line is an error, never a pattern.
+exactly one space then "#class=<word>" (lowercase letters, digits or "-"); the pattern is what
+comes before it. Anything else on a pattern line that looks like a tag ("#", "class" and "=" in
+any case, with or without spaces between) is an error naming only its line number.
+
+The scanner re-executes itself with python3 -I, so a module planted next to it or on PYTHONPATH
+can't replace a standard-library import.
 
 Matching uses grep -E, in the C locale and in a UTF-8 locale, so a term next to a byte that is
 not valid UTF-8 is still found. Exit 0 = clean, 1 = hits, 2 = usage or scan error. An error is
 never reported as clean.
 """
+import sys
+
+if not sys.flags.isolated:
+    # The script's own directory and PYTHONPATH come before the standard library; drop them
+    # before anything else is imported, then run again isolated (-I).
+    del sys.path[0]
+    import os
+
+    os.execv(sys.executable, [sys.executable, "-I", *sys.argv])
+
 import hashlib
 import os
 import re
 import subprocess
-import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -60,16 +73,17 @@ def utf8_locale():
     raise ScanError("no UTF-8 locale available")
 
 
-CLASS_TAG = re.compile(rb"(.*\S)[ \t]+#class=[A-Za-z0-9_-]+")
+CLASS_TAG = re.compile(rb"(.*\S) #class=[a-z0-9-]+")
+TAG_LIKE = re.compile(rb"#\s*class\s*=", re.IGNORECASE)
 
 
-def strip_class_tag(line):
+def strip_class_tag(line, lineno):
     # Read whole, a tagged line is a regex that never matches, which silently blinds the scan.
-    if b"#class=" not in line:
+    if not TAG_LIKE.search(line):
         return line
     m = CLASS_TAG.fullmatch(line)
-    if not m or b"#class=" in m.group(1):
-        raise ScanError("denylist has a malformed class tag")
+    if not m or TAG_LIKE.search(m.group(1)):
+        raise ScanError(f"denylist line {lineno} has a malformed class tag")
     return m.group(1)
 
 
@@ -80,7 +94,11 @@ def load_patterns(denylist, tmp):
     except OSError:
         raise ScanError("no readable denylist")
     lines = [l.rstrip(b"\r") for l in raw.split(b"\n")]
-    pats = [strip_class_tag(l) for l in lines if l.strip() and not l.lstrip().startswith(b"#")]
+    pats = [
+        strip_class_tag(l, n)
+        for n, l in enumerate(lines, 1)
+        if l.strip() and not l.lstrip().startswith(b"#")
+    ]
     if not pats:
         raise ScanError("denylist has no patterns")
     path = os.path.join(tmp, "patterns")

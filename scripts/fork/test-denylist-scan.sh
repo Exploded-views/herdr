@@ -131,13 +131,47 @@ printf '%s #class=client\n' "$term" >"$tmp/tagged"
 check "a class-tagged line still matches its pattern" 1 "$tmp/tagged"
 printf '%s #class=crew-host\r\n' "$term" >"$tmp/tagged-crlf"
 check "a class-tagged CRLF line still matches" 1 "$tmp/tagged-crlf"
-printf '%s\t#class=client\n' "$term" >"$tmp/tagged-tab"
-check "a tab before the class tag still matches" 1 "$tmp/tagged-tab"
 reset
-for bad in "$term #class=" "$term #class=a b" "$term #class=a #class=b" "$term #class=cl!ent"; do
+for bad in "$term #class=" "$term #class=a b" "$term #class=a #class=b" "$term #class=cl!ent" \
+  "$term #CLASS=client" "$term # class=client" "$term #Class =client" "$term #class=client " "$term\\ #class=client" \
+  "$term"$'\t'"#class=client" "$term  #class=client" "$term #class=Client" "$term #class=crew_host"; do
   printf '%s\n' "$bad" >"$tmp/badtag"
   check "a malformed class tag is an error: ${bad#"$term"}" 2 "$tmp/badtag"
 done
+
+printf 'fine-pattern\n%s #CLASS=client\n' "$term" >"$tmp/badtag"
+SCRUB_DENYLIST=$tmp/badtag "$scan" "$repo" "$allow" >"$tmp/out" 2>&1 || true
+if grep -q 'line 2' "$tmp/out" && ! grep -qiE "$term|fine-pattern|#CLASS=" "$tmp/out"; then
+  echo "  ok    a malformed tag names its line number and nothing else"
+else
+  echo "  FAIL  a malformed tag names its line number and nothing else"; sed 's/^/        /' "$tmp/out"; fail=1
+fi
+
+: >"$tmp/empty"
+check "an empty denylist is an error" 2 "$tmp/empty"
+printf '# only a comment\r\n\r\n' >"$tmp/comments"
+check "a denylist of only comments and CRLF blank lines is an error" 2 "$tmp/comments"
+mkdir "$tmp/dl-dir"
+check "an unreadable denylist (a directory) is an error" 2 "$tmp/dl-dir"
+
+# A module planted next to the scanner, or on PYTHONPATH, must not replace a stdlib import.
+mkdir "$tmp/scandir" "$tmp/pp"
+cp "$scan" "$tmp/scandir/denylist-scan.py"
+printf 'import sys\nopen(%s, "w").close()\nsys.exit(0)\n' "'$tmp/planted'" >"$tmp/evil.py"
+ln -s "$tmp/evil.py" "$tmp/scandir/re.py"
+ln -s "$tmp/evil.py" "$tmp/pp/re.py"
+printf 'x %s\n' "$term" >>"$repo/ours.rs"; commit
+for how in "scandir" "pythonpath"; do
+  got=0; rm -f "$tmp/planted"
+  if [[ $how == scandir ]]; then
+    SCRUB_DENYLIST=$tmp/denylist "$tmp/scandir/denylist-scan.py" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+  else
+    PYTHONPATH=$tmp/pp SCRUB_DENYLIST=$tmp/denylist "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
+  fi
+  if [[ $got == 1 && ! -e $tmp/planted ]]; then echo "  ok    a planted re.py symlink ($how) is not loaded"
+  else echo "  FAIL  a planted re.py symlink ($how) is not loaded (exit $got)"; fail=1; fi
+done
+reset
 
 got=0; PATH=/nonexistent SCRUB_DENYLIST=$tmp/denylist "$(command -v python3)" "$scan" "$repo" "$allow" >/dev/null 2>&1 || got=$?
 if [[ $got == 2 ]]; then echo "  ok    a missing git is an error, not hits"; else echo "  FAIL  missing git (exit $got, want 2)"; fail=1; fi
