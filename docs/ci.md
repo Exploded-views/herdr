@@ -23,6 +23,9 @@ on manual dispatch. It uses GitHub-hosted runners only, pinned actions (full com
 | `linux` | `ubuntu-latest` | `scripts/fork/linux-test.sh --fetch`, then `scripts/fork/linux-test.sh just ci`, inside `fork-ci.Dockerfile` |
 | `mutants` | `ubuntu-latest`, 4 shards | `scripts/fork/linux-test.sh scripts/fork/run-mutants.sh <shard>/4` in the same image (see "Mutants in CI") |
 | `macos` | `macos-latest` | `just ci 'not binary(live_handoff)'` natively, with upstream's macOS filter |
+| `windows` | `windows-latest` | `cargo nextest run --locked --no-fail-fast` (tests only), set up as upstream's Windows leg is |
+
+The `windows` job exists because upstream's `check (windows-latest)` stops at the first failing test; this one shows every Windows failure in a single run.
 
 ## One image for local and CI Linux runs
 

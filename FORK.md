@@ -46,7 +46,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `FORK.md` | new | This list |
 | `FORK-CHANGELOG.md` | new | Fork changes, labelled *upstream candidate* or *fork-only* |
 | `docs/fork.md`, `docs/ci.md`, `docs/releases.md` | new | Relationship to upstream, fork CI, fork releases |
-| `.github/workflows/fork-ci.yml` | new | Fork CI; every job skips in upstream's repository |
+| `.github/workflows/fork-ci.yml` | new | Fork CI (linux, mutants, macos, windows); every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
 | `scripts/fork/run-mutants.sh` | new | Runs a shard of the security-guard mutants in a writable copy of the tree: each mutant's patch must apply, compile, and make its named test fail |
