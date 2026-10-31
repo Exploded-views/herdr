@@ -3,6 +3,8 @@ title: CLI 参考
 description: 用于会话、工作区、标签页、窗格、通知、智能体、等待、集成和状态的 Herdr 命令。
 ---
 
+{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` and the caller token file; see FORK.md */}
+
 Herdr 的 CLI 通过与集成和智能体相同的本地 socket API 与运行中的服务器通信。
 
 大多数命令输出 JSON 响应。需要确定性自动化时,从脚本中使用它们。
@@ -326,7 +328,7 @@ herdr agent rename <target> <name>|--clear
 herdr agent focus <target>
 herdr agent wait <target> [--until STATUS]... [--timeout MS]
 herdr agent attach <target> [--takeover]
-herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]
+herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--accept-from WHO]... [-- <agent-args...>]
 herdr agent explain <target> [--json|--verbose]
 herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 ```
@@ -334,6 +336,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 智能体目标只能是唯一的实时智能体名称,或当前承载该智能体的窗格 ID。终端 ID 和单独的智能体 kind 标签不能作为目标。通过 `agent start` 启动的智能体必须有名称;手动启动的智能体保持未命名,通过窗格 ID 寻址。
 
 `agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`letta`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
+
+`--accept-from`(fork)设置智能体启动后该窗格接受谁的输入:`any`,或由 `none`、`outside` 和 `caller:<name>` 组成的逗号分隔或重复指定的列表。不指定时,已有策略的窗格保留原策略,有意开放的窗格保持开放,其他窗格则使用该智能体名称对应的 `[access.<name>]` 小节,否则使用 `[access.default]`。`any` 会有意让窗格保持开放。请求比窗格当前(或将会获得)的访问权限更多的访问,属于管理员请求,只有位于所有窗格之外的调用方才能提出;收窄则只需要通常的窗格控制权限。
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
@@ -379,6 +383,48 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 超时或 `agent_prompt_stalled` 并不代表未发送提示。重试前请先检查智能体。
 
 `pane wait-output` 和 `agent wait` 在省略 `--timeout` 时会无限等待。对于 `agent prompt --wait`，观察到活动后，或提示开始时已处于 `working`，等待稳定状态的过程不会超时；如果提示从 non-working 状态开始且未观察到活动，五秒后仍会返回 `agent_prompt_stalled`。超时或服务器错误以 JSON 写到 stderr,退出状态为 1。CLI 用法错误的退出状态为 2。
+
+## 访问调用方
+
+仅限 fork 的功能。具名调用方(caller)持有一个秘密令牌,只能向与它绑定的那一个窗格发送输入。该窗格必须已经有列出 `caller:<name>` 的访问策略。只有位于所有窗格之外的调用方才能管理调用方;窗格、远程主机或其他调用方都会被拒绝。
+
+```bash
+herdr access caller add <name> --target-pane ID --token-file PATH
+herdr access caller list
+herdr access caller rotate <name> --token-file PATH
+herdr access caller retarget <name> --target-pane ID
+herdr access caller remove <name>
+```
+
+名称必须匹配 `[a-z0-9][a-z0-9_-]{0,63}`。`add` 会以 0600 权限创建令牌文件,并拒绝已存在的文件;它只输出绑定 ID(`acc_...`),从不输出令牌。`rotate` 先把新令牌写入私有临时文件,再重命名覆盖旧文件;旧令牌随即失效。每个令牌只保存其 sha256,存放在 Herdr 数据目录中的 `access-callers.json`(权限 0600)里。`retarget` 会把调用方移到另一个已有策略的窗格。
+
+### 出示令牌
+
+调用方在每个请求中都会发送令牌。用 `HERDR_CALLER_TOKEN_FILE` 让 CLI 指向令牌文件,或者把 `--caller-token-file PATH` 放在命令行最前面(标志优先):
+
+```bash
+herdr --caller-token-file PATH agent prompt acc_0123456789abcdef0123456789abcdef "hello"
+HERDR_CALLER_TOKEN_FILE=PATH herdr pane send-text w1:p1 "hello"
+```
+
+文件中以一行保存令牌(最多 1 KiB)。如果文件无法读取、为空或过大,命令会输出 `error: caller token file PATH unreadable: ...`,并在连接之前以状态 2 退出。令牌只会读取给本地服务器使用。`--caller-token-file` 与 `--machine` 一起使用属于用法错误(`--caller-token-file cannot be used with --machine`),而 `--machine` 会忽略 `HERDR_CALLER_TOKEN_FILE`,因此令牌不会离开这台机器。CLI 从不输出令牌。不匹配任何调用方的令牌按没有令牌处理:请求来自外部,只列出 `caller:<name>` 的窗格会拒绝它。
+
+窗格、服务器和交接(handoff)子进程不会继承 `HERDR_CALLER_TOKEN_FILE`;只在持有该令牌的调用方的 shell 中设置它。导出了它的 shell 会被归类为该调用方,而不是管理员,所以在运行 `access` 命令(只有不带令牌的外部调用方才能运行)之前,请先执行 `unset HERDR_CALLER_TOKEN_FILE`(或不要加 `--caller-token-file`)。
+
+### 用绑定 ID 指定窗格
+
+每个已绑定的窗格都有一个绑定 ID(`acc_` 加 32 位十六进制数字)。以 `acc_` 开头的智能体目标就是绑定 ID,不可能是别的东西:它会到达持有该绑定的窗格;格式错误或没有持有者的目标会以 `agent_not_found` 失败。它绝不会被当作智能体名称或窗格位置来尝试。启动或重命名智能体时,以 `acc_` 开头的智能体名称会被拒绝。只有当持有者窗格正在运行智能体时,绑定 ID 才能解析;否则找不到它。
+
+## 窗格访问策略
+
+仅限 fork 的功能。只有位于所有窗格之外的调用方才能更改窗格的策略。
+
+```bash
+herdr access pane set <pane> --accept-from LIST
+herdr access pane get <pane>
+```
+
+`LIST` 是 `any`,或由 `none`、`outside` 和 `caller:<name>` 组成的逗号分隔或重复指定的列表。`set` 会绑定策略(如果窗格已有绑定 ID,则保留它);`any` 会移除策略,并有意让窗格保持开放;绑定到旧绑定的调用方会保持悬空(并被拒绝),直到你重新运行 `access caller retarget`。`get` 对所有调用方开放,会显示完整的 `accept_from` 列表,包括 `caller:ops` 这样的调用方名称。两者都输出一行:窗格、它的绑定 ID(没有时为 `-`)和列表(没有策略时为 `any`)。API 方法是 `access.pane.set` 和 `access.pane.get`。
 
 ## 集成
 

@@ -1619,6 +1619,98 @@ mod tests {
         assert!(denied_for(&app, &token_peer(&rotated)).contains("outside"));
     }
 
+    /// Everything the caller-token path logs, at TRACE, while a caller is
+    /// registered, authenticates, is turned away with a wrong token and a
+    /// malformed one, is rotated and is removed. Neither a token nor its hex
+    /// sha256 may appear.
+    #[test]
+    fn caller_token_and_hash_never_reach_the_log() {
+        use sha2::{Digest, Sha256};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SharedLog(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedLog {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        fn sha_hex(token: &str) -> String {
+            Sha256::digest(token.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        }
+
+        let log = SharedLog::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let secrets = tracing::subscriber::with_default(subscriber, || {
+            let (mut app, bridge_id, other_id, token) = bridge_and_other();
+            let good = token_peer(&token);
+            assert!(app.check_access(&send_text(&bridge_id), &good).is_ok());
+            assert!(app.check_access(&send_text(&other_id), &good).is_err());
+            let wrong = "f".repeat(64);
+            let oversized = "x".repeat(5000);
+            let bad_tokens = [
+                wrong.as_str(),
+                "",
+                "not a token\n",
+                "tok\u{0}en",
+                oversized.as_str(),
+            ];
+            for bad in bad_tokens {
+                assert!(app
+                    .check_access(&send_text(&bridge_id), &token_peer(bad))
+                    .is_err());
+            }
+            let rotated = token_of(&call(
+                &mut app,
+                Method::AccessCallerRotate(crate::api::schema::AccessCallerNameParams {
+                    name: "ops".into(),
+                }),
+            ));
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&token))
+                .is_err());
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&rotated))
+                .is_ok());
+            call(
+                &mut app,
+                Method::AccessCallerRemove(crate::api::schema::AccessCallerNameParams {
+                    name: "ops".into(),
+                }),
+            );
+            assert!(app
+                .check_access(&send_text(&bridge_id), &token_peer(&rotated))
+                .is_err());
+            vec![token, rotated, wrong]
+        });
+
+        let logged = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("access denied"),
+            "the denials were logged: {logged}"
+        );
+        for secret in &secrets {
+            assert!(!logged.contains(secret.as_str()), "token leaked: {logged}");
+            assert!(
+                !logged.contains(&sha_hex(secret)),
+                "token hash leaked: {logged}"
+            );
+        }
+    }
+
     #[test]
     fn gate_retarget_moves_caller_to_new_binding() {
         let (mut app, bridge_id, other_id, token) = bridge_and_other();

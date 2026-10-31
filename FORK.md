@@ -103,8 +103,9 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/access/registry.rs`, `src/platform/mod.rs`, `src/platform/unix_common.rs`, `src/app/mod.rs` | changed | The registry file is refused when group or others can write it, or when another user owns it (fail closed, logged with a `chmod 600` hint); the registry directory is synced after a save (a directory that will not open is logged at debug); tests for the startup load and for constant-time `lookup` |
 | `src/server/headless/tests/access_gate.rs` | changed | Whole-request-path tests for caller tokens (confined to the bridge, unknown/rotated/removed tokens, retarget) and for `access.pane.set` from a pane |
 | `src/server/headless/bootstrap.rs`, `src/cli/access.rs`, `src/cli/agent.rs`, `docs/next/website/src/content/docs/cli-reference.mdx` | changed | The server drops `HERDR_CALLER_TOKEN_FILE` from its own environment at start; `herdr access ...` and the agent commands exit 2 (not 1) on an unreadable caller token file; the page says a binding id resolves only while its holder pane runs an agent |
-
-Follow-up: the ja and zh-cn `cli-reference.mdx` still show the old `agent start` usage line without `--accept-from`; only the English page is updated.
+| `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx` | changed | Translations of the access sections (`Access callers`, `Pane access policies`) and the `agent start --accept-from` usage and paragraph, so the heading outlines match English |
+| `src/platform/windows.rs`, `src/platform/mod.rs`, `Cargo.toml` | changed | `random_secret` on Windows is `BCryptGenRandom` (system-preferred RNG), so binding ids and caller tokens can be minted there; the `Unsupported` stub remains only for targets that are neither unix nor windows |
+| `src/app/access_gate.rs`, `src/access/policy.rs`, `src/app/terminal_targets.rs` | changed | A log-capture test that no caller token or token hash reaches the log; `AccessBindingId` Debug prints `AccessBindingId(acc_...)`; the resolver test's assert message names the target index, not the id |
 
 ## Limits
 

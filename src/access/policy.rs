@@ -1,4 +1,4 @@
-// herdr-fork: access policy types and the `decide` function; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
+// herdr-fork: access policy types and the `decide` function; `AccessBindingId` has a redacting Debug; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io;
 
@@ -92,9 +92,17 @@ pub(crate) fn is_looser(explicit: &AcceptFrom, current: Option<&[Principal]>) ->
 pub(crate) const BINDING_PREFIX: &str = "acc_";
 
 /// `acc_` followed by 32 lowercase hex characters.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct AccessBindingId(String);
+
+// Not derived: a binding id is minted from the OS random source, so keep it out
+// of `{:?}` output. `access pane get` still shows it on purpose, via `Display`.
+impl fmt::Debug for AccessBindingId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AccessBindingId(acc_...)")
+    }
+}
 
 impl From<AccessBindingId> for String {
     fn from(id: AccessBindingId) -> String {

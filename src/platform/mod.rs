@@ -258,7 +258,8 @@ pub(crate) fn is_owned_by_other_user(_file: &std::fs::File) -> std::io::Result<b
     Ok(false)
 }
 
-#[cfg(not(unix))]
+// Windows has its own in platform/windows.rs.
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn random_secret() -> std::io::Result<[u8; 32]> {
     Err(std::io::ErrorKind::Unsupported.into())
 }

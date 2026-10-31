@@ -402,13 +402,16 @@ mod tests {
             .get_mut(targets[1].terminal_id.as_str())
             .unwrap();
         terminal.set_agent_name(binding.to_string());
-        for target in [binding.to_string(), "acc_worker".to_string(), "acc_".into()] {
+        for (index, target) in [binding.to_string(), "acc_worker".to_string(), "acc_".into()]
+            .into_iter()
+            .enumerate()
+        {
             assert!(
                 matches!(
                     app.resolve_terminal_target(&target),
                     Err(TerminalTargetError::NotFound { .. })
                 ),
-                "{target} resolved"
+                "target #{index} resolved"
             );
         }
         // Ordinary names still resolve there.
