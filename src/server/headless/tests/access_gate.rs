@@ -1069,10 +1069,10 @@ async fn caller_token_reaches_bridge_only() {
     let response = f.call(token_peer(&token), send_text(&bridge));
     assert!(error_code(&response).is_none(), "{response}");
     assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
-    // (An agent route is not delivered in this fixture, which has no live agent
-    // process; what matters is that the gate lets it through to its pane.)
+    // The bridge is an agent terminal, so its binding id resolves and the keys land.
     let response = f.call(token_peer(&token), agent_send_keys(&bridge_binding));
     assert!(reached_its_pane(&response), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"\r");
 
     // Nothing else does, though that pane accepts outside callers; no byte lands.
     let response = f.call(token_peer(&token), send_text(&other));

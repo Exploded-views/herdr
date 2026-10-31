@@ -1521,6 +1521,15 @@ mod tests {
         let panes = pane_ids(&app);
         let bridge_id = app.public_pane_id(0, panes[0]).unwrap();
         let other_id = app.public_pane_id(0, panes[1]).unwrap();
+        // Binding-id targets resolve only to agent terminals, so both panes are agents.
+        for (index, pane) in panes.iter().enumerate() {
+            let terminal = terminal_of(&app, *pane);
+            app.state
+                .terminals
+                .get_mut(&terminal)
+                .unwrap()
+                .set_agent_name(format!("agent-{index}"));
+        }
         for (id, list) in [(&bridge_id, "caller:ops"), (&other_id, "outside")] {
             let set = call(&mut app, pane_set(id, &[list]));
             assert_eq!(set["result"]["type"], "access_policy", "{set}");
