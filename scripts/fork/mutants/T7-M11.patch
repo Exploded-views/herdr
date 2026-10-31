@@ -1,0 +1,21 @@
+# herdr-fork: mutant T7-M11: a pane without a policy is not an Input target for agent.start. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 665ffe07..0c4d2af8 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -426,6 +426,15 @@ impl App {
+         else {
+             return GateTarget::Open;
+         };
++        if control_if_policy
++            && self
++                .state
++                .terminals
++                .get(terminal)
++                .is_none_or(|t| t.access.is_none())
++        {
++            return GateTarget::Open;
++        }
+         let label = self
+             .public_pane_id(ws_idx, pane_id)
+             .unwrap_or_else(|| "unknown".to_string());

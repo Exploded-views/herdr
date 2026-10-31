@@ -1,0 +1,14 @@
+# herdr-fork: mutant T9a-M2: a caller token passes the access-admin rule. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..b51d4cd8 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -373,7 +373,7 @@ pub(crate) fn decide(
+         }
+         // Rule 5.
+         GateTarget::AccessAdmin => match caller {
+-            CallerClass::Outside { .. } => Ok(()),
++            CallerClass::Outside { .. } | CallerClass::Caller { .. } => Ok(()),
+             _ => Err(control_denied("server", caller)),
+         },
+     }

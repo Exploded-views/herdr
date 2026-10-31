@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-M7: a named caller principal ignores the pane's binding. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..78b952a9 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -266,7 +266,7 @@ fn principal_admits(
+         Principal::Outside => matches!(caller, CallerClass::Outside { .. }),
+         Principal::Caller(n) => matches!(
+             caller,
+-            CallerClass::Caller { name, target, .. } if name == n && target == binding
++            CallerClass::Caller { name, target, .. } if name == n
+         ),
+     }
+ }

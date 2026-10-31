@@ -1,0 +1,15 @@
+# herdr-fork: mutant T3-M2: a lineage walk is complete even when a process could not be read. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/unix_common.rs b/src/platform/unix_common.rs
+index cbef1922..29af911f 100644
+--- a/src/platform/unix_common.rs
++++ b/src/platform/unix_common.rs
+@@ -487,7 +487,8 @@ pub(super) fn walk_lineage(
+         current = info.ppid;
+         previous = Some(info);
+     }
+-    lineage.complete = verified
++    lineage.complete = true
++        || verified
+         && reached_init
+         && match (lineage.chain.first(), lookup(pid)) {
+             (Some(peer), Some(again)) => again.start_token == peer.start_token,

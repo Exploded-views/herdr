@@ -1,0 +1,14 @@
+# herdr-fork: mutant T4-D4: rule 0 (bridge-only remote input) never fires. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..da7f9a0c 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -311,7 +311,7 @@ pub(crate) fn decide(
+             terminal: _,
+         } => {
+             // Rule 0: remote input. Only denies; never grants.
+-            if remote.input == RemoteInput::BridgeOnly {
++            if false {
+                 let remote_origin = matches!(
+                     caller,
+                     CallerClass::Remote

@@ -1,0 +1,15 @@
+# herdr-fork: mutant T4-M1: decide allows everything. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 3474d127..651692c6 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -302,6 +302,9 @@ pub(crate) fn decide(
+     caller: &CallerClass,
+     remote: &RemoteSettings,
+ ) -> Result<(), AccessDenied> {
++    if true {
++        return Ok(());
++    }
+     match target {
+         // Rule 1.
+         GateTarget::Open => Ok(()),

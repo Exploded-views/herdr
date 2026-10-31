@@ -1,0 +1,15 @@
+# herdr-fork: mutant T6-M1: the sticky default is never bound. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access.rs b/src/app/access.rs
+index d82880a1..cef0ecb7 100644
+--- a/src/app/access.rs
++++ b/src/app/access.rs
+@@ -116,6 +116,9 @@ pub(crate) fn apply_default_access(
+     let Some(default) = defaults.default.as_ref() else {
+         return false;
+     };
++    if default.len() < 1000 {
++        return false;
++    }
+     if terminal.access.is_some()
+         || terminal.access_opened_explicitly
+         || !terminal.is_agent_terminal()
