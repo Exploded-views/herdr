@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10c-M12: the default mode overrides an explicit lowering (I4). Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access.rs b/src/app/access.rs
+index 513e2d6e..f5102184 100644
+--- a/src/app/access.rs
++++ b/src/app/access.rs
+@@ -188,7 +188,6 @@ pub(crate) fn apply_default_access(
+     let named = name.is_some_and(|name| defaults.mode_by_name.contains_key(name));
+     if !defaults.default_mode.is_any()
+         && terminal.input_mode.is_any()
+-        && !terminal.input_mode_set_explicitly
+         && !on_bridge
+         && !named
+     {

@@ -309,12 +309,18 @@ fn run_pane(
             binding,
             accept_from,
             input_mode,
+            input_mode_explicit,
         }) => {
             writeln!(
                 out,
-                "{pane_id}\t{}\t{}\t{input_mode}",
+                "{pane_id}\t{}\t{}\t{input_mode}\t{}",
                 binding.as_deref().unwrap_or("-"),
-                accept_from.join(",")
+                accept_from.join(","),
+                if input_mode_explicit {
+                    "explicit"
+                } else {
+                    "default"
+                }
             )?;
             Ok(0)
         }
@@ -662,7 +668,7 @@ mod tests {
         assert_eq!(code, 0, "{err}");
         assert_eq!(
             out,
-            "w1:p1\tacc_00000000000000000000000000000001\toutside,caller:ops\tany\n"
+            "w1:p1\tacc_00000000000000000000000000000001\toutside,caller:ops\tany\tdefault\n"
         );
         assert_eq!(
             seen,
@@ -717,7 +723,7 @@ mod tests {
             Ok(policy_response(None, &["any"]))
         });
         assert_eq!(code, 0);
-        assert_eq!(out, "w1:p1\t-\tany\tany\n");
+        assert_eq!(out, "w1:p1\t-\tany\tany\tdefault\n");
         assert_eq!(
             seen,
             vec![Method::AccessPaneGet(
@@ -784,7 +790,18 @@ mod tests {
             Ok(response)
         });
         assert_eq!(code, 0);
-        assert_eq!(out, "w1:p1\t-\tany\thuman-only\n");
+        assert_eq!(out, "w1:p1\t-\tany\thuman-only\tdefault\n");
+    }
+
+    #[test]
+    fn pane_get_shows_an_explicit_mode() {
+        let (code, out, _) = run(&["pane", "get", "w1:p1"], |_| {
+            let mut response = policy_response(None, &["any"]);
+            response["result"]["input_mode_explicit"] = true.into();
+            Ok(response)
+        });
+        assert_eq!(code, 0);
+        assert_eq!(out, "w1:p1\t-\tany\tany\texplicit\n");
     }
 
     #[test]

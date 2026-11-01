@@ -43,6 +43,11 @@ impl App {
             .get(terminal)
             .map_or("any", |state| state.input_mode.as_str())
             .to_string();
+        let input_mode_explicit = self
+            .state
+            .terminals
+            .get(terminal)
+            .is_some_and(|state| state.input_mode_set_explicitly);
         let (binding, accept_from) = match policy {
             Some(policy) => (
                 Some(policy.binding.to_string()),
@@ -62,6 +67,7 @@ impl App {
                 binding,
                 accept_from,
                 input_mode,
+                input_mode_explicit,
             },
         )
     }
@@ -109,7 +115,7 @@ impl App {
         if accept.is_none() && mode.is_none() {
             return responses::encode_error(
                 id,
-                "invalid_accept_from",
+                "access_pane_set_empty",
                 "set needs accept_from, input_mode or both",
             );
         }
@@ -129,8 +135,10 @@ impl App {
         }
         if let Some(mode) = mode {
             if let Some(state) = self.state.terminals.get_mut(&terminal) {
-                if state.input_mode != mode {
+                // Chosen on purpose, even when it is `any`: the sticky default leaves it be.
+                if state.input_mode != mode || !state.input_mode_set_explicitly {
                     state.input_mode = mode;
+                    state.input_mode_set_explicitly = true;
                     self.state.mark_session_dirty();
                 }
             }

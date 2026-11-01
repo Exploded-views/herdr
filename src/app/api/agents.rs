@@ -1532,5 +1532,62 @@ mod tests {
             assert_eq!(response["error"]["code"], "agent_start_input_failed");
             assert_eq!(mode_of(&rig, 0), crate::access::policy::InputMode::Any);
         }
+
+        #[tokio::test]
+        async fn agent_start_binds_the_named_mode_however_the_policy_is_settled() {
+            let mut rig = rig();
+            for name in ["worker", "builder"] {
+                rig.app
+                    .state
+                    .access_defaults
+                    .mode_by_name
+                    .insert(name.into(), crate::access::policy::InputMode::HumanOnly);
+            }
+            // Pane 0 holds a policy already; pane 1 was opened on purpose.
+            bind(&mut rig, 0, vec![Principal::Outside]);
+            let opened = rig.terminals[1].clone();
+            rig.app.state.unbind_access(&opened);
+            let response = start_named(&mut rig, 0, "worker");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+            let response = start_named(&mut rig, 1, "builder");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+            assert_eq!(
+                mode_of(&rig, 0),
+                crate::access::policy::InputMode::HumanOnly
+            );
+            assert_eq!(
+                mode_of(&rig, 1),
+                crate::access::policy::InputMode::HumanOnly
+            );
+            // The policy step still keeps what it had.
+            assert_eq!(
+                policy(&rig, 0).unwrap().accept_from,
+                vec![Principal::Outside]
+            );
+            assert!(policy(&rig, 1).is_none());
+        }
+
+        #[tokio::test]
+        async fn a_new_agent_clears_the_explicit_mode_mark() {
+            let mut rig = rig();
+            set_mode(&mut rig, 0, "any");
+            assert!(rig.app.state.terminals[&rig.terminals[0]].input_mode_set_explicitly);
+            let response = start_named(&mut rig, 0, "worker");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+            assert!(!rig.app.state.terminals[&rig.terminals[0]].input_mode_set_explicitly);
+
+            // A failed start puts the mark back.
+            set_mode(&mut rig, 1, "any");
+            let terminal = rig.terminals[1].clone();
+            let (runtime, _rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+            runtime
+                .try_send_bytes(Bytes::from_static(b"occupied"))
+                .unwrap();
+            rig.app.terminal_runtimes.insert(terminal.clone(), runtime);
+            let response = start_named(&mut rig, 1, "builder");
+            assert_eq!(response["error"]["code"], "agent_start_input_failed");
+            assert!(rig.app.state.terminals[&terminal].input_mode_set_explicitly);
+        }
     }
 }

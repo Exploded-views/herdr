@@ -37,6 +37,7 @@ fn denied_from(denied: &AccessDenied) -> &str {
         AccessDenied::Input { from, .. } | AccessDenied::Control { from, .. } => from,
         AccessDenied::Remote { .. } => "remote",
         AccessDenied::HumanOnly { .. } => "human-only",
+        AccessDenied::BridgeInputMode { .. } => "bridge",
     }
 }
 
@@ -47,6 +48,35 @@ impl App {
             .terminals
             .values()
             .any(|terminal| terminal.access.is_some() || !terminal.input_mode.is_any())
+    }
+
+    /// An `agent.start` under the bridge's name into a pane that has an input mode is the
+    /// bridge guard's refusal, ahead of the mode's own, so the operator is told why. The
+    /// request is refused either way.
+    fn bridge_start_check(
+        &self,
+        method: &Method,
+        target: &GateTarget<'_>,
+    ) -> Result<(), AccessDenied> {
+        let Method::AgentStart(params) = method else {
+            return Ok(());
+        };
+        let (GateTarget::Input { terminal, .. } | GateTarget::PaneControl { terminal, .. }) =
+            target
+        else {
+            return Ok(());
+        };
+        let moded = self
+            .state
+            .terminals
+            .get(*terminal)
+            .is_some_and(|state| !state.input_mode.is_any());
+        if moded && self.state.is_bridge_name(&params.name) {
+            return Err(AccessDenied::BridgeInputMode {
+                bridge: params.name.clone(),
+            });
+        }
+        Ok(())
     }
 
     /// Apply the pane's input mode to an input the allow-list admitted. A target that is
@@ -209,6 +239,7 @@ impl App {
         // The mode check runs last: an allow-list refusal keeps its own text.
         let result = pane_result
             .and(admin_result)
+            .and_then(|()| self.bridge_start_check(method, &target))
             .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
         if let (true, Some(last)) = (logs_input, log) {
             if let GateTarget::Input {
@@ -551,7 +582,9 @@ impl App {
         match denied {
             AccessDenied::Input { label, .. } => AccessDenied::Input { label, from },
             AccessDenied::Control { label, .. } => AccessDenied::Control { label, from },
-            other @ (AccessDenied::Remote { .. } | AccessDenied::HumanOnly { .. }) => other,
+            other @ (AccessDenied::Remote { .. }
+            | AccessDenied::HumanOnly { .. }
+            | AccessDenied::BridgeInputMode { .. }) => other,
         }
     }
 
@@ -1247,6 +1280,14 @@ mod tests {
             .max()
             .unwrap();
 
+        // The same for an attached client's keystroke: one lookup and a compare, no copy.
+        let attach_terminal = terminal_of(&app, panes[0]);
+        let input_mode_attach_any = measure(|| {
+            let _ = black_box(
+                app.check_attach_input(black_box(&stranger), black_box(&attach_terminal)),
+            );
+        });
+
         let log_event = |decision: &'static str, at_ms: u64| InputEvent {
             at_ms,
             pane: "1-1".into(),
@@ -1412,6 +1453,10 @@ mod tests {
             input_mode_any.as_nanos()
         );
         println!(
+            "access_gate input_mode_attach_any_p95_ns={}",
+            input_mode_attach_any.as_nanos()
+        );
+        println!(
             "access_gate record_allow_coalesce_p95_ns={}",
             record_allow_coalesce.as_nanos()
         );
@@ -1464,6 +1509,7 @@ mod tests {
         );
         for (name, measured, budget) in [
             ("input_mode_any", input_mode_any, OFF_BUDGET),
+            ("input_mode_attach_any", input_mode_attach_any, OFF_BUDGET),
             ("classify_cached_16_panes", classify_cached, LOG_BUDGET),
             ("record_allow_coalesce", record_allow_coalesce, LOG_BUDGET),
             ("record_deny_immediate", record_deny_immediate, LOG_BUDGET),

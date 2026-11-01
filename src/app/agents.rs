@@ -256,8 +256,13 @@ impl App {
                 terminal.access.clone(),
                 terminal.access_opened_explicitly,
                 terminal.input_mode,
+                terminal.input_mode_set_explicitly,
             )
         });
+        // A new agent is a new occupant: a mode chosen for the last one does not carry over.
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.input_mode_set_explicitly = false;
+        }
         self.state
             .bind_access_for_start(&terminal_id, &name, explicit_access)
             .map_err(|err| AgentStartError::AccessBindFailed(err.to_string()))?;
@@ -271,10 +276,11 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
-            if let Some((access, opened, mode)) = previous_access {
+            if let Some((access, opened, mode, explicit)) = previous_access {
                 terminal.access = access;
                 terminal.access_opened_explicitly = opened;
                 terminal.input_mode = mode;
+                terminal.input_mode_set_explicitly = explicit;
             }
             return Err(AgentStartError::InputFailed(err.to_string()));
         }

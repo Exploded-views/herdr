@@ -455,6 +455,7 @@ fn unavailable_restored_terminal(
         terminal.access = pane.access.clone();
         terminal.access_opened_explicitly = pane.access_opened_explicitly;
         terminal.input_mode = pane.input_mode;
+        terminal.input_mode_set_explicitly = pane.input_mode_set_explicitly;
         if let Some(session) = restored_terminal_agent_session(pane.agent_session.as_ref(), false) {
             terminal.set_persisted_agent_session(session);
         }
@@ -601,6 +602,8 @@ fn restore_tab(
             terminal.access_opened_explicitly =
                 saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
             terminal.input_mode = saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
+            terminal.input_mode_set_explicitly =
+                saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly);
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -701,6 +704,8 @@ fn restore_tab(
                     saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
                 terminal.input_mode =
                     saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
+                terminal.input_mode_set_explicitly =
+                    saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly);
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1570,6 +1575,7 @@ mod tests {
                             access: None,
                             access_opened_explicitly: false,
                             input_mode: Default::default(),
+                            input_mode_set_explicitly: false,
                         },
                     )]),
                     zoomed: false,
@@ -1655,6 +1661,7 @@ mod tests {
                                 access: None,
                                 access_opened_explicitly: false,
                                 input_mode: Default::default(),
+                                input_mode_set_explicitly: false,
                             },
                         ),
                         (
@@ -1670,6 +1677,7 @@ mod tests {
                                 access: None,
                                 access_opened_explicitly: false,
                                 input_mode: Default::default(),
+                                input_mode_set_explicitly: false,
                             },
                         ),
                     ]),
@@ -1727,6 +1735,7 @@ mod tests {
                     access: None,
                     access_opened_explicitly: false,
                     input_mode: Default::default(),
+                    input_mode_set_explicitly: false,
                 },
             )
         };
@@ -1746,6 +1755,7 @@ mod tests {
             access: None,
             access_opened_explicitly: false,
             input_mode: Default::default(),
+            input_mode_set_explicitly: false,
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1901,6 +1911,7 @@ mod tests {
                             access: None,
                             access_opened_explicitly: false,
                             input_mode: Default::default(),
+                            input_mode_set_explicitly: false,
                         },
                     )]),
                     zoomed: false,
@@ -2278,6 +2289,7 @@ mod tests {
                 access: None,
                 access_opened_explicitly: false,
                 input_mode: Default::default(),
+                input_mode_set_explicitly: false,
             },
         );
         let mut history = SessionHistorySnapshot {

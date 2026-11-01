@@ -123,25 +123,41 @@ impl HeadlessServer {
     pub(super) fn attach_input_permitted(
         &mut self,
         client_id: u64,
-        terminal_id: &str,
         route: &'static str,
         bytes: u64,
     ) -> bool {
-        let Some(terminal) = self
-            .app
-            .state
-            .terminals
-            .keys()
-            .find(|id| id.as_str() == terminal_id)
-        else {
+        // The common case, a pane with mode `any`, borrows only: no copy, one lookup.
+        let refusal = {
+            let Some(client) = self.clients.get(&client_id) else {
+                return true;
+            };
+            let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
+                return true;
+            };
+            let Some(terminal) = self
+                .app
+                .state
+                .terminals
+                .keys()
+                .find(|id| id.as_str() == terminal_id.as_str())
+            else {
+                return true;
+            };
+            match self.app.check_attach_input(&client.caller, terminal) {
+                Ok(()) => None,
+                Err(denied) => Some((terminal_id.clone(), denied)),
+            }
+        };
+        let Some((terminal_id, denied)) = refusal else {
+            // An allowed input re-arms the notice for the next refusal.
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                if client.refused_pane.is_some() {
+                    client.refused_pane = None;
+                }
+            }
             return true;
         };
-        let Some(client) = self.clients.get(&client_id) else {
-            return true;
-        };
-        let Err(denied) = self.app.check_attach_input(&client.caller, terminal) else {
-            return true;
-        };
+        let terminal_id = terminal_id.as_str();
         let first = self.clients.get_mut(&client_id).is_some_and(|client| {
             let first = client.refused_pane.as_deref() != Some(terminal_id);
             if first {

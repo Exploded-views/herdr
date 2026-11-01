@@ -161,7 +161,8 @@ pub(crate) struct AccessDefaults {
     pub by_name: std::collections::BTreeMap<String, Vec<Principal>>,
     /// `[access.default] input_mode`, bound with the sticky default.
     pub default_mode: InputMode,
-    /// `[access.<name>] input_mode`, bound at `agent start <name>`. Only non-`any` modes.
+    /// `[access.<name>] input_mode`, bound at `agent start <name>`. A named `any` is kept: it
+    /// overrides the default mode for that name.
     pub mode_by_name: std::collections::BTreeMap<String, InputMode>,
 }
 
@@ -295,6 +296,17 @@ pub(crate) enum AccessDenied {
     HumanOnly {
         label: String,
     },
+    /// A start into a pane with an input mode, under the bridge's name.
+    BridgeInputMode {
+        bridge: String,
+    },
+}
+
+/// The refusal for a non-`any` mode on the bridge.
+pub(crate) fn bridge_mode_text(bridge: &str) -> String {
+    format!(
+        "input mode must stay \"any\" on the bridge ({bridge}), which receives by API by design"
+    )
 }
 
 const TAIL: &str = "This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator.";
@@ -308,6 +320,9 @@ impl AccessDenied {
             AccessDenied::Control { label, from } => format!(
                 "access_denied: pane {label} does not accept control requests from {from}. {TAIL}"
             ),
+            AccessDenied::BridgeInputMode { bridge } => {
+                format!("access_denied: {}", bridge_mode_text(bridge))
+            }
             AccessDenied::HumanOnly { label } => format!(
                 "access_denied: pane {label} accepts only typed input; input sent through the herdr API is refused. {TAIL}"
             ),
@@ -468,7 +483,9 @@ pub(crate) fn check_input_mode(
             InputPath::Api => Err(AccessDenied::HumanOnly {
                 label: label.to_string(),
             }),
-            InputPath::Client if matches!(caller, CallerClass::Outside { .. }) => Ok(()),
+            InputPath::Client if matches!(caller, CallerClass::Outside { via_ssh: false }) => {
+                Ok(())
+            }
             InputPath::Client => Err(AccessDenied::HumanOnly {
                 label: label.to_string(),
             }),
@@ -1035,7 +1052,9 @@ mod tests {
     fn human_only_takes_the_client_path_only_from_an_outside_client() {
         for class in every_class() {
             let result = check_input_mode(InputMode::HumanOnly, InputPath::Client, &class, "p1");
-            if matches!(class, CallerClass::Outside { .. }) {
+            // A client that came in over ssh is human only after `owner_tui_class` cleared
+            // the mark, which it does under `remote_owner_tui = "allow"`.
+            if matches!(class, CallerClass::Outside { via_ssh: false }) {
                 assert_eq!(result, Ok(()), "{class:?}");
             } else {
                 assert_eq!(

@@ -1,21 +1,21 @@
 # herdr-fork: mutant T8-M3: only the admin check runs for a loosening start. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
-index faf46dc6..c4ef69ab 100644
+index 2afdc7f8..46ef77b3 100644
 --- a/src/app/access_gate.rs
 +++ b/src/app/access_gate.rs
-@@ -207,9 +207,12 @@ impl App {
+@@ -237,9 +237,12 @@ impl App {
              Ok(())
          };
          // The mode check runs last: an allow-list refusal keeps its own text.
 -        let result = pane_result
 -            .and(admin_result)
--            .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
+-            .and_then(|()| self.bridge_start_check(method, &target))
 +        let result = if self.start_escalates(method) {
 +            admin_result
 +        } else {
 +            pane_result
 +        }
-+        .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
++        .and_then(|()| self.bridge_start_check(method, &target))
+             .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
          if let (true, Some(last)) = (logs_input, log) {
              if let GateTarget::Input {
-                 label, terminal, ..

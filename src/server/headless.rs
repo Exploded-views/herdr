@@ -1273,12 +1273,7 @@ impl HeadlessServer {
                     return false;
                 };
                 let terminal_id = terminal_id.clone();
-                if !self.attach_input_permitted(
-                    client_id,
-                    &terminal_id,
-                    "attach.input",
-                    path.len() as u64,
-                ) {
+                if !self.attach_input_permitted(client_id, "attach.input", path.len() as u64) {
                     return true;
                 }
                 if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
@@ -1492,16 +1487,27 @@ impl HeadlessServer {
         else {
             return false;
         };
-        let terminal_id = terminal_id.clone();
+        let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) else {
+            return false;
+        };
         // A page key the child owns is the client's own bytes; a wheel is a mouse report.
         let route = match &source {
             AttachScrollSource::PageKey { .. } => "attach.input",
             AttachScrollSource::Wheel => "attach.mouse",
         };
-        if !self.attach_input_permitted(client_id, &terminal_id, route, 0) {
+        // Scrolling that only moves herdr's own history writes nothing to the pane.
+        if super::pane_input::attach_scroll_reaches_pty(runtime, &source)
+            && !self.attach_input_permitted(client_id, route, 0)
+        {
             return true;
         }
-        let terminal_id = &terminal_id;
+        let Some(ClientConnection {
+            mode: ClientConnectionMode::TerminalAttach { terminal_id },
+            ..
+        }) = self.clients.get(&client_id)
+        else {
+            return false;
+        };
         let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) else {
             return false;
         };
@@ -1540,7 +1546,7 @@ impl HeadlessServer {
             return false;
         };
         let terminal_id = terminal_id.clone();
-        if !self.attach_input_permitted(client_id, &terminal_id, "attach.mouse", 0) {
+        if !self.attach_input_permitted(client_id, "attach.mouse", 0) {
             return true;
         }
         let Some(client) = self.clients.get(&client_id) else {
@@ -2267,6 +2273,14 @@ impl HeadlessServer {
                     );
                     return false;
                 }
+                if !self.clients.get(&client_id).is_some_and(|client| {
+                    matches!(client.mode, ClientConnectionMode::TerminalAttach { .. })
+                }) {
+                    return false;
+                }
+                if !self.attach_input_permitted(client_id, "attach.input", data.len() as u64) {
+                    return true;
+                }
                 let Some(ClientConnection {
                     mode: ClientConnectionMode::TerminalAttach { terminal_id },
                     ..
@@ -2274,16 +2288,6 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                let terminal_id = terminal_id.clone();
-                if !self.attach_input_permitted(
-                    client_id,
-                    &terminal_id,
-                    "attach.input",
-                    data.len() as u64,
-                ) {
-                    return true;
-                }
-                let terminal_id = &terminal_id;
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                     let bytes_before = runtime.user_bytes_sent();
                     if let Err(err) = apply_terminal_attach_input(runtime, data) {

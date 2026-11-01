@@ -9618,6 +9618,10 @@
                   "description": "`any` or `human-only`.",
                   "type": "string"
                 },
+                "input_mode_explicit": {
+                  "description": "True when an admin set the mode on purpose, so the default mode leaves it alone.",
+                  "type": "boolean"
+                },
                 "pane_id": {
                   "type": "string"
                 },

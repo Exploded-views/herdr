@@ -93,12 +93,13 @@ impl AppState {
                 let Some(state) = self.terminals.get(terminal) else {
                     return Ok(());
                 };
-                if state.access.is_some() || state.access_opened_explicitly {
-                    return Ok(());
-                }
-                if let Some(list) = self.start_baseline_access(terminal, name) {
-                    let list = list.to_vec();
-                    self.bind_access(terminal, list)?;
+                // Only the policy step is skipped for a pane that has settled its policy;
+                // the named input mode below is independent of it.
+                if state.access.is_none() && !state.access_opened_explicitly {
+                    if let Some(list) = self.start_baseline_access(terminal, name) {
+                        let list = list.to_vec();
+                        self.bind_access(terminal, list)?;
+                    }
                 }
             }
         }
@@ -107,7 +108,7 @@ impl AppState {
         if let Some(mode) = self.access_defaults.mode_by_name.get(name).copied() {
             if !self.is_bridge_name(name) {
                 if let Some(state) = self.terminals.get_mut(terminal) {
-                    if state.input_mode.is_any() {
+                    if state.input_mode.is_any() && !mode.is_any() {
                         state.input_mode = mode;
                         self.mark_session_dirty();
                     }
@@ -115,6 +116,22 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    /// Terminals named like the bridge that hold an input mode: a bridge that only takes
+    /// typed input receives nothing from the other host. A config reload or a restore can
+    /// leave one; the mode is never changed silently, so this is reported.
+    pub(crate) fn bridge_terminals_with_a_mode(&self) -> Vec<TerminalId> {
+        let Some(bridge) = self.remote_settings.bridge_if_bridge_only() else {
+            return Vec::new();
+        };
+        self.terminals
+            .iter()
+            .filter(|(_, terminal)| {
+                terminal.agent_name.as_deref() == Some(bridge) && !terminal.input_mode.is_any()
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// Is `name` the bridge agent while remote input is bridge-only? The bridge receives
@@ -126,15 +143,17 @@ impl AppState {
 
 /// The refusal for a non-`any` mode on the bridge.
 pub(crate) fn bridge_mode_message(bridge: &str) -> String {
-    format!(
-        "input mode must stay \"any\" on the bridge ({bridge}), which receives by API by design"
-    )
+    crate::access::policy::bridge_mode_text(bridge)
 }
 
 /// Bind `[access.default]` to a terminal that is an agent, holds no policy
 /// and was not opened on purpose. Returns true when it bound. One `Option`
-/// check when no default is configured. The default's `input_mode` is bound
-/// with it, except on the bridge, whose mode stays `any`.
+/// check when no default is configured.
+///
+/// The default `input_mode` is independent of the policy: it applies to every agent
+/// terminal whose mode is `any`, unless an admin set the mode on purpose
+/// (`input_mode_set_explicitly`), the agent's name has an `[access.<name>] input_mode` of
+/// its own, or the terminal is the bridge, whose mode stays `any`.
 pub(crate) fn apply_default_access(
     defaults: &AccessDefaults,
     bridge: Option<&str>,
@@ -143,30 +162,36 @@ pub(crate) fn apply_default_access(
     if defaults.default.is_none() && defaults.default_mode.is_any() {
         return false;
     }
-    if terminal.access.is_some()
-        || terminal.access_opened_explicitly
-        || !terminal.is_agent_terminal()
-    {
+    if !terminal.is_agent_terminal() {
         return false;
     }
     let mut bound = false;
     if let Some(default) = defaults.default.as_ref() {
-        match AccessBindingId::mint() {
-            Ok(binding) => {
-                terminal.access = Some(AccessPolicy {
-                    binding,
-                    accept_from: default.clone(),
-                });
-                bound = true;
-            }
-            Err(err) => {
-                tracing::error!(%err, "could not mint an access binding; pane left open");
-                return false;
+        if terminal.access.is_none() && !terminal.access_opened_explicitly {
+            match AccessBindingId::mint() {
+                Ok(binding) => {
+                    terminal.access = Some(AccessPolicy {
+                        binding,
+                        accept_from: default.clone(),
+                    });
+                    bound = true;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "could not mint an access binding; pane left open");
+                    return false;
+                }
             }
         }
     }
-    let on_bridge = bridge.is_some_and(|bridge| terminal.agent_name.as_deref() == Some(bridge));
-    if !defaults.default_mode.is_any() && terminal.input_mode.is_any() && !on_bridge {
+    let name = terminal.agent_name.as_deref();
+    let on_bridge = bridge.is_some_and(|bridge| name == Some(bridge));
+    let named = name.is_some_and(|name| defaults.mode_by_name.contains_key(name));
+    if !defaults.default_mode.is_any()
+        && terminal.input_mode.is_any()
+        && !terminal.input_mode_set_explicitly
+        && !on_bridge
+        && !named
+    {
         terminal.input_mode = defaults.default_mode;
         bound = true;
     }
@@ -191,6 +216,12 @@ impl AppState {
 
     /// After a restore: panes that already hold agents get the default too.
     pub(crate) fn bind_default_access_all(&mut self) {
+        for terminal in self.bridge_terminals_with_a_mode() {
+            tracing::warn!(
+                %terminal,
+                "the bridge pane has an input mode; it receives by API by design and will refuse its input"
+            );
+        }
         if self.access_defaults.default.is_none() && self.access_defaults.default_mode.is_any() {
             return;
         }

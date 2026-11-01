@@ -163,6 +163,9 @@ pub struct TerminalState {
     /// Where this pane's input may come from, apart from the allow-list. Independent of
     /// `access`: a pane can have a mode and no policy. Sticky like `access`.
     pub(crate) input_mode: crate::access::policy::InputMode,
+    /// Set when an admin chose the mode on purpose (`access.pane.set --input-mode`); the
+    /// sticky default mode never touches such a pane. Cleared when a new agent is started.
+    pub(crate) input_mode_set_explicitly: bool,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -206,6 +209,7 @@ impl TerminalState {
             access: None,
             access_opened_explicitly: false,
             input_mode: crate::access::policy::InputMode::Any,
+            input_mode_set_explicitly: false,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,

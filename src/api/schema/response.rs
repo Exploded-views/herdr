@@ -72,6 +72,9 @@ pub enum ResponseResult {
         /// `any` or `human-only`.
         #[serde(default = "default_input_mode")]
         input_mode: String,
+        /// True when an admin set the mode on purpose, so the default mode leaves it alone.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        input_mode_explicit: bool,
     },
     /// The input-origin log, newest first. `dropped` counts entries that never reached the file.
     AccessInputLog {

@@ -1233,21 +1233,24 @@ impl AccessConfig {
             )),
         }
         for (name, section) in &self.sections {
+            // A mode that can't be read fails closed: a typo must not leave a pane open.
             let mode = match section.input_mode.as_deref().map(parse_input_mode) {
                 None => None,
                 Some(Ok(mode)) => Some(mode),
                 Some(Err(err)) => {
-                    out.diagnostics
-                        .push(format!("access.{name}.input_mode: {err}; ignored"));
-                    None
+                    out.diagnostics.push(format!(
+                        "access.{name}.input_mode: {err}; using \"human-only\""
+                    ));
+                    Some(crate::access::policy::InputMode::HumanOnly)
                 }
             };
             // A section with only an `input_mode` binds no policy.
             let mode_only = section.accept_from.is_empty() && section.input_mode.is_some();
-            if let Some(mode) = mode.filter(|mode| !mode.is_any()) {
+            if let Some(mode) = mode {
                 if name == "default" {
                     out.defaults.default_mode = mode;
                 } else {
+                    // A named `any` is kept: it overrides the default mode for that name.
                     out.defaults.mode_by_name.insert(name.clone(), mode);
                 }
             }
@@ -1290,7 +1293,11 @@ fn check_bridge_mode(
     bridge: &str,
     modes: &mut std::collections::BTreeMap<String, crate::access::policy::InputMode>,
 ) -> bool {
-    modes.remove(bridge).is_some()
+    if modes.get(bridge).is_some_and(|mode| !mode.is_any()) {
+        modes.remove(bridge);
+        return true;
+    }
+    false
 }
 
 #[derive(Debug, Default, Deserialize)]

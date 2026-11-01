@@ -152,10 +152,14 @@ stop a process that sets out to get around it:
   --remote`): keystrokes from an outside client count as human. A process that escapes its
   pane's ancestry (`setsid`, `tmux`) and then attaches counts as an outside client, and so as
   human. Input that reaches a PTY outside herdr (`TIOCSTI`, `ptrace`) is not seen, logged or
-  moded, and popup input is logged but never moded. An attached pane client that only scrolls a
-  `human-only` pane's history is refused too. The sticky default's `input_mode` is bound the first
-  time an agent is seen in a pane that holds no policy and was not opened on purpose, so lowering
-  a pane with `--input-mode any` can be undone the next time such a pane is detected.
+  moded, and popup input is logged but never moded. A scroll by an attached
+  pane client is refused on a `human-only` pane only when it would write into the pane (a wheel
+  the child asked for, or a page key it owns). The default `input_mode` in `[access.default]`
+  applies to every agent pane whose name has no `input_mode` of its own, whatever its policy. It
+  is applied when an agent is detected in the pane, so an admin who sets a pane's mode on
+  purpose with `access pane set --input-mode` (even to `any`) is not overridden: `access pane
+  get` shows that mark. Starting a new agent in the pane clears it. A client that came in over
+  SSH counts as outside only under `remote_owner_tui = "allow"`.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.
 

@@ -2985,7 +2985,7 @@ async fn access_pane_set_input_mode_edits_only_what_it_names() {
     );
     assert_eq!(
         error_code(&response).as_deref(),
-        Some("invalid_accept_from")
+        Some("access_pane_set_empty")
     );
     let response = f.call(outside(), pane_set_mode(&pane, "sometimes"));
     assert_eq!(error_code(&response).as_deref(), Some("invalid_input_mode"));
@@ -3017,11 +3017,12 @@ async fn flag_mode_is_refused_as_not_in_v1() {
 #[tokio::test]
 async fn setting_a_mode_marks_the_session_dirty() {
     let mut f = gate_fixture(1);
+    f.set_mode(0, "any");
     f.server.app.state.session_dirty = false;
     f.set_mode(0, "any");
     assert!(
         !f.server.app.state.session_dirty,
-        "a no-op set must not dirty the session"
+        "a repeated set must not dirty the session"
     );
     f.set_mode(0, "human-only");
     assert!(f.server.app.state.session_dirty);
@@ -3067,5 +3068,142 @@ async fn no_input_class_row_is_left_unmoded() {
     }
     assert_eq!(seen, 6);
     f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// Fix round 1: remote attach, explicit lowering, the bridge text, scroll and the toast.
+
+fn set_remote(f: &mut Fixture, owner_tui: crate::access::policy::RemoteOwnerTui) {
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_owner_tui = owner_tui;
+}
+
+#[tokio::test]
+async fn human_only_refuses_via_ssh_attach_under_deny_and_allows_it_under_allow() {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    set_remote(&mut f, RemoteOwnerTui::Deny);
+    attach_client(&mut f, 110, 0, lineage_for(true, true));
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 110,
+        data: b"ls\r".to_vec(),
+    });
+    f.assert_no_bytes(0);
+    let events = logged(&f);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.decision == "deny" && event.client == "attach:110"),
+        "{events:?}"
+    );
+
+    // Under `allow` the owner's remote TUI types like a local one.
+    set_remote(&mut f, RemoteOwnerTui::Allow);
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 110,
+        data: b"ls\r".to_vec(),
+    });
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"ls\r");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn explicit_mode_is_shown_by_get_and_set_only_by_an_admin() {
+    let mut f = gate_fixture(2);
+    let pane = f.public(0);
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert!(got["result"].get("input_mode_explicit").is_none(), "{got}");
+
+    // A pane caller can't set it, so nothing is marked.
+    let sender = f.pane_caller(1);
+    let response = f.call(sender, pane_set_mode(&pane, "any"));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert!(!f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+
+    // An admin setting it, even to `any`, marks it, and `get` shows that.
+    let set = f.set_mode(0, "any");
+    assert_eq!(set["result"]["input_mode_explicit"], true, "{set}");
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert_eq!(got["result"]["input_mode_explicit"], true, "{got}");
+    assert!(f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+    // Changing only the list leaves the flag alone.
+    f.set_policy(0, &["outside"]);
+    assert!(f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn agent_start_into_a_moded_pane_under_the_bridge_name_gets_the_bridge_text() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("relay".into());
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+    let start = |name: &str| {
+        Method::AgentStart(AgentStartParams {
+            name: name.into(),
+            kind: "pi".into(),
+            pane_id: target.clone(),
+            args: Vec::new(),
+            timeout_ms: None,
+            accept_from: None,
+        })
+    };
+    // The bridge guard answers first; the pane is refused either way and nothing is typed.
+    let response = f.call(outside(), start("relay"));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert_eq!(
+        error_message(&response),
+        "access_denied: input mode must stay \"any\" on the bridge (relay), which receives by API by design"
+    );
+    let response = f.call(outside(), start("worker"));
+    assert_eq!(error_message(&response), human_only_denial(&target));
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn attach_scroll_that_only_moves_herdr_scrollback_is_not_refused() {
+    use crate::protocol::{AttachScrollDirection, AttachScrollSource};
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    attach_client(&mut f, 111, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 111, 1);
+    // The default runtime has no mouse tracking: a wheel only scrolls herdr's own history.
+    f.server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 111,
+            source: AttachScrollSource::Wheel,
+            direction: AttachScrollDirection::Up,
+            lines: 1,
+            column: Some(1),
+            row: Some(1),
+            modifiers: 0,
+        });
+    f.assert_no_bytes(0);
+    assert!(f.server.clients[&111].refused_pane.is_none());
+    assert!(logged(&f).is_empty(), "{:?}", logged(&f));
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn the_attach_refusal_notice_is_rearmed_by_an_allowed_input() {
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    attach_client(&mut f, 112, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 112, 1);
+    let key = |f: &mut Fixture| {
+        f.server.handle_server_event(ServerEvent::ClientInput {
+            client_id: 112,
+            data: b"x".to_vec(),
+        });
+    };
+    key(&mut f);
+    assert!(f.server.clients[&112].refused_pane.is_some());
+    f.set_mode(0, "any");
+    key(&mut f);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    assert!(f.server.clients[&112].refused_pane.is_none());
     shutdown_test_runtimes(&mut f.server);
 }
