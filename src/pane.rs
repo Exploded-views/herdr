@@ -2656,8 +2656,13 @@ impl PaneRuntime {
             });
             let exit_events = events.clone();
             let cwd_process_exited = cwd_process_exited.clone();
+            let child_identity = input_meta.child_identity.clone();
             let on_reader_exit = Box::new(move || {
                 cwd_process_exited.store(true, Ordering::Release);
+                // The pid may be reused from now on: stop matching callers against it.
+                if let Ok(mut identity) = child_identity.lock() {
+                    *identity = None;
+                }
                 // Imported handoff panes have no child wait handle, so their exit cause is
                 // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
                 let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {

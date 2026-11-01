@@ -2,7 +2,7 @@
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -2649,10 +2649,7 @@
+@@ -2674,10 +2674,7 @@
                  }
                  let result = self.shell_client_popup_input_allowed(client_id, &popup_terminal_id);
                  let payload_len = input_origin::client_events_payload_len(&events);

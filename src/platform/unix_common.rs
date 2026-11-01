@@ -508,18 +508,33 @@ pub(crate) fn create_private_file(path: &Path) -> std::io::Result<std::fs::File>
         .open(path)
 }
 
-/// Open `path` for appending, creating it with mode 0600 if it is missing. A symlink at
-/// `path` is refused (`O_NOFOLLOW`), and an existing file is set to 0600 (`fchmod`). Holds
-/// the input-origin log.
+/// Open `path` for appending, creating it with mode 0600 if it is missing. Holds the
+/// input-origin log. A symlink at `path` is refused (`O_NOFOLLOW`). The open never blocks
+/// (`O_NONBLOCK`, so a FIFO is not waited on), and anything but a regular file with a single
+/// link is refused, so the appends and the `fchmod` can only touch a file made for this.
 pub(crate) fn open_private_append(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
     let file = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .mode(0o600)
         .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular, unlinked file",
+        ));
+    }
+    let fd = file.as_raw_fd();
+    // SAFETY: fd is open for the life of `file`; F_GETFL and F_SETFL take plain integers.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     Ok(file)
 }

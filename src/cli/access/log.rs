@@ -97,22 +97,37 @@ pub(super) fn run_log(
 /// `time  pane  path/route  class[:principal]  client  host  bytes  decision  ×count`
 pub(super) fn format_event(event: &AccessInputEvent) -> String {
     let class = match &event.principal {
-        Some(principal) => format!("{}:{principal}", event.class),
-        None => event.class.clone(),
+        Some(principal) => format!("{}:{}", event.class, printable(principal)),
+        None => printable(&event.class),
     };
     format!(
         "{}\t{}\t{}/{}\t{}\t{}\t{}\t{}\t{}\t×{}",
         format_time(event.at_ms),
-        event.pane,
-        event.path,
-        event.route,
+        printable(&event.pane),
+        printable(&event.path),
+        printable(&event.route),
         class,
-        event.client,
-        event.host,
+        printable(&event.client),
+        printable(&event.host),
         event.bytes,
-        event.decision,
+        printable(&event.decision),
         event.count
     )
+}
+
+/// A field with every control character written out (`\u{1b}`), so a line read from a file
+/// that another process can edit can't move the cursor, set the title or start a new line.
+fn printable(field: &str) -> String {
+    field
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 /// UTC, to the second.
@@ -310,5 +325,25 @@ mod tests {
         assert_eq!(node, "node-a");
         assert_eq!(dropped, 4);
         assert_eq!(events, vec![old, new]);
+    }
+
+    #[test]
+    fn access_log_escapes_control_characters_from_the_file() {
+        let mut hostile = event(
+            1_700_000_000_000,
+            "pane.send_text",
+            "caller",
+            Some("\u{1b}]0;owned\u{7}"),
+        );
+        hostile.pane = "w1\u{1b}[2J".into();
+        hostile.client = "api:1\r\nforged line".into();
+        let line = format_event(&hostile);
+        assert!(
+            !line.contains('\u{1b}') && !line.contains('\u{7}'),
+            "{line:?}"
+        );
+        assert!(!line.contains('\r') && !line.contains('\n'), "{line:?}");
+        assert!(line.contains("\\u{1b}"), "{line}");
+        assert_eq!(line.split('\t').count(), 9);
     }
 }

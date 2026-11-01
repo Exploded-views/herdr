@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M19. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -402,7 +402,7 @@
+ impl Pacer {
+     /// App thread, after queueing an entry.
+     pub(crate) fn notify(&self) {
+-        if !self.armed.swap(true, std::sync::atomic::Ordering::SeqCst) {
++        if true {
+             self.unpark();
+         }
+     }

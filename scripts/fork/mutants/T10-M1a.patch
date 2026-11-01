@@ -2,7 +2,7 @@
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -2516,16 +2516,7 @@
+@@ -2541,16 +2541,7 @@
                  };
                  let result = self.shell_client_input_allowed(client_id, &pane_id);
                  let payload_len = input_origin::client_events_payload_len(&events);

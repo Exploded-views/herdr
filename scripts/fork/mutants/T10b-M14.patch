@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M14. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/access/log.rs b/src/cli/access/log.rs
+--- a/src/cli/access/log.rs
++++ b/src/cli/access/log.rs
+@@ -121,7 +121,7 @@
+     field
+         .chars()
+         .flat_map(|c| {
+-            if c.is_control() {
++            if false {
+                 c.escape_default().collect::<Vec<_>>()
+             } else {
+                 vec![c]

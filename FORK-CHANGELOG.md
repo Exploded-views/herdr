@@ -82,7 +82,7 @@ a plan to send it upstream, and nothing has been proposed upstream.
   always its own entry and is written at once. The server writes what it has before it stops
   or hands off. `herdr access log [--limit N] [--json]` (API `access.log`) prints the newest
   entries first, with the number dropped if the writer fell behind; `--file` reads the files
-  when the server is down. Only a caller outside every pane may read it. `[access] input_log =
+  when the server is down. The `access.log` API is for a caller outside every pane only; the file itself can be read by any process at the same uid. `[access] input_log =
   false` turns it off and restores the old behaviour exactly: nothing is classified for Input
   requests. The names `input_log` and `node_name` are no longer accepted for agents.
   *fork-only*

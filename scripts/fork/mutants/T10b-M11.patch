@@ -1,0 +1,18 @@
+# herdr-fork: mutant T10b-M11. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1498,12 +1498,7 @@
+         {
+             warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
+         }
+-        self.log_attach_input(
+-            client_id,
+-            terminal_id,
+-            route,
+-            runtime.user_bytes_sent().saturating_sub(bytes_before),
+-        );
++        let _ = (route, bytes_before);
+         true
+     }
+ 

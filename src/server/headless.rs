@@ -1364,6 +1364,12 @@ impl HeadlessServer {
                 }
                 let result = self.shell_client_popup_input_allowed(client_id, &popup_terminal_id);
                 if !self.client_input_permitted(client_id, "popup", result) {
+                    self.log_shell_popup_input(
+                        client_id,
+                        &popup_terminal_id,
+                        path.len() as u64,
+                        false,
+                    );
                     return false;
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
@@ -1371,12 +1377,19 @@ impl HeadlessServer {
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
                     return foreground_changed | geometry_changed;
                 };
+                let bytes_before = runtime.user_bytes_sent();
                 if let Err(err) = apply_client_popup_input_events(
                     runtime,
                     &[protocol::ClientPaneInputEvent::Paste(path)],
                 ) {
                     warn!(client_id, terminal_id, err = %err, "client shell popup clipboard image paste failed");
                 }
+                self.log_shell_popup_input(
+                    client_id,
+                    &popup_terminal_id,
+                    runtime.user_bytes_sent().saturating_sub(bytes_before),
+                    true,
+                );
                 true
             }
         }
@@ -1474,11 +1487,23 @@ impl HeadlessServer {
             return false;
         };
 
+        // A page key the child owns is the client's own bytes; a wheel is a mouse report.
+        let route = match &source {
+            AttachScrollSource::PageKey { .. } => "attach.input",
+            AttachScrollSource::Wheel => "attach.mouse",
+        };
+        let bytes_before = runtime.user_bytes_sent();
         if let Err(err) =
             apply_terminal_attach_scroll(runtime, source, direction, lines, column, row, modifiers)
         {
             warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
         }
+        self.log_attach_input(
+            client_id,
+            terminal_id,
+            route,
+            runtime.user_bytes_sent().saturating_sub(bytes_before),
+        );
         true
     }
 

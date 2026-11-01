@@ -55,8 +55,9 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   host kind and the byte count; never the content) to a local file, mode 0600, capped at about
   2.5 MiB. Every other fork feature is off by default. The owner's decision, verbatim: "keep it
   on" (2026-10-28). `[access] input_log = false` turns it off. `herdr access log` prints it
-  (newest first; `--file` reads the files when the server is down), and only a caller
-  outside every pane may read it. The file's header names the node by `[access] node_name`
+  (newest first; `--file` reads the files when the server is down). The `access.log` API
+  is for a caller outside every pane only; the file itself is not protected from a pane
+  agent (see Limits). The file's header names the node by `[access] node_name`
   (default `node`), never the hostname. A burst of typing is one entry per 2 seconds; a
   refusal is always its own entry and is written at once. The server flushes the log before
   it stops or hands off.
@@ -110,12 +111,21 @@ stop a process that sets out to get around it:
   pane's ancestry (`setsid`, `tmux`, and so on) and then attaches counts as an outside client.
 - **What the input log does not cover.** Input that reaches a PTY outside herdr (`TIOCSTI`,
   `ptrace`) is not seen or logged. Popup input is logged under `shell.popup_input` and is
-  never gated. Attach wheel scrolling is not logged (attach keystrokes and mouse reports are).
-  `agent.start` records the command line before shell quoting.
+  never bound by a pane policy or an input mode. The command herdr itself types to resume an
+  agent after a restore is server-made, and is not logged. `agent.start` records the command
+  line before shell quoting.
+- **Who can read the log.** Only the `access.log` API (and `herdr access log` through it) is
+  limited to a caller outside every pane. The file is mode 0600 under the same uid as the
+  panes, so any process at that uid, a pane agent included, can read, edit or delete it, and
+  `herdr access log --file` reads it without asking the server. Everything it prints is
+  escaped, so a planted entry can't send terminal control codes. On Windows the file has no
+  0600 or no-follow protection.
 - **What the input log is.** A local guardrail record, not an audit trail. Any process at the
   same uid can edit or delete it, and it is not synced to disk, so it survives a crash only up
-  to the writer's last write: a crash loses at most the one open entry, up to 2 seconds of
-  typing. When the writer falls behind, entries are dropped and a `dropped` marker is written;
+  to the writer's last write. The writer sleeps with no timer and is woken by the first entry
+  after it went idle, then writes within 50 ms, so a crash loses at most the entries from the
+  last 50 ms (and no more than the 1024 the channel holds) plus the one open entry (up to 2
+  seconds of typing). A read with `access log` writes everything first. When the writer falls behind, entries are dropped and a `dropped` marker is written;
   `access log` shows the count.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.

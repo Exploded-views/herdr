@@ -2167,6 +2167,19 @@ async fn log_flushed_on_shutdown_and_handoff() {
         // runs in its own process under nextest).
         // (Kept short: a unix socket path is limited to about 100 bytes.)
         let config_home = std::path::PathBuf::from(format!("/tmp/hd{}", std::process::id()));
+        struct ConfigHomeGuard(Option<std::ffi::OsString>, std::path::PathBuf);
+        impl Drop for ConfigHomeGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+                let _ = std::fs::remove_dir_all(&self.1);
+            }
+        }
+        // Restored and removed even if an assertion fails. Process-wide state, so this relies
+        // on nextest (one process per test), as the other tests that set it do.
+        let _guard = ConfigHomeGuard(std::env::var_os("XDG_CONFIG_HOME"), config_home.clone());
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::fs::create_dir_all(crate::session::data_dir()).unwrap();
         let read =
@@ -2203,7 +2216,6 @@ async fn log_flushed_on_shutdown_and_handoff() {
             ..Default::default()
         });
         assert!(result.is_err());
-        let _ = std::fs::remove_dir_all(&config_home);
         assert!(
             read().contains(r#""bytes":3"#),
             "flushed before the import ({result:?}): {}",
@@ -2299,5 +2311,179 @@ async fn a_policy_bound_during_the_harvest_phase_stops_the_wheel_up_bytes() {
         response_rx.try_recv().is_ok(),
         "the reader still gets an answer"
     );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn attach_scroll_logged_for_page_keys_and_wheel() {
+    use crate::protocol::{AttachScrollDirection, AttachScrollSource};
+    // A page key the child owns is the client's own bytes, written to the PTY: attach.input.
+    let mut f = gate_fixture(2);
+    let mut input = mouse_tracking_runtime(&mut f);
+    attach_client(&mut f, 8, 0, lineage_for(false, true));
+    assert!(f
+        .server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 8,
+            source: AttachScrollSource::PageKey {
+                input: b"\x1b[5~".to_vec(),
+            },
+            direction: AttachScrollDirection::Up,
+            lines: 1,
+            column: None,
+            row: None,
+            modifiers: 0,
+        }));
+    assert_eq!(input.try_recv().unwrap().as_ref(), b"\x1b[5~");
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "attach.input");
+    assert_eq!(events[0].client, "attach:8");
+    assert_eq!(events[0].bytes, 4);
+    shutdown_test_runtimes(&mut f.server);
+
+    // A wheel report the pane asked for is a mouse report: attach.mouse.
+    let mut f = gate_fixture(2);
+    let mut input = mouse_tracking_runtime(&mut f);
+    attach_client(&mut f, 9, 0, lineage_for(false, true));
+    assert!(f
+        .server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 9,
+            source: AttachScrollSource::Wheel,
+            direction: AttachScrollDirection::Up,
+            lines: 1,
+            column: Some(3),
+            row: Some(2),
+            modifiers: 0,
+        }));
+    let written = input.try_recv().expect("a wheel report");
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "attach.mouse");
+    assert_eq!(events[0].bytes, written.len() as u64);
+    shutdown_test_runtimes(&mut f.server);
+
+    // A scroll the host handles (no mouse reporting) writes nothing, so logs nothing.
+    let mut f = gate_fixture(2);
+    attach_client(&mut f, 10, 0, lineage_for(false, true));
+    f.server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 10,
+            source: AttachScrollSource::Wheel,
+            direction: AttachScrollDirection::Down,
+            lines: 1,
+            column: None,
+            row: None,
+            modifiers: 0,
+        });
+    assert!(logged(&f).is_empty());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn popup_clipboard_image_paste_logged() {
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let _local = connect_shell_client(&mut f.server, 100, lineage_for(false, true));
+    let path = "/tmp/client-image.png";
+    assert!(f.server.paste_client_clipboard_image_path(
+        100,
+        crate::protocol::ClientClipboardImageTarget::Popup(popup_id.to_string()),
+        path.into(),
+    ));
+    assert!(popup_input.try_recv().is_ok());
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "shell.popup_input");
+    assert_eq!(events[0].client, "shell:100");
+    assert_eq!(events[0].bytes, path.len() as u64);
+    assert_eq!(events[0].decision, "allow");
+    shutdown_test_runtimes(&mut f.server);
+
+    // A refused paste (remote TUI under deny) is recorded as a refusal.
+    let (mut f, mut popup_input, popup_id) = popup_fixture();
+    let _remote = connect_shell_client(&mut f.server, 101, lineage_for(true, true));
+    assert!(!f.server.paste_client_clipboard_image_path(
+        101,
+        crate::protocol::ClientClipboardImageTarget::Popup(popup_id.to_string()),
+        path.into(),
+    ));
+    assert!(popup_input.try_recv().is_err());
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].decision, "deny");
+    assert_eq!(events[0].route, "shell.popup_input");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// With the log on, the check right before dispatch decides every Input request whatever the
+// early idle shortcut says, so the shortcut is only proven load-bearing with the log off.
+// These pin it: a protected pane and bridge-only are enforced on the off path.
+
+#[tokio::test]
+async fn protected_pane_enforced_with_input_log_off() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.input_log = false;
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    for (name, method) in [
+        ("pane.send_text", send_text(&target)),
+        ("pane.send_keys", send_keys(&target)),
+        ("pane.send_input", send_input(&target)),
+    ] {
+        let caller = f.pane_caller(1);
+        let response = f.call(caller, method);
+        assert_eq!(
+            error_code(&response).as_deref(),
+            Some("access_denied"),
+            "{name}"
+        );
+    }
+    f.assert_no_bytes(0);
+    let response = f.call(outside(), send_text(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn bridge_only_enforced_with_input_log_off() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.input_log = false;
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("relay".into());
+    let target = f.public(0);
+    assert!(!f.server.app.any_access_protected());
+    for caller in [peer(false, true), peer(true, false)] {
+        let response = f.call(caller, send_text(&target));
+        assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    }
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn access_log_read_sees_every_entry_recorded_before_it() {
+    use crate::access::registry::TestDir;
+    let dir = TestDir::new("read-after-record");
+    let mut f = gate_fixture(2);
+    f.server
+        .app
+        .input_log
+        .lock()
+        .unwrap()
+        .attach_writer(dir.path().to_path_buf(), "node-a".into())
+        .unwrap();
+    let target = f.public(0);
+    for _ in 0..3 {
+        let response = f.call(outside(), send_text(&target));
+        assert!(error_code(&response).is_none(), "{response}");
+    }
+    // The read flushes first: the open allow entry is in the file the moment it returns.
+    let log = Method::AccessLog(crate::api::schema::AccessLogParams::default());
+    let answer = json(&f.call(outside(), log));
+    assert_eq!(answer["result"]["events"][0]["count"], 3, "{answer}");
+    let text = std::fs::read_to_string(dir.path().join("access-input.log")).unwrap();
+    assert!(text.contains(r#""route":"pane.send_text""#), "{text}");
+    assert!(text.contains(r#""count":3"#), "{text}");
     shutdown_test_runtimes(&mut f.server);
 }

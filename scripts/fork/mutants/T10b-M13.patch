@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M13. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/unix_common.rs b/src/platform/unix_common.rs
+--- a/src/platform/unix_common.rs
++++ b/src/platform/unix_common.rs
+@@ -519,7 +519,7 @@
+     let file = std::fs::OpenOptions::new()
+         .append(true)
+         .create(true)
+-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
++        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+         .mode(0o600)
+         .open(path)?;
+     let meta = file.metadata()?;

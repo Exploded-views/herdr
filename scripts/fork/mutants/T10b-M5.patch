@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -241,9 +241,6 @@
+@@ -294,9 +294,6 @@
      }
  
      fn push_ring(&mut self, ev: InputEvent) {

@@ -54,7 +54,13 @@ impl App {
         self.with_input_log(InputLog::flush_and_stop);
     }
 
+    /// Write everything recorded so far to the file, then return. Reads of the log call it.
+    pub(crate) fn sync_input_log(&self) {
+        self.with_input_log(InputLog::sync);
+    }
+
     /// Start the writer again after a handoff that did not happen.
+    #[cfg(unix)]
     pub(crate) fn resume_input_log(&self) {
         self.with_input_log(InputLog::resume);
     }
@@ -216,6 +222,8 @@ impl App {
             .limit
             .unwrap_or(DEFAULT_LOG_LIMIT)
             .clamp(1, crate::access::input_log::RING_CAP as u32) as usize;
+        // What the read shows is in the file by the time it answers.
+        self.sync_input_log();
         let (events, dropped) = self.input_log_snapshot(limit);
         let events = events
             .into_iter()

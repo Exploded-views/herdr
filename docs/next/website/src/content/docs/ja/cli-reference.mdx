@@ -432,7 +432,7 @@ herdr access pane get <pane>
 herdr access log [--limit N] [--json] [--file]
 ```
 
-新しいものから 1 行ずつ表示します。時刻(UTC)、ペイン、`path/route`(`api/pane.send_text`、`client/shell.pane_input`、`client/attach.input`)、送信者クラス(`pane:<id>`、`outside`、`outside_ssh`、`remote`、`caller:<name>`、`unknown`)、クライアント(`api:<connection>`、`shell:<id>`、`attach:<id>`)、ホスト種別(`local`、`ssh`、`remote-stamp`)、バイト数、判定、そして 1 件にまとめられた連続入力の `×count` です。入力内容は表示されません。書き込みが追いつかなかった場合は、最後の `dropped: N` 行で失われた件数が分かります。読めるのは、どのペインの外側にいる呼び出し元だけです。`--file` はサーバーが停止しているとき、herdr のデータディレクトリから `access-input.log`(とローテーションされた `.1`)を読みます。`[access] input_log = false` でログを無効にできます。API メソッドは `access.log` です。
+新しいものから 1 行ずつ表示します。時刻(UTC)、ペイン、`path/route`(`api/pane.send_text`、`client/shell.pane_input`、`client/attach.input`)、送信者クラス(`pane:<id>`、`outside`、`outside_ssh`、`remote`、`caller:<name>`、`unknown`)、クライアント(`api:<connection>`、`shell:<id>`、`attach:<id>`)、ホスト種別(`local`、`ssh`、`remote-stamp`)、バイト数、判定、そして 1 件にまとめられた連続入力の `×count` です。入力内容は表示されません。書き込みが追いつかなかった場合は、最後の `dropped: N` 行で失われた件数が分かります。`access.log` API を使えるのは、どのペインの外側にいる呼び出し元だけです。ファイル自体は、ペイン内のエージェントを含む同じ uid の任意のプロセスが読めます。制御文字はエスケープして表示されます。`--file` はサーバーが停止しているとき、herdr のデータディレクトリから `access-input.log`(とローテーションされた `.1`)を読みます。`[access] input_log = false` でログを無効にできます。API メソッドは `access.log` です。
 
 ## インテグレーション
 

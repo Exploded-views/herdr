@@ -2117,6 +2117,18 @@ mod tests {
         .unwrap();
         assert_eq!(adopted.child_pid(), Some(pid));
         assert_eq!(adopted.child_identity(), Some(identity));
+
+        // When the adopted shell exits its identity is dropped, as a spawned pane's is.
+        adopted.set_handoff_reader_paused(false);
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        let cleared = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            adopted.child_identity().is_none()
+        });
+        assert!(
+            cleared,
+            "the identity of an exited adopted pane must be cleared"
+        );
         drop(adopted);
         drop(runtimes);
     }

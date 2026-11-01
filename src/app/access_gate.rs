@@ -977,6 +977,27 @@ mod tests {
         let _ = shell.wait();
     }
 
+    /// `check_access` is the gate without the log: its idle shortcut is the only thing that
+    /// lets a request through unexamined, so a protected pane and bridge-only must defeat it.
+    #[tokio::test]
+    async fn idle_shortcut_yields_to_a_protected_pane_and_to_bridge_only() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let target = app.public_pane_id(0, panes[0]).unwrap();
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[1])));
+        // Nothing protected: open.
+        assert!(app.check_access(&send_text(&target), &from_pane).is_ok());
+        // A protected pane refuses a pane caller.
+        let terminal = terminal_of(&app, panes[0]);
+        protect(&mut app, &terminal, vec![Principal::Outside]);
+        assert!(app.check_access(&send_text(&target), &from_pane).is_err());
+        // Bridge-only refuses a remote caller with no policy bound anywhere.
+        app.state.terminals.get_mut(&terminal).unwrap().access = None;
+        app.state.remote_settings.input = RemoteInput::BridgeOnly;
+        let remote = Caller::Classified(CallerClass::Remote);
+        assert!(app.check_access(&send_text(&target), &remote).is_err());
+    }
+
     #[tokio::test]
     async fn classification_reads_the_cached_identity_not_the_system() {
         let mut app = app_with_panes(1);
@@ -1033,8 +1054,7 @@ mod tests {
     #[ignore = "manual access gate budget benchmark"]
     async fn access_gate_profile() {
         use crate::access::input_log::{
-            InputEvent, InputLog, InputPath, LoggedClass, CHANNEL_CAP, DECISION_ALLOW,
-            DECISION_DENY, RING_CAP,
+            InputEvent, InputLog, InputPath, LoggedClass, DECISION_ALLOW, DECISION_DENY, RING_CAP,
         };
         use std::hint::black_box;
         use std::time::{Duration, Instant};
@@ -1158,44 +1178,67 @@ mod tests {
                 log.record(event);
             }
         };
-        let (mut allow_log, allow_rx) = InputLog::with_channel(CHANNEL_CAP);
-        let drain_allow = std::thread::spawn(move || while allow_rx.recv().is_ok() {});
+        // The real writer thread, as the server runs it: it sleeps with no timer, is woken
+        // by the first entry after it went idle and writes the rest in batches.
+        let bench_dir = crate::access::registry::TestDir::new("bench-log");
+        let writer_log = |label: &str| {
+            let mut log = InputLog::new();
+            log.attach_writer(bench_dir.path().join(label), "node-a".into())
+                .unwrap();
+            log
+        };
+        std::fs::create_dir_all(bench_dir.path().join("allow")).unwrap();
+        std::fs::create_dir_all(bench_dir.path().join("deny")).unwrap();
+        std::fs::create_dir_all(bench_dir.path().join("whole")).unwrap();
+        let mut allow_log = writer_log("allow");
         full_ring(&mut allow_log);
         let record_allow_coalesce = measure(|| {
             allow_log.record(black_box(log_event(DECISION_ALLOW, 1_000_000)));
         });
-        let (mut deny_log, deny_rx) = InputLog::with_channel(CHANNEL_CAP);
-        let drain_deny = std::thread::spawn(move || while deny_rx.recv().is_ok() {});
+        let mut deny_log = writer_log("deny");
         full_ring(&mut deny_log);
         let record_deny_immediate = measure(|| {
             deny_log.record(black_box(log_event(DECISION_DENY, 2_000_000)));
         });
-        drop((allow_log, deny_log));
-        let _ = (drain_allow.join(), drain_deny.join());
+        allow_log.flush_and_stop();
+        deny_log.flush_and_stop();
 
-        // The per-keystroke client path: the gate, then the log entry, on a full ring.
+        // The per-keystroke client path and the whole API gate, on a full ring with a writer
+        // channel that is drained, as in the server. The callers and the clients alternate, so
+        // each record closes the one before it and sends it, and the pane caller makes the
+        // principal scan run.
+        *app.input_log.lock().unwrap() = writer_log("whole");
         {
             let mut log = app.input_log.lock().unwrap();
             full_ring(&mut log);
         }
         let client_terminal = terminal_of(&app, panes[0]);
         let client_pane = target.clone();
+        let callers = [&stranger, &in_pane];
+        let mut turn = 0usize;
         let client_keystroke = measure(|| {
-            let _ = black_box(app.check_client_shell_input(black_box(&stranger), &client_pane));
+            turn += 1;
+            let caller = callers[turn % 2];
+            let _ = black_box(app.check_client_shell_input(black_box(caller), &client_pane));
             app.log_client_input(crate::app::access_log::ClientInput {
                 terminal: &client_terminal,
-                pane: Some(&client_pane),
+                // Alternately the pane id is not at hand and has to be found, as for attach.
+                pane: (turn % 4 < 2).then_some(client_pane.as_str()),
                 route: "shell.pane_input",
-                client: format!("shell:{}", black_box(7)),
-                caller: &stranger,
+                client: format!("shell:{}", turn % 3),
+                caller,
                 bytes: 1,
                 allowed: true,
             });
         });
-        // The whole API gate with the log on: the off cost plus at most the log's.
+        let mut turn = 0usize;
         let api_log_on = measure(|| {
-            let _ = black_box(app.gate_input(black_box(&method), black_box(&stranger), true));
+            turn += 1;
+            let caller = callers[turn % 2];
+            let _ = black_box(app.gate_input(black_box(&method), black_box(caller), true));
         });
+        app.input_log.lock().unwrap().flush_and_stop();
+        *app.input_log.lock().unwrap() = InputLog::new();
 
         println!(
             "access_gate classify_cached_16_panes_p95_ns={}",

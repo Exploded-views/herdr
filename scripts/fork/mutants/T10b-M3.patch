@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -274,7 +274,7 @@
+@@ -327,7 +327,7 @@
              }
              self.unreported = 0;
          }
@@ -10,4 +10,4 @@ diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 +        if tx.send(LogMsg::Event(ev)).is_err() {
              self.dropped += 1;
              self.unreported += 1;
-         }
+         } else {

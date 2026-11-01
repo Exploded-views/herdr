@@ -19,6 +19,11 @@ pub(crate) const CHANNEL_CAP: usize = 1024;
 pub(crate) const COALESCE_MS: u64 = 2000;
 /// The log file rotates to `.1` at this size.
 pub(crate) const ROTATE_BYTES: u64 = 1024 * 1024;
+/// The longest a closed entry waits in the channel before the writer writes it. The writer
+/// is woken by the first entry after it went idle, waits this long so a burst is one write,
+/// then drains. Entries after the first never wake it. An open allow entry (taking repeats)
+/// is sent when it closes, within `COALESCE_MS`.
+pub(crate) const WRITER_BATCH_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// File name inside the data dir.
 pub(crate) const LOG_FILE: &str = "access-input.log";
 
@@ -94,6 +99,8 @@ pub(crate) enum LogMsg {
     },
     /// Write everything received so far, then stop. The sender is told when done.
     Stop(SyncSender<()>),
+    /// Write everything received so far, then tell the sender. The writer carries on.
+    Sync(SyncSender<()>),
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -127,8 +134,19 @@ pub(crate) struct InputLog {
     open: bool,
     /// The newest entry has been handed to the writer for good (a flush): it takes no repeats.
     sealed: bool,
+    /// What the app thread and the writer thread share: failed writes, and the wake-up state.
+    shared: WriterShared,
     /// Where the writer was started, so a failed handoff can start it again.
+    #[cfg(unix)]
     writer: Option<(PathBuf, String)>,
+}
+
+impl Drop for InputLog {
+    fn drop(&mut self) {
+        // Let a parked writer see that nothing can reach it any more and end.
+        self.tx = None;
+        self.shared.pacer.wake_now();
+    }
 }
 
 impl Default for InputLog {
@@ -147,6 +165,8 @@ impl InputLog {
             unreported: 0,
             open: false,
             sealed: false,
+            shared: WriterShared::default(),
+            #[cfg(unix)]
             writer: None,
         }
     }
@@ -163,9 +183,13 @@ impl InputLog {
     /// Start the writer thread for `dir`. Called once by the active server.
     pub fn attach_writer(&mut self, dir: PathBuf, node: String) -> io::Result<()> {
         let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_CAP);
-        spawn_writer(rx, dir.clone(), &node)?;
+        self.shared.pacer = std::sync::Arc::new(Pacer::default());
+        spawn_writer(rx, dir.clone(), &node, self.shared.clone())?;
         self.tx = Some(tx);
-        self.writer = Some((dir, node));
+        #[cfg(unix)]
+        {
+            self.writer = Some((dir, node));
+        }
         Ok(())
     }
 
@@ -198,8 +222,50 @@ impl InputLog {
         self.ring.iter().rev().take(limit).cloned().collect()
     }
 
+    /// How many times the writer thread woke up (tests).
+    #[cfg(test)]
+    pub fn writer_wakes(&self) -> u64 {
+        self.shared
+            .pacer
+            .wakes
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Make everything recorded so far reach the file before returning: a read of the log
+    /// calls this first, so what it shows and what is on disk agree.
+    pub fn sync(&mut self) {
+        self.close_open();
+        if let Some(tx) = self.tx.as_ref() {
+            Self::round_trip(tx, &self.shared.pacer, LogMsg::Sync);
+        }
+    }
+
+    /// Queue a request the writer answers, wake it, and wait (bounded) for the answer. Not the
+    /// input path.
+    fn round_trip(tx: &SyncSender<LogMsg>, pacer: &Pacer, build: fn(SyncSender<()>) -> LogMsg) {
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let mut msg = build(done_tx);
+        for _ in 0..400 {
+            match tx.try_send(msg) {
+                Ok(()) => break,
+                Err(TrySendError::Full(back)) => {
+                    msg = back;
+                    pacer.wake_now();
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(TrySendError::Disconnected(_)) => return,
+            }
+        }
+        pacer.wake_now();
+        let _ = done_rx.recv_timeout(std::time::Duration::from_secs(3));
+    }
+
     pub fn dropped(&self) -> u64 {
         self.dropped
+            + self
+                .shared
+                .failures
+                .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Send the open entry, drain the channel to the writer and stop it. Used at
@@ -208,27 +274,14 @@ impl InputLog {
     pub fn flush_and_stop(&mut self) {
         self.close_open();
         self.sealed = true;
-        let Some(tx) = self.tx.take() else {
-            return;
-        };
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
-        let mut msg = LogMsg::Stop(done_tx);
-        // Not the hot path: wait a bounded time for room.
-        for _ in 0..400 {
-            match tx.try_send(msg) {
-                Ok(()) => break,
-                Err(TrySendError::Full(back)) => {
-                    msg = back;
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(TrySendError::Disconnected(_)) => return,
-            }
+        if let Some(tx) = self.tx.take() {
+            Self::round_trip(&tx, &self.shared.pacer, LogMsg::Stop);
         }
-        let _ = done_rx.recv_timeout(std::time::Duration::from_secs(3));
     }
 
     /// Start the writer again after `flush_and_stop` when the server carries on (a handoff
     /// that failed).
+    #[cfg(unix)]
     pub fn resume(&mut self) {
         if self.tx.is_some() {
             return;
@@ -277,6 +330,8 @@ impl InputLog {
         if tx.try_send(LogMsg::Event(ev)).is_err() {
             self.dropped += 1;
             self.unreported += 1;
+        } else {
+            self.shared.pacer.notify();
         }
     }
 }
@@ -299,7 +354,10 @@ impl LogFile {
             size,
             node: node.to_owned(),
         };
-        this.write_line(&header_line(node, now_ms()))?;
+        // A file that already has entries keeps its header: one per file.
+        if this.size == 0 {
+            this.write_line(&header_line(node, now_ms()))?;
+        }
         Ok(this)
     }
 
@@ -329,30 +387,150 @@ impl LogFile {
     }
 }
 
-/// The writer thread: blocks in `recv` (zero idle cost), appends JSON lines to
-/// `dir/access-input.log`, no fsync. Returns once the file is open.
-pub(crate) fn spawn_writer(rx: Receiver<LogMsg>, dir: PathBuf, node: &str) -> io::Result<()> {
-    let mut file = LogFile::open(dir.join(LOG_FILE), node)?;
-    crate::thread_spawn::spawn_named("herdr-input-log", move || {
-        while let Ok(msg) = rx.recv() {
-            let line = match &msg {
-                LogMsg::Event(ev) => serde_json::to_string(ev),
-                LogMsg::Dropped { n, at_ms } => Ok(format!(r#"{{"dropped":{n},"at_ms":{at_ms}}}"#)),
-                LogMsg::Stop(done) => {
-                    let _ = done.try_send(());
-                    return;
-                }
-            };
-            match line {
-                Ok(line) => {
-                    if let Err(err) = file.write_line(&line) {
-                        tracing::warn!(%err, "input log write failed");
-                    }
-                }
-                Err(err) => tracing::warn!(%err, "input log entry not serializable"),
+/// Wake-up state shared with the writer thread. The writer sleeps with no timer while nothing
+/// is queued. The first entry after it went idle wakes it (`armed` goes true); it then waits
+/// `WRITER_BATCH_DELAY` so a burst is one write, drains, clears `armed` and sleeps again.
+/// Entries queued while `armed` is set wake nobody, so the app thread pays for at most one
+/// wake-up per batch and not one per entry.
+#[derive(Default)]
+pub(crate) struct Pacer {
+    armed: std::sync::atomic::AtomicBool,
+    thread: std::sync::Mutex<Option<std::thread::Thread>>,
+    wakes: std::sync::atomic::AtomicU64,
+}
+
+impl Pacer {
+    /// App thread, after queueing an entry.
+    pub(crate) fn notify(&self) {
+        if !self.armed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.unpark();
+        }
+    }
+
+    /// Wake the writer now (a flush, a read): not on the input path.
+    pub(crate) fn wake_now(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.unpark();
+    }
+
+    fn unpark(&self) {
+        if let Ok(thread) = self.thread.lock() {
+            if let Some(thread) = thread.as_ref() {
+                thread.unpark();
             }
         }
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct WriterShared {
+    failures: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pacer: std::sync::Arc<Pacer>,
+}
+
+/// Counts failed writes so a full disk warns once and not once per entry.
+#[derive(Default)]
+struct WriteHealth {
+    failing: bool,
+    failed: u64,
+}
+
+impl WriteHealth {
+    /// Note one write. True when the caller should warn about it.
+    fn record(&mut self, ok: bool) -> bool {
+        if ok {
+            self.failing = false;
+            return false;
+        }
+        self.failed += 1;
+        let first = !self.failing;
+        self.failing = true;
+        first
+    }
+}
+
+/// Write one message. True when the writer should end.
+fn handle_msg(
+    msg: LogMsg,
+    file: &mut LogFile,
+    health: &mut WriteHealth,
+    failures: &std::sync::atomic::AtomicU64,
+) -> bool {
+    let line = match &msg {
+        LogMsg::Event(ev) => serde_json::to_string(ev),
+        LogMsg::Dropped { n, at_ms } => Ok(format!(r#"{{"dropped":{n},"at_ms":{at_ms}}}"#)),
+        LogMsg::Sync(done) => {
+            let _ = done.try_send(());
+            return false;
+        }
+        LogMsg::Stop(done) => {
+            let _ = done.try_send(());
+            return true;
+        }
+    };
+    match line {
+        Ok(line) => {
+            let written = file.write_line(&line);
+            if health.record(written.is_ok()) {
+                if let Err(err) = &written {
+                    tracing::warn!(%err, "input log write failed; further failures are counted as dropped");
+                }
+            }
+            if written.is_err() {
+                failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        Err(err) => tracing::warn!(%err, "input log entry not serializable"),
+    }
+    false
+}
+
+/// The writer thread, appending JSON lines to `dir/access-input.log`, no fsync. With nothing
+/// queued it parks with no timer (idle cost is zero). The app thread wakes it for the first
+/// entry after it went idle; it then waits `WRITER_BATCH_DELAY`, writes the batch and parks
+/// again. Returns once the file is open.
+pub(crate) fn spawn_writer(
+    rx: Receiver<LogMsg>,
+    dir: PathBuf,
+    node: &str,
+    shared: WriterShared,
+) -> io::Result<()> {
+    use std::sync::atomic::Ordering;
+    let WriterShared { failures, pacer } = shared;
+    let mut file = LogFile::open(dir.join(LOG_FILE), node)?;
+    let writer_pacer = pacer.clone();
+    let handle = crate::thread_spawn::spawn_named("herdr-input-log", move || {
+        let pacer = writer_pacer;
+        let mut health = WriteHealth::default();
+        loop {
+            while let Ok(msg) = rx.try_recv() {
+                if handle_msg(msg, &mut file, &mut health, &failures) {
+                    return;
+                }
+            }
+            pacer.armed.store(false, Ordering::SeqCst);
+            // An entry queued between the drain and the flag is caught here, so it is not
+            // left waiting for a wake-up that was never sent.
+            match rx.try_recv() {
+                Ok(msg) => {
+                    pacer.armed.store(true, Ordering::SeqCst);
+                    if handle_msg(msg, &mut file, &mut health, &failures) {
+                        return;
+                    }
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            std::thread::park();
+            pacer.wakes.fetch_add(1, Ordering::Relaxed);
+            std::thread::park_timeout(WRITER_BATCH_DELAY);
+            pacer.wakes.fetch_add(1, Ordering::Relaxed);
+        }
     })?;
+    if let Ok(mut thread) = pacer.thread.lock() {
+        *thread = Some(handle.thread().clone());
+    }
     Ok(())
 }
 
@@ -522,10 +700,12 @@ mod tests {
         // On disk the marker is one JSON line.
         let dir = TestDir::new("dropped");
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
-        spawn_writer(rx, dir.path().to_path_buf(), "node").unwrap();
+        let shared = WriterShared::default();
+        spawn_writer(rx, dir.path().to_path_buf(), "node", shared.clone()).unwrap();
         tx.send(LogMsg::Dropped { n: 7, at_ms: 99 }).unwrap();
         let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
         tx.send(LogMsg::Stop(done_tx)).unwrap();
+        shared.pacer.wake_now();
         done_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
@@ -537,8 +717,9 @@ mod tests {
     #[test]
     fn writer_rotates_at_one_mib_keeping_one_old_file() {
         let dir = TestDir::new("rotate");
-        let (tx, rx) = std::sync::mpsc::sync_channel(8);
-        spawn_writer(rx, dir.path().to_path_buf(), "node").unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(512);
+        let shared = WriterShared::default();
+        spawn_writer(rx, dir.path().to_path_buf(), "node", shared.clone()).unwrap();
         let mut big = ev("t1", DECISION_ALLOW, 1, 1);
         big.pane = "p".repeat(20_000);
         for _ in 0..200 {
@@ -546,6 +727,7 @@ mod tests {
         }
         let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
         tx.send(LogMsg::Stop(done_tx)).unwrap();
+        shared.pacer.wake_now();
         done_rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .unwrap();
@@ -634,7 +816,7 @@ mod tests {
         std::fs::write(&target, "keep").unwrap();
         std::os::unix::fs::symlink(&target, dir.path().join(LOG_FILE)).unwrap();
         let (_tx, rx) = std::sync::mpsc::sync_channel(1);
-        assert!(spawn_writer(rx, dir.path().to_path_buf(), "node").is_err());
+        assert!(spawn_writer(rx, dir.path().to_path_buf(), "node", Default::default()).is_err());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
     }
 
@@ -653,10 +835,195 @@ mod tests {
         // After the stop the ring still takes events and nothing blocks.
         log.record(ev("t2", DECISION_DENY, 2, 1));
         assert_eq!(log.snapshot(10).len(), 2);
-        // A failed handoff starts the writer again.
-        log.resume();
-        log.record(ev("t3", DECISION_DENY, 3, 1));
+        // A failed handoff (unix only) starts the writer again.
+        #[cfg(unix)]
+        {
+            log.resume();
+            log.record(ev("t3", DECISION_DENY, 3, 1));
+            log.flush_and_stop();
+            assert!(read(&dir).contains(r#""terminal":"t3""#));
+        }
+    }
+
+    #[test]
+    fn a_failing_disk_warns_once_and_counts_every_failure() {
+        let mut health = WriteHealth::default();
+        assert!(!health.record(true));
+        assert!(health.record(false), "the first failure warns");
+        assert!(!health.record(false), "a repeat does not");
+        assert!(!health.record(false));
+        assert_eq!(health.failed, 3);
+        assert!(!health.record(true), "a success is quiet");
+        assert!(
+            health.record(false),
+            "a new failure after a success warns again"
+        );
+        assert_eq!(health.failed, 4);
+    }
+
+    #[test]
+    fn a_second_writer_on_the_same_file_adds_no_second_header() {
+        let dir = TestDir::new("header-once");
+        for node in ["node-a", "node-b"] {
+            let (mut log, _) = InputLog::with_channel(1);
+            log.attach_writer(dir.path().to_path_buf(), node.into())
+                .unwrap();
+            log.record(ev("t1", DECISION_DENY, 1, 1));
+            log.flush_and_stop();
+        }
+        let text = read(&dir);
+        let headers = text.lines().filter(|l| l.starts_with(r#"{"node""#)).count();
+        assert_eq!(headers, 1, "{text}");
+        assert_eq!(text.lines().count(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_open_refuses_a_fifo_without_blocking() {
+        let dir = TestDir::new("fifo");
+        let path = dir.path().join(LOG_FILE);
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: c_path is a valid NUL-terminated string.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let dir_path = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+            let _ = done_tx.send(spawn_writer(rx, dir_path, "node-a", Default::default()).is_err());
+        });
+        let refused = done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a FIFO must not block");
+        assert!(refused, "a FIFO is not a log file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_open_refuses_a_hard_linked_file() {
+        let dir = TestDir::new("hardlink");
+        let other = dir.path().join("elsewhere");
+        std::fs::write(&other, "keep").unwrap();
+        std::fs::hard_link(&other, dir.path().join(LOG_FILE)).unwrap();
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(spawn_writer(rx, dir.path().to_path_buf(), "node-a", Default::default()).is_err());
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotated_files_stay_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TestDir::new("rotate-mode");
+        let (tx, rx) = std::sync::mpsc::sync_channel(512);
+        let shared = WriterShared::default();
+        spawn_writer(rx, dir.path().to_path_buf(), "node-a", shared.clone()).unwrap();
+        let mut big = ev("t1", DECISION_ALLOW, 1, 1);
+        big.pane = "p".repeat(20_000);
+        for _ in 0..80 {
+            tx.send(LogMsg::Event(big.clone())).unwrap();
+        }
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(LogMsg::Stop(done_tx)).unwrap();
+        shared.pacer.wake_now();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        for name in [LOG_FILE.to_string(), format!("{LOG_FILE}.1")] {
+            let mode = std::fs::metadata(dir.path().join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn an_idle_writer_never_wakes() {
+        let dir = TestDir::new("idle");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(
+            log.writer_wakes(),
+            0,
+            "no timer, no polling while nothing is pending"
+        );
         log.flush_and_stop();
-        assert!(read(&dir).contains(r#""terminal":"t3""#));
+    }
+
+    #[test]
+    fn a_burst_wakes_the_writer_once_not_once_per_entry() {
+        let dir = TestDir::new("burst");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        // Entries arrive for a while, a millisecond apart. The writer wakes for the first of
+        // each batch window, waits out the window and writes: about two wake-ups a window.
+        let start = std::time::Instant::now();
+        for n in 0..150u64 {
+            log.record(ev(&format!("t{n}"), DECISION_DENY, n, 1));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let elapsed = start.elapsed();
+        std::thread::sleep(WRITER_BATCH_DELAY * 4);
+        let windows = elapsed.as_millis() / WRITER_BATCH_DELAY.as_millis() + 2;
+        let wakes = log.writer_wakes();
+        assert!(wakes >= 1, "the writer never woke");
+        assert!(
+            u128::from(wakes) <= windows * 2 + 2,
+            "{wakes} wake-ups for 150 entries over {elapsed:?}"
+        );
+        assert_eq!(read(&dir).lines().count(), 151);
+        log.flush_and_stop();
+    }
+
+    #[test]
+    fn every_entry_reaches_the_file_within_the_bound() {
+        assert!(WRITER_BATCH_DELAY <= std::time::Duration::from_millis(100));
+        let dir = TestDir::new("bound");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        let start = std::time::Instant::now();
+        // A refusal, and an allow entry that a later different entry closes.
+        log.record(ev("t1", DECISION_DENY, 1, 1));
+        log.record(ev("t2", DECISION_ALLOW, 2, 1));
+        log.record(ev("t3", DECISION_DENY, 3, 1));
+        let arrived = loop {
+            let text = read(&dir);
+            if text.contains(r#""terminal":"t1""#)
+                && text.contains(r#""terminal":"t2""#)
+                && text.contains(r#""terminal":"t3""#)
+            {
+                break start.elapsed();
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(2),
+                "{text}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        // The bound plus slack for a loaded machine.
+        assert!(arrived <= WRITER_BATCH_DELAY * 6, "{arrived:?}");
+        log.flush_and_stop();
+    }
+
+    #[test]
+    fn sync_writes_everything_recorded_before_it() {
+        let dir = TestDir::new("sync");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        log.record(ev("t1", DECISION_ALLOW, 1, 5));
+        log.record(ev("t1", DECISION_ALLOW, 2, 5));
+        log.sync();
+        // No sleep: the open entry and the queue are in the file when sync returns.
+        let text = read(&dir);
+        assert!(
+            text.contains(r#""bytes":10"#) && text.contains(r#""count":2"#),
+            "{text}"
+        );
+        log.flush_and_stop();
     }
 }

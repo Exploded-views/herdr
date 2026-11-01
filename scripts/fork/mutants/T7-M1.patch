@@ -2,7 +2,7 @@
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -3134,11 +3134,7 @@
+@@ -3159,10 +3159,6 @@
  
          // The access gate: every request passes it before anything reads or
          // writes a pane, including the alt-screen defer below.
@@ -10,12 +10,10 @@ diff --git a/src/server/headless.rs b/src/server/headless.rs
 -            Self::reject_api_request_for_access(msg, &denied);
 -            return false;
 -        }
--
-+        
+ 
          let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
              AltScreenReadConflict::None => None,
-             AltScreenReadConflict::Frozen(snapshot) => Some(snapshot),
-@@ -3259,11 +3255,7 @@
+@@ -3284,10 +3280,6 @@
          // ids (a closed workspace) or make a target resolvable, so decide again
          // on the state the handler will resolve against. Nothing between here
          // and the handler mutates it.
@@ -23,8 +21,6 @@ diff --git a/src/server/headless.rs b/src/server/headless.rs
 -            Self::reject_api_request_for_access(msg, &denied);
 -            return changed;
 -        }
--        let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
-+                let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
+         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request, &msg.caller);
          if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
              let deferred_changed = self
-                 .app
