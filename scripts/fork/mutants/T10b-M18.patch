@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -355,7 +355,7 @@
+@@ -359,7 +359,7 @@
              node: node.to_owned(),
          };
          // A file that already has entries keeps its header: one per file.

@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -57,6 +57,7 @@
+@@ -58,6 +58,7 @@
      /// Terminal id, stable through moves.
      pub terminal: String,
      pub path: InputPath,

@@ -119,7 +119,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/platform/mod.rs`, `src/platform/unix_common.rs` | changed | `open_private_append`: append-open with `O_NOFOLLOW`, mode 0600 and `fchmod` |
 | `src/server/headless/tests/access_gate.rs` | changed | Tests for the input log (api, shell client, attach, popup, flush) and a policy bound mid-harvest |
 | `docs/fork.md`, `docs/next/website/src/content/docs/cli-reference.mdx`, `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx`, `docs/next/website/src/content/docs/socket-api.mdx`, `FORK-CHANGELOG.md` | changed | The input log, `herdr access log` and its honest limits |
-| `scripts/fork/mutants/T10b-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10b-M1 to T10b-M20 |
+| `scripts/fork/mutants/T10b-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10b-M1 to T10b-M23 |
 
 ## Limits
 

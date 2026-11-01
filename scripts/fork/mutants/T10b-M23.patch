@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M23. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/access/log.rs b/src/cli/access/log.rs
+--- a/src/cli/access/log.rs
++++ b/src/cli/access/log.rs
+@@ -97,7 +97,7 @@
+ /// `time  pane  path/route  class[:principal]  client  host  bytes  decision  ×count`
+ pub(super) fn format_event(event: &AccessInputEvent) -> String {
+     let class = match &event.principal {
+-        Some(principal) => format!("{}:{}", printable(&event.class), printable(principal)),
++        Some(principal) => format!("{}:{}", event.class, printable(principal)),
+         None => printable(&event.class),
+     };
+     format!(

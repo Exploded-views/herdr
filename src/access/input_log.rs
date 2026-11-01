@@ -22,7 +22,8 @@ pub(crate) const ROTATE_BYTES: u64 = 1024 * 1024;
 /// The longest a closed entry waits in the channel before the writer writes it. The writer
 /// is woken by the first entry after it went idle, waits this long so a burst is one write,
 /// then drains. Entries after the first never wake it. An open allow entry (taking repeats)
-/// is sent when it closes, within `COALESCE_MS`.
+/// is sent when the next record, a read of the log or a stop closes it, so the latest burst
+/// of a quiet pane stays out of the file until then, however old it is.
 pub(crate) const WRITER_BATCH_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// File name inside the data dir.
 pub(crate) const LOG_FILE: &str = "access-input.log";
@@ -235,6 +236,9 @@ impl InputLog {
     /// calls this first, so what it shows and what is on disk agree.
     pub fn sync(&mut self) {
         self.close_open();
+        // What was just written takes no repeats: input typed after a read is a new entry,
+        // not a count added to one the file already has.
+        self.sealed = true;
         if let Some(tx) = self.tx.as_ref() {
             Self::round_trip(tx, &self.shared.pacer, LogMsg::Sync);
         }
@@ -395,6 +399,8 @@ impl LogFile {
 #[derive(Default)]
 pub(crate) struct Pacer {
     armed: std::sync::atomic::AtomicBool,
+    /// A flush or a read is waiting: skip the batch wait.
+    urgent: std::sync::atomic::AtomicBool,
     thread: std::sync::Mutex<Option<std::thread::Thread>>,
     wakes: std::sync::atomic::AtomicU64,
 }
@@ -409,6 +415,7 @@ impl Pacer {
 
     /// Wake the writer now (a flush, a read): not on the input path.
     pub(crate) fn wake_now(&self) {
+        self.urgent.store(true, std::sync::atomic::Ordering::SeqCst);
         self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
         self.unpark();
     }
@@ -524,8 +531,11 @@ pub(crate) fn spawn_writer(
             }
             std::thread::park();
             pacer.wakes.fetch_add(1, Ordering::Relaxed);
-            std::thread::park_timeout(WRITER_BATCH_DELAY);
-            pacer.wakes.fetch_add(1, Ordering::Relaxed);
+            // A flush or a read is waiting for the answer: no batch wait.
+            if !pacer.urgent.swap(false, Ordering::SeqCst) {
+                std::thread::park_timeout(WRITER_BATCH_DELAY);
+                pacer.wakes.fetch_add(1, Ordering::Relaxed);
+            }
         }
     })?;
     if let Ok(mut thread) = pacer.thread.lock() {
@@ -1004,8 +1014,10 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(2));
         };
-        // The bound plus slack for a loaded machine.
-        assert!(arrived <= WRITER_BATCH_DELAY * 6, "{arrived:?}");
+        // The stated bound is WRITER_BATCH_DELAY; the test allows six times that as slack for a
+        // loaded machine (a stalled writer would take seconds, not 300 ms).
+        const SLACK_FACTOR: u32 = 6;
+        assert!(arrived <= WRITER_BATCH_DELAY * SLACK_FACTOR, "{arrived:?}");
         log.flush_and_stop();
     }
 
@@ -1025,5 +1037,28 @@ mod tests {
             "{text}"
         );
         log.flush_and_stop();
+    }
+
+    #[test]
+    fn sync_seals_the_entry_it_closes_so_later_input_is_not_lost() {
+        let dir = TestDir::new("sync-seal");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        log.record(ev("t1", DECISION_ALLOW, 1000, 5));
+        log.sync();
+        // The same sender types again within the coalescing window, after a read.
+        log.record(ev("t1", DECISION_ALLOW, 1500, 7));
+        log.flush_and_stop();
+        let text = read(&dir);
+        let entries: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains(r#""terminal":"t1""#))
+            .collect();
+        assert_eq!(entries.len(), 2, "both bursts reach the file: {text}");
+        assert!(
+            text.contains(r#""bytes":7"#) && text.contains(r#""bytes":5"#),
+            "{text}"
+        );
     }
 }

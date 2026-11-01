@@ -124,8 +124,9 @@ stop a process that sets out to get around it:
   same uid can edit or delete it, and it is not synced to disk, so it survives a crash only up
   to the writer's last write. The writer sleeps with no timer and is woken by the first entry
   after it went idle, then writes within 50 ms, so a crash loses at most the entries from the
-  last 50 ms (and no more than the 1024 the channel holds) plus the one open entry (up to 2
-  seconds of typing). A read with `access log` writes everything first. When the writer falls behind, entries are dropped and a `dropped` marker is written;
+  last 50 ms (and no more than the 1024 the channel holds) plus the latest burst, which stays open to repeats (up to 2 seconds of typing) and is written when
+  the next input arrives, a read or a stop closes it: on a quiet pane it may stay out of the file
+  indefinitely, and a crash loses it however old it is. A read with `access log` writes everything first. When the writer falls behind, entries are dropped and a `dropped` marker is written;
   `access log` shows the count.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.

@@ -97,7 +97,7 @@ pub(super) fn run_log(
 /// `time  pane  path/route  class[:principal]  client  host  bytes  decision  ×count`
 pub(super) fn format_event(event: &AccessInputEvent) -> String {
     let class = match &event.principal {
-        Some(principal) => format!("{}:{}", event.class, printable(principal)),
+        Some(principal) => format!("{}:{}", printable(&event.class), printable(principal)),
         None => printable(&event.class),
     };
     format!(
@@ -115,14 +115,38 @@ pub(super) fn format_event(event: &AccessInputEvent) -> String {
     )
 }
 
-/// A field with every control character written out (`\u{1b}`), so a line read from a file
-/// that another process can edit can't move the cursor, set the title or start a new line.
+/// Characters that print as nothing or change how the text around them is laid out: Unicode
+/// format characters (Cf: soft hyphen, zero-width and bidi marks and overrides, isolates,
+/// the word joiner and invisible operators, the byte order mark, interlinear annotation) and
+/// the line and paragraph separators (Zl, Zp).
+fn is_layout_character(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+    )
+}
+
+/// A field with every control and layout character written out (`\u{1b}`, `\u{202e}`), so a
+/// line read from a file that another process can edit can't move the cursor, set the title,
+/// start a new line or reorder the columns it is shown in.
 fn printable(field: &str) -> String {
     field
         .chars()
         .flat_map(|c| {
             if c.is_control() {
                 c.escape_default().collect::<Vec<_>>()
+            } else if is_layout_character(c) {
+                c.escape_unicode().collect::<Vec<_>>()
             } else {
                 vec![c]
             }
@@ -345,5 +369,32 @@ mod tests {
         assert!(!line.contains('\r') && !line.contains('\n'), "{line:?}");
         assert!(line.contains("\\u{1b}"), "{line}");
         assert_eq!(line.split('\t').count(), 9);
+    }
+
+    #[test]
+    fn access_log_escapes_format_characters_in_every_field_and_branch() {
+        let bidi = "\u{202e}evil\u{2066}\u{200b}\u{feff}\u{2028}x";
+        for principal in [Some(bidi), None] {
+            let mut hostile = event(1_700_000_000_000, "pane.send_text", bidi, principal);
+            hostile.client = format!("api:1{bidi}");
+            hostile.pane = format!("w1{bidi}");
+            hostile.host = format!("local{bidi}");
+            hostile.decision = format!("allow{bidi}");
+            let line = format_event(&hostile);
+            for c in line.chars() {
+                assert!(
+                    !c.is_control() || c == '\t',
+                    "control character {:?} in {line:?}",
+                    c
+                );
+                assert!(
+                    !matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}'),
+                    "format character {:?} in {line:?}",
+                    c
+                );
+            }
+            assert_eq!(line.split('\t').count(), 9, "{line:?}");
+            assert!(line.contains("\\u{202e}"), "{line}");
+        }
     }
 }

@@ -2487,3 +2487,21 @@ async fn access_log_read_sees_every_entry_recorded_before_it() {
     assert!(text.contains(r#""count":3"#), "{text}");
     shutdown_test_runtimes(&mut f.server);
 }
+
+#[tokio::test]
+async fn read_under_bridge_only_sends_no_wheel_bytes_for_a_remote_caller() {
+    let mut f = alt_screen_fixture();
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("relay".into());
+    assert!(!f.server.app.any_access_protected());
+    let target = f.public(0);
+
+    // The remote reader gets the screen as it is: no harvest, no wheel bytes.
+    let response = f.call(peer(false, true), interactive_read(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert!(f.server.pending_alt_screen_reads.is_empty());
+    f.server
+        .poll_pending_alt_screen_reads(Instant::now() + Duration::from_millis(50));
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}

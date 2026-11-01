@@ -10,4 +10,4 @@ diff --git a/src/platform/unix_common.rs b/src/platform/unix_common.rs
 +    if !meta.is_file() {
          return Err(std::io::Error::new(
              std::io::ErrorKind::InvalidInput,
-             "not a regular, unlinked file",
+             "not a regular file with exactly one link",

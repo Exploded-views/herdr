@@ -526,7 +526,7 @@ pub(crate) fn open_private_append(path: &Path) -> std::io::Result<std::fs::File>
     if !meta.is_file() || meta.nlink() != 1 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "not a regular, unlinked file",
+            "not a regular file with exactly one link",
         ));
     }
     let fd = file.as_raw_fd();

@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -402,7 +402,7 @@
+@@ -408,7 +408,7 @@
  impl Pacer {
      /// App thread, after queueing an entry.
      pub(crate) fn notify(&self) {

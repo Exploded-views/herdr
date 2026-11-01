@@ -1171,52 +1171,109 @@ mod tests {
             decision,
             count: 1,
         };
-        let full_ring = |log: &mut InputLog| {
-            for n in 0..RING_CAP {
-                let mut event = log_event(DECISION_ALLOW, n as u64);
-                event.terminal = format!("term_fill_{n}");
-                log.record(event);
+        // These cases time the successful path through `record`: an entry is queued, and now
+        // and then the writer is woken. The channel (1024) must therefore never be full while
+        // timing, or `send` returns early on the drop path and the numbers mean nothing. The
+        // writer is the one the server runs (it sleeps with no timer and is woken by the
+        // first entry after it went idle), and `sync` below, outside the timed region, lets
+        // it empty the channel. Every case asserts that nothing was dropped.
+        const CHUNK: usize = 400;
+        let fill_ring = |log: &mut InputLog| {
+            for chunk in 0..(RING_CAP / 512) {
+                for n in 0..512usize {
+                    let mut event = log_event(DECISION_ALLOW, (chunk * 512 + n) as u64);
+                    event.terminal = format!("term_fill_{chunk}_{n}");
+                    log.record(event);
+                }
+                log.sync();
             }
         };
-        // The real writer thread, as the server runs it: it sleeps with no timer, is woken
-        // by the first entry after it went idle and writes the rest in batches.
+        let measure_synced = |sync: &mut dyn FnMut(), run: &mut dyn FnMut()| -> Duration {
+            for _ in 0..128 {
+                run();
+            }
+            let mut samples = Vec::with_capacity(ITERATIONS);
+            while samples.len() < ITERATIONS {
+                sync();
+                for _ in 0..CHUNK {
+                    let start = Instant::now();
+                    run();
+                    samples.push(start.elapsed());
+                }
+            }
+            sync();
+            p95(samples)
+        };
         let bench_dir = crate::access::registry::TestDir::new("bench-log");
         let writer_log = |label: &str| {
+            std::fs::create_dir_all(bench_dir.path().join(label)).unwrap();
             let mut log = InputLog::new();
             log.attach_writer(bench_dir.path().join(label), "node-a".into())
                 .unwrap();
             log
         };
-        std::fs::create_dir_all(bench_dir.path().join("allow")).unwrap();
-        std::fs::create_dir_all(bench_dir.path().join("deny")).unwrap();
-        std::fs::create_dir_all(bench_dir.path().join("whole")).unwrap();
-        let mut allow_log = writer_log("allow");
-        full_ring(&mut allow_log);
-        let record_allow_coalesce = measure(|| {
-            allow_log.record(black_box(log_event(DECISION_ALLOW, 1_000_000)));
-        });
-        let mut deny_log = writer_log("deny");
-        full_ring(&mut deny_log);
-        let record_deny_immediate = measure(|| {
-            deny_log.record(black_box(log_event(DECISION_DENY, 2_000_000)));
-        });
-        allow_log.flush_and_stop();
-        deny_log.flush_and_stop();
 
-        // The per-keystroke client path and the whole API gate, on a full ring with a writer
-        // channel that is drained, as in the server. The callers and the clients alternate, so
-        // each record closes the one before it and sends it, and the pane caller makes the
-        // principal scan run.
-        *app.input_log.lock().unwrap() = writer_log("whole");
-        {
-            let mut log = app.input_log.lock().unwrap();
-            full_ring(&mut log);
+        let allow_log = std::cell::RefCell::new(writer_log("allow"));
+        fill_ring(&mut allow_log.borrow_mut());
+        let record_allow_coalesce =
+            measure_synced(&mut || allow_log.borrow_mut().sync(), &mut || {
+                allow_log
+                    .borrow_mut()
+                    .record(black_box(log_event(DECISION_ALLOW, 1_000_000)));
+            });
+        let allow_dropped = allow_log.borrow().dropped();
+        allow_log.borrow_mut().flush_and_stop();
+
+        let deny_log = std::cell::RefCell::new(writer_log("deny"));
+        fill_ring(&mut deny_log.borrow_mut());
+        let record_deny_immediate =
+            measure_synced(&mut || deny_log.borrow_mut().sync(), &mut || {
+                deny_log
+                    .borrow_mut()
+                    .record(black_box(log_event(DECISION_DENY, 2_000_000)));
+            });
+        let deny_dropped = deny_log.borrow().dropped();
+        deny_log.borrow_mut().flush_and_stop();
+
+        // The first entry after the writer has gone idle pays for waking it. Each sample is
+        // taken with the writer parked: `sync` returns once it has written everything, and a
+        // short sleep lets it reach its park. Half the samples are a refusal (sent at once),
+        // half an entry closed by the next one.
+        let idle_log = std::cell::RefCell::new(writer_log("idle"));
+        fill_ring(&mut idle_log.borrow_mut());
+        let mut idle_samples = Vec::with_capacity(200);
+        for turn in 0..200u64 {
+            let mut log = idle_log.borrow_mut();
+            log.sync();
+            std::thread::sleep(Duration::from_millis(3));
+            let mut event = log_event(DECISION_ALLOW, 3_000_000 + turn * 10_000);
+            event.terminal = format!("term_idle_{turn}");
+            if turn % 2 == 0 {
+                // A refusal is sent the moment it is recorded.
+                event.decision = DECISION_DENY;
+            } else {
+                // An open entry, closed (and sent) by the timed record below.
+                log.record(event.clone());
+                event.terminal = format!("term_idle_closer_{turn}");
+            }
+            let start = Instant::now();
+            log.record(black_box(event));
+            idle_samples.push(start.elapsed());
         }
+        let record_after_idle = p95(idle_samples);
+        let idle_dropped = idle_log.borrow().dropped();
+        idle_log.borrow_mut().flush_and_stop();
+
+        // The per-keystroke client path and the whole API gate, on a full ring. The callers
+        // and the clients alternate, so each record closes the one before it and sends it, and
+        // the pane caller makes the principal scan run.
+        *app.input_log.lock().unwrap() = writer_log("whole");
+        fill_ring(&mut app.input_log.lock().unwrap());
         let client_terminal = terminal_of(&app, panes[0]);
         let client_pane = target.clone();
         let callers = [&stranger, &in_pane];
         let mut turn = 0usize;
-        let client_keystroke = measure(|| {
+        let client_keystroke = measure_synced(&mut || app.sync_input_log(), &mut || {
             turn += 1;
             let caller = callers[turn % 2];
             let _ = black_box(app.check_client_shell_input(black_box(caller), &client_pane));
@@ -1232,11 +1289,12 @@ mod tests {
             });
         });
         let mut turn = 0usize;
-        let api_log_on = measure(|| {
+        let api_log_on = measure_synced(&mut || app.sync_input_log(), &mut || {
             turn += 1;
             let caller = callers[turn % 2];
             let _ = black_box(app.gate_input(black_box(&method), black_box(caller), true));
         });
+        let whole_dropped = app.input_log.lock().unwrap().dropped();
         app.input_log.lock().unwrap().flush_and_stop();
         *app.input_log.lock().unwrap() = InputLog::new();
 
@@ -1260,6 +1318,19 @@ mod tests {
             "access_gate api_input_log_on_16_panes_p95_ns={}",
             api_log_on.as_nanos()
         );
+        println!(
+            "access_gate record_after_idle_p95_ns={}",
+            record_after_idle.as_nanos()
+        );
+        println!(
+            "access_gate dropped allow={allow_dropped} deny={deny_dropped} idle={idle_dropped} whole={whole_dropped}"
+        );
+        // A case that drops is timing the cheapest path through `send`, not a real send.
+        assert_eq!(
+            (allow_dropped, deny_dropped, idle_dropped, whole_dropped),
+            (0, 0, 0, 0),
+            "a timed case dropped entries"
+        );
         println!("access_gate off_p95_ns={}", off.as_nanos());
         println!("access_gate on_pane_p95_ns={}", on_pane.as_nanos());
         println!("access_gate on_outside_p95_ns={}", on_outside.as_nanos());
@@ -1282,6 +1353,7 @@ mod tests {
             ("classify_cached_16_panes", classify_cached, LOG_BUDGET),
             ("record_allow_coalesce", record_allow_coalesce, LOG_BUDGET),
             ("record_deny_immediate", record_deny_immediate, LOG_BUDGET),
+            ("record_after_idle", record_after_idle, LOG_BUDGET),
             (
                 "client_keystroke_16_panes_full_ring",
                 client_keystroke,
