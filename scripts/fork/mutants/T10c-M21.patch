@@ -1,0 +1,16 @@
+# herdr-fork: mutant T10c-M21: the mark ignores whom it was set for (an empty-pane mark survives the first agent). Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+index 208e4782..671d9db9 100644
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2152,8 +2152,8 @@ impl TerminalState {
+             return false;
+         };
+         if self.input_mode_set_explicitly
+-            && (self.input_mode_mark_owner.is_none()
+-                || self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
++            && (self.input_mode_mark_owner.is_some()
++                && self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
+         {
+             self.clear_input_mode_mark();
+             return true;

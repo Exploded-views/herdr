@@ -153,15 +153,12 @@ impl App {
         if terminal.effective_agent_label().is_none() {
             return Err(AgentRenameError::NotAgent);
         }
-        // A mode an admin chose was for the agent under its old name.
-        let previous_name = terminal.agent_name.clone();
         match normalized_name {
             Some(name) => terminal.set_agent_name(name),
             None => terminal.clear_agent_name(),
         }
-        if previous_name.is_some() && terminal.agent_name != previous_name {
-            terminal.input_mode_set_explicitly = false;
-        }
+        // A mode an admin chose was for the agent under its old name.
+        terminal.drop_stale_input_mode_mark();
         self.state.mark_session_dirty();
         self.schedule_session_save();
         self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
@@ -262,11 +259,12 @@ impl App {
                 terminal.access_opened_explicitly,
                 terminal.input_mode,
                 terminal.input_mode_set_explicitly,
+                terminal.input_mode_mark_owner.clone(),
             )
         });
         // A new agent is a new occupant: a mode chosen for the last one does not carry over.
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-            terminal.input_mode_set_explicitly = false;
+            terminal.clear_input_mode_mark();
         }
         self.state
             .bind_access_for_start(&terminal_id, &name, explicit_access)
@@ -281,11 +279,12 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
-            if let Some((access, opened, mode, explicit)) = previous_access {
+            if let Some((access, opened, mode, explicit, owner)) = previous_access {
                 terminal.access = access;
                 terminal.access_opened_explicitly = opened;
                 terminal.input_mode = mode;
                 terminal.input_mode_set_explicitly = explicit;
+                terminal.input_mode_mark_owner = owner;
             }
             return Err(AgentStartError::InputFailed(err.to_string()));
         }

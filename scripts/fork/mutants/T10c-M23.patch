@@ -1,0 +1,15 @@
+# herdr-fork: mutant T10c-M23: a detection that blinks clears the mark. Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+index 208e4782..d14148f3 100644
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2149,7 +2149,8 @@ impl TerminalState {
+     /// a change. Returns true when the mark was dropped.
+     pub(crate) fn drop_stale_input_mode_mark(&mut self) -> bool {
+         let Some(current) = self.agent_identity() else {
+-            return false;
++            self.clear_input_mode_mark();
++            return true;
+         };
+         if self.input_mode_set_explicitly
+             && (self.input_mode_mark_owner.is_none()

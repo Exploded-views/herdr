@@ -1,14 +1,14 @@
 # herdr-fork: mutant T10c-M17: a different agent keeps the explicit mark on the detection path. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/actions.rs b/src/app/actions.rs
-index f8590a13..5383296e 100644
+index 59e80fcf..1d9a626a 100644
 --- a/src/app/actions.rs
 +++ b/src/app/actions.rs
-@@ -1727,7 +1727,7 @@ impl AppState {
-                     .as_deref()
-                     .is_some_and(|label| terminal.effective_agent_label() != Some(label));
-                 let renamed = name.is_some() && terminal.agent_name != name;
--                if replaced || renamed {
-+                if false && (replaced || renamed) {
-                     terminal.input_mode_set_explicitly = false;
+@@ -1731,7 +1731,7 @@ impl AppState {
+                 if released {
+                     terminal.clear_input_mode_mark();
+                     self.session_dirty = true;
+-                } else if terminal.drop_stale_input_mode_mark() {
++                } else if false && terminal.drop_stale_input_mode_mark() {
                      self.session_dirty = true;
                  }
+             }

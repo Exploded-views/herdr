@@ -136,9 +136,12 @@ impl App {
         if let Some(mode) = mode {
             if let Some(state) = self.state.terminals.get_mut(&terminal) {
                 // Chosen on purpose, even when it is `any`: the sticky default leaves it be.
-                if state.input_mode != mode || !state.input_mode_set_explicitly {
-                    state.input_mode = mode;
-                    state.input_mode_set_explicitly = true;
+                let changed = state.input_mode != mode
+                    || !state.input_mode_set_explicitly
+                    || state.input_mode_mark_owner != state.agent_identity();
+                state.input_mode = mode;
+                state.mark_input_mode_explicit();
+                if changed {
                     self.state.mark_session_dirty();
                 }
             }

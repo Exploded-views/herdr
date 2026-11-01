@@ -867,15 +867,20 @@ async fn input_mode_defaults_any_and_persists() {
         .get_mut(&terminal)
         .unwrap()
         .input_mode_set_explicitly = true;
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .input_mode_mark_owner = Some("pi|worker".into());
     let json_marked = serde_json::to_string(&snapshot_of(&app.state)).unwrap();
     assert!(
         json_marked.contains("input_mode_set_explicitly"),
         "{json_marked}"
     );
     let marked: SessionSnapshot = serde_json::from_str(&json_marked).unwrap();
-    assert!(restore_terminals(&marked)
-        .values()
-        .all(|t| t.input_mode_set_explicitly));
+    assert!(restore_terminals(&marked).values().all(|t| {
+        t.input_mode_set_explicitly && t.input_mode_mark_owner.as_deref() == Some("pi|worker")
+    }));
     app.state
         .terminals
         .get_mut(&terminal)
@@ -1136,10 +1141,11 @@ async fn the_explicit_mark_clears_when_a_different_agent_takes_the_pane() {
     use crate::access::policy::{AccessDefaults, InputMode};
     let (mut state, pane, terminal) = state_with_pane();
     agent_seen(&mut state, pane);
-    {
-        let t = state.terminals.get_mut(&terminal).unwrap();
-        t.input_mode_set_explicitly = true;
-    }
+    state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .mark_input_mode_explicit();
     state.access_defaults = AccessDefaults {
         default_mode: InputMode::HumanOnly,
         ..Default::default()
@@ -1175,14 +1181,90 @@ async fn the_explicit_mark_clears_when_the_agent_exits_and_another_arrives() {
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
 }
 
-#[tokio::test]
-async fn a_restored_pane_keeps_its_explicit_mark_when_its_agent_is_first_seen() {
+/// A pane as the session would bring it back: named, marked for `owner`, no agent seen yet.
+fn restored_marked_pane(owner: &str) -> (AppState, crate::layout::PaneId, TerminalId) {
+    use crate::access::policy::{AccessDefaults, InputMode};
     let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
     let t = state.terminals.get_mut(&terminal).unwrap();
     t.set_agent_name("worker".into());
     t.input_mode_set_explicitly = true;
+    t.input_mode_mark_owner = Some(owner.into());
+    (state, pane, terminal)
+}
+
+#[tokio::test]
+async fn a_restored_pane_keeps_its_mark_only_for_the_agent_it_was_set_for() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker");
     detect(&mut state, pane, Some(Agent::Pi), false);
     assert!(state.terminals[&terminal].input_mode_set_explicitly);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::Any);
+
+    // Another agent came back in the pane: the mark goes and the default mode applies.
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker");
+    detect(&mut state, pane, Some(Agent::Claude), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    assert!(state.terminals[&terminal].input_mode_mark_owner.is_none());
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_mark_set_on_an_empty_pane_clears_when_the_first_agent_arrives() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .mark_input_mode_explicit();
+    assert!(state.terminals[&terminal].input_mode_mark_owner.is_none());
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_detection_that_blinks_does_not_clear_the_mark() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, pane, terminal) = state_with_pane();
+    agent_seen(&mut state, pane);
+    state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .mark_input_mode_explicit();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    // The label drops for a moment while the process is still there, then comes back.
+    detect(&mut state, pane, None, false);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(state.terminals[&terminal].input_mode_set_explicitly);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::Any);
+}
+
+#[tokio::test]
+async fn a_name_change_on_the_detection_path_clears_the_mark() {
+    let (mut state, pane, terminal) = state_with_pane();
+    agent_seen(&mut state, pane);
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.set_agent_name("worker".into());
+    t.mark_input_mode_explicit();
+    // A report that renames the agent, with the label unchanged.
+    state.test_update_terminal_state(pane, |t| {
+        t.set_agent_name("builder".into());
+        None
+    });
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
 }
 
 #[tokio::test]

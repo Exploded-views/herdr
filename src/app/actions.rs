@@ -1673,6 +1673,15 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_update_terminal_state(
+        &mut self,
+        pane_id: PaneId,
+        update: impl FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
+    ) {
+        self.update_terminal_state(pane_id, update);
+    }
+
     fn update_terminal_state<F>(&mut self, pane_id: PaneId, update: F) -> Option<PaneStateUpdate>
     where
         F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
@@ -1711,24 +1720,18 @@ impl AppState {
             let previous_agent_name = terminal.agent_name.clone();
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
-            // An admin's mark on the mode is for the agent that was here. Note who that was
-            // (only when a mark exists, so the common path pays nothing).
-            let marked_occupant = terminal.input_mode_set_explicitly.then(|| {
-                (
-                    terminal.effective_agent_label().map(str::to_owned),
-                    previous_agent_name.clone(),
-                )
-            });
             let mutation = update(terminal);
-            if let Some((label, name)) = marked_occupant {
-                // Gone, replaced or renamed: a new occupant starts without the mark, so the
-                // default mode reaches it. An agent not yet seen (a restored pane) is not a change.
-                let replaced = label
-                    .as_deref()
-                    .is_some_and(|label| terminal.effective_agent_label() != Some(label));
-                let renamed = name.is_some() && terminal.agent_name != name;
-                if replaced || renamed {
-                    terminal.input_mode_set_explicitly = false;
+            // An admin's mark on the mode is for the agent it was set for. When the agent is
+            // released, or a different one (or the same one under another name) is detected,
+            // the new occupant starts without it, so the default mode reaches it in the same
+            // mutation. A detection that blinks, or a restored pane before its agent is seen,
+            // is no change.
+            if terminal.input_mode_set_explicitly {
+                let released = mutation.as_ref().is_some_and(|m| m.agent_released);
+                if released {
+                    terminal.clear_input_mode_mark();
+                    self.session_dirty = true;
+                } else if terminal.drop_stale_input_mode_mark() {
                     self.session_dirty = true;
                 }
             }

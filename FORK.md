@@ -121,7 +121,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `docs/fork.md`, `docs/next/website/src/content/docs/cli-reference.mdx`, `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx`, `docs/next/website/src/content/docs/socket-api.mdx`, `FORK-CHANGELOG.md` | changed | The input log, `herdr access log` and its honest limits |
 | `scripts/fork/mutants/T10b-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10b-M1 to T10b-M25 |
 | `src/access/policy.rs` | changed | `InputMode` (`any`, `human-only`), `parse_input_mode` (`flag` refused as not in v1), `AccessDenied::HumanOnly`, `check_input_mode`, `RemoteSettings::bridge_if_bridge_only`; `AccessDefaults` carries the default and per-name modes |
-| `src/terminal/state.rs`, `src/persist/snapshot.rs`, `src/persist/restore.rs` | changed | `TerminalState.input_mode` and `input_mode_set_explicitly`, saved in `PaneSnapshot.input_mode` and `.input_mode_set_explicitly` (omitted when `any`; an unreadable value restores `human-only`) and restored in every restore branch |
+| `src/terminal/state.rs`, `src/persist/snapshot.rs`, `src/persist/restore.rs` | changed | `TerminalState.input_mode`, `input_mode_set_explicitly` and `input_mode_mark_owner`, saved in `PaneSnapshot.input_mode`, `.input_mode_set_explicitly` and `.input_mode_mark_owner` (omitted when `any`; an unreadable value restores `human-only`) and restored in every restore branch |
 | `src/api/schema/access.rs`, `src/api/schema/response.rs`, `docs/next/api/herdr-api.schema.json` | changed / *(generated)* | `access.pane.set` takes an optional `accept_from` and an `input_mode`; `access.pane.get` reports `input_mode` |
 | `src/app/api/access_panes.rs`, `src/app/access.rs`, `src/app/actions.rs` | changed | Set and report the mode; bind `[access.default]` and `[access.<name>]` modes; the bridge keeps `any` |
 | `src/app/agents.rs`, `src/app/api/agents.rs` | changed | `agent start <bridge>` and `agent rename <bridge>` refused on a pane with a mode; a failed start restores the mode; tests |
@@ -129,7 +129,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/app/access_gate.rs`, `src/server/headless.rs`, `src/server/headless/input_origin.rs` | changed | The mode check after the allow-list on the api, shell-client and attach paths (attach input, mouse, wheel and image paste); `human-only` refusals are logged as `deny`; bench case `input_mode_any` |
 | `src/cli/access.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs` | changed | `herdr access pane set --input-mode`, and tests for the mode |
 | `docs/fork.md`, `docs/next/website/src/content/docs/cli-reference.mdx`, `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx`, `docs/next/website/src/data/config-reference.json`, `FORK-CHANGELOG.md` | changed | The `human-only` input mode, `access pane set --input-mode`, the config keys and the honest limits |
-| `scripts/fork/mutants/T10c-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10c-M1, M2, M3, M5, M5b, M6, M6b, M7, M8 and, from fix round 1, M9 to M16; re-derived T6-M1, T6-M3, T8-M3, T9b-M10 and T10b-M11 |
+| `scripts/fork/mutants/T10c-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10c-M1, M2, M3, M5, M5b, M6, M6b, M7, M8 and, from fix round 1, M9 to M24; re-derived T6-M1, T6-M3, T8-M3, T9b-M10 and T10b-M11 |
 
 ## Limits
 

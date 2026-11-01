@@ -97,8 +97,9 @@ a plan to send it upstream, and nothing has been proposed upstream.
   changes nothing. The bridge's pane stays `any`. `flag` and an alert file are not in v1.
   An admin who sets a pane's mode with `--input-mode` (even to `any`) marks it as chosen on
   purpose: `access pane get` shows `explicit`, the sticky default leaves it alone, and the mark
-  is dropped when a different agent takes the pane (a new `agent start`, a rename, the agent
-  exiting or another being detected). The `[access.default]` mode applies to every agent pane
+  belongs to the agent it was set for: it is dropped when that agent exits, is renamed or is
+  replaced by another, and when a new `agent start` takes the pane. A pane marked while empty
+  drops it when the first agent arrives; a restored pane keeps it only for the same agent. The `[access.default]` mode applies to every agent pane
   whatever its policy; an `[access.<name>]` section with its own `input_mode` (even `any`)
   overrides it, and is applied when the pane is started, renamed or detected under that name.
   A mode in the config that cannot be read counts as `human-only`, with a diagnostic that names

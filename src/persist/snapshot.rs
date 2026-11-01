@@ -128,6 +128,8 @@ pub struct PaneSnapshot {
     pub(crate) input_mode: crate::access::policy::InputMode,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) input_mode_set_explicitly: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_mode_mark_owner: Option<String>,
 }
 
 /// An unreadable `input_mode` must not cost the session, and must not loosen the pane: it
@@ -415,6 +417,8 @@ fn capture_tab(
         let input_mode = terminal.map_or_else(Default::default, |terminal| terminal.input_mode);
         let input_mode_set_explicitly =
             terminal.is_some_and(|terminal| terminal.input_mode_set_explicitly);
+        let input_mode_mark_owner =
+            terminal.and_then(|terminal| terminal.input_mode_mark_owner.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -457,6 +461,7 @@ fn capture_tab(
                 access_opened_explicitly,
                 input_mode,
                 input_mode_set_explicitly,
+                input_mode_mark_owner,
             },
         );
     }
@@ -780,6 +785,7 @@ mod tests {
                 access_opened_explicitly: false,
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
         panes.insert(
@@ -796,6 +802,7 @@ mod tests {
                 access_opened_explicitly: false,
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
 
@@ -1486,6 +1493,7 @@ mod tests {
                 access_opened_explicitly: false,
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
         panes.insert(
@@ -1504,6 +1512,7 @@ mod tests {
                 access_opened_explicitly: false,
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
 

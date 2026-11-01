@@ -158,7 +158,7 @@ stop a process that sets out to get around it:
   applies to every agent pane whose name has no `input_mode` of its own, whatever its policy. It
   is applied when an agent is detected in the pane, so an admin who sets a pane's mode on
   purpose with `access pane set --input-mode` (even to `any`) is not overridden: `access pane
-  get` shows that mark. Starting a new agent in the pane clears it. A client that came in over
+  get` shows that mark. The mark belongs to the agent that was in the pane when it was set. It is dropped when that agent is released or exits, when a different agent (or the same one under another name) is detected, when the agent is renamed, and when a new agent is started in the pane. A pane marked while empty drops it when the first agent arrives. A restored pane keeps it only if the agent that comes back is the one it was set for. A detection that blinks, with the process still running, changes nothing. A client that came in over
   SSH counts as outside only under `remote_owner_tui = "allow"`.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.

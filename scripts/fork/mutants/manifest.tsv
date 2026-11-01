@@ -127,3 +127,7 @@ T10c-M17	T10c-M17.patch	test(the_explicit_mark_clears_when_a_different_agent_tak
 T10c-M18	T10c-M18.patch	test(renaming_the_agent_clears_the_explicit_mode_mark)
 T10c-M19	T10c-M19.patch	test(a_pane_named_into_a_section_gets_that_sections_mode_at_detection)
 T10c-M20	T10c-M20.patch	test(a_mistyped_access_input_mode_names_its_line_and_echoes_no_value)
+T10c-M21	T10c-M21.patch	test(a_mark_set_on_an_empty_pane_clears_when_the_first_agent_arrives)
+T10c-M22	T10c-M22.patch	test(a_name_change_on_the_detection_path_clears_the_mark)
+T10c-M23	T10c-M23.patch	test(a_detection_that_blinks_does_not_clear_the_mark)
+T10c-M24	T10c-M24.patch	test(the_explicit_mark_clears_when_the_agent_exits_and_another_arrives)
