@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M21. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -248,7 +248,6 @@
+         self.close_open();
+         // What was just written takes no repeats: input typed after a read is a new entry,
+         // not a count added to one the file already has.
+-        self.sealed = true;
+         if let Some(tx) = self.tx.as_ref() {
+             Self::round_trip(tx, &self.shared.pacer, LogMsg::Sync);
+         }

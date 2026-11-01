@@ -1,0 +1,17 @@
+# herdr-fork: mutant T10b-M2. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_log.rs b/src/app/access_log.rs
+--- a/src/app/access_log.rs
++++ b/src/app/access_log.rs
+@@ -187,7 +187,11 @@
+                 at_ms: now_ms(),
+                 pane,
+                 terminal: input.terminal.as_str().to_owned(),
+-                path: InputPath::Client,
++                path: if input.route == "attach.input" {
++                    InputPath::Api
++                } else {
++                    InputPath::Client
++                },
+                 route: input.route,
+                 class: origin.class,
+                 principal: origin.principal,

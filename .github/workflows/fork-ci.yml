@@ -36,6 +36,23 @@ jobs:
       - name: just ci (offline, repo read-only)
         run: scripts/fork/linux-test.sh just ci
 
+  # The input log's per-input timing budgets, measured on GitHub ubuntu-latest (Azure KVM guest). This is the deciding Linux number.
+  bench:
+    if: github.repository == 'Exploded-views/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Build image and fetch dependencies
+        run: scripts/fork/linux-test.sh --fetch
+      - name: just bench-access (asserts the budgets)
+        run: scripts/fork/linux-test.sh just bench-access
+
   # Each mutant is a small patch that breaks one security guard; a named test must fail with it
   # applied. CI fails if a mutant survives, no longer applies (STALE) or does not compile (BROKEN).
   mutants:

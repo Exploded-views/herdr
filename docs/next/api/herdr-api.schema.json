@@ -1272,6 +1272,20 @@
           ],
           "type": "object"
         },
+        "AccessLogParams": {
+          "properties": {
+            "limit": {
+              "description": "How many entries to return, newest first. Default 100, at most 4096.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "AccessPaneGetParams": {
           "properties": {
             "pane_id": {
@@ -6509,6 +6523,22 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "access.log",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AccessLogParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -6757,6 +6787,81 @@
           "required": [
             "name",
             "binding"
+          ],
+          "type": "object"
+        },
+        "AccessInputEvent": {
+          "description": "One entry of the input-origin log. There is no field for the input itself.",
+          "properties": {
+            "at_ms": {
+              "description": "Unix milliseconds of the first input in the entry.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "bytes": {
+              "description": "Payload bytes, summed over the entry.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "class": {
+              "description": "`pane`, `outside`, `outside_ssh`, `remote`, `caller` or `unknown`.",
+              "type": "string"
+            },
+            "client": {
+              "description": "`api:<connection>`, `shell:<client>` or `attach:<client>`.",
+              "type": "string"
+            },
+            "count": {
+              "description": "Repeats merged into the entry.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "decision": {
+              "description": "`allow` or `deny`.",
+              "type": "string"
+            },
+            "host": {
+              "description": "`local`, `ssh` or `remote-stamp`.",
+              "type": "string"
+            },
+            "pane": {
+              "description": "Public pane id at the time.",
+              "type": "string"
+            },
+            "path": {
+              "description": "`api` or `client`.",
+              "type": "string"
+            },
+            "principal": {
+              "description": "Caller name, or the sending pane's public id for a pane.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "route": {
+              "description": "Method name, or `shell.pane_input`, `shell.clipboard_image`, `shell.popup_input`,\n`attach.input`, `attach.mouse`.",
+              "type": "string"
+            },
+            "terminal": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at_ms",
+            "pane",
+            "terminal",
+            "path",
+            "route",
+            "class",
+            "client",
+            "host",
+            "bytes",
+            "decision",
+            "count"
           ],
           "type": "object"
         },
@@ -9511,6 +9616,36 @@
                 "type",
                 "pane_id",
                 "accept_from"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "The input-origin log, newest first. `dropped` counts entries that never reached the file.",
+              "properties": {
+                "dropped": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "events": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AccessInputEvent"
+                  },
+                  "type": "array"
+                },
+                "node": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "access_input_log",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "node",
+                "events",
+                "dropped"
               ],
               "type": "object"
             },

@@ -1,0 +1,26 @@
+# herdr-fork: mutant T10b-M19. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+index 22475355..8e84d739 100644
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -449,7 +449,7 @@ impl Pacer {
+     /// App thread, after queueing an entry: record that the writer has work. Never blocks and
+     /// makes no system call.
+     pub(crate) fn notify(&self) {
+-        if !self.armed.load(std::sync::atomic::Ordering::SeqCst) {
++        if true {
+             self.notify_at(now_ms());
+         }
+     }
+@@ -457,7 +457,10 @@ impl Pacer {
+     /// `notify` with the time of the entry given (tests).
+     pub(crate) fn notify_at(&self, now_ms: u64) {
+         use std::sync::atomic::Ordering::SeqCst;
+-        if !self.armed.swap(true, SeqCst) {
++        if {
++            self.armed.swap(true, SeqCst);
++            true
++        } {
+             self.first_ms.store(now_ms, SeqCst);
+             self.wake_pending.store(true, SeqCst);
+         }

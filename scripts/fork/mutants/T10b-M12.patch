@@ -1,0 +1,18 @@
+# herdr-fork: mutant T10b-M12. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1384,12 +1384,7 @@
+                 ) {
+                     warn!(client_id, terminal_id, err = %err, "client shell popup clipboard image paste failed");
+                 }
+-                self.log_shell_popup_input(
+-                    client_id,
+-                    &popup_terminal_id,
+-                    runtime.user_bytes_sent().saturating_sub(bytes_before),
+-                    true,
+-                );
++                let _ = bytes_before;
+                 true
+             }
+         }

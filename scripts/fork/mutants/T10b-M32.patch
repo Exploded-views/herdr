@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M32. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+index b8817be9..0d20ede4 100644
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -462,6 +462,7 @@ impl Pacer {
+     /// `notify` with the time of the entry given (tests).
+     pub(crate) fn notify_at(&self, now_ms: u64) {
+         use std::sync::atomic::Ordering::SeqCst;
++        drop(self.lock_thread());
+         if !self.armed.swap(true, SeqCst) {
+             self.first_ms.store(now_ms, SeqCst);
+             self.wake_pending.store(true, SeqCst);

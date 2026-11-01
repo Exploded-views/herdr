@@ -72,3 +72,17 @@ a plan to send it upstream, and nothing has been proposed upstream.
   using the client's own caller class. Under `remote_input = "bridge-only"`, `remote_owner_tui =
   "deny"` refuses a client that came in over SSH, an invalid `remote_owner_tui` counts as `"deny"`,
   and a remote refusal names the bridge's binding id. Terminal attach stays ungated. A refusal shows once as "Input refused". *fork-only*
+- Input-origin log, on by default. Every pane input is recorded with its origin: the path
+  (`api` or `client`), the route, the sender's class (pane, outside, outside over SSH, remote,
+  caller or unknown) with the pane or caller name, the client, the host kind (`local`, `ssh`
+  or `remote-stamp`), the byte count and whether it was allowed. It never records the input
+  itself. The file is `access-input.log` in the herdr data directory (mode 0600, rotated at
+  1 MiB with one old file, so at most 2 MiB), headed by the `[access] node_name` (default
+  `node`), never the hostname. A burst of typing is one entry per 2 seconds; a refusal is
+  always its own entry. An entry is written within 50 ms after its request handler returns, and the first entry after idle within 100 ms of the input unless the handler itself runs longer; no entry is skipped in either case. The latest burst of typing when the next input, a read or a stop closes it. The server writes what it has before it stops
+  or hands off. `herdr access log [--limit N] [--json]` (API `access.log`) prints the newest
+  entries first, with the number dropped if the writer fell behind; `--file` reads the files
+  when the server is down. The `access.log` API is for a caller outside every pane only; the file itself can be read by any process at the same uid. `[access] input_log =
+  false` turns it off and restores the old behaviour exactly: nothing is classified for Input
+  requests. The names `input_log` and `node_name` are no longer accepted for agents.
+  *fork-only*

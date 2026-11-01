@@ -1,9 +1,8 @@
 # herdr-fork: mutant T5-M1: agent.prompt with wait sends its sub-requests as an empty caller. Unofficial stopgap; see FORK.md.
 diff --git a/src/api/wait.rs b/src/api/wait.rs
-index ee866667..3fe539a8 100644
 --- a/src/api/wait.rs
 +++ b/src/api/wait.rs
-@@ -194,7 +194,11 @@ pub(super) fn prompt_agent(
+@@ -194,7 +194,12 @@
                  id: request_id,
                  method: Method::AgentPrompt(params),
              },
@@ -12,6 +11,7 @@ index ee866667..3fe539a8 100644
 +                lineage: crate::platform::PeerLineage::default(),
 +                token: None,
 +                remote: false,
++                conn: 0,
 +            },
              api_tx,
              None,

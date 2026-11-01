@@ -587,6 +587,7 @@ mod tests {
             &["access", "bind", "w4:p1"],
             &["access", "unbind", "w4:p1"],
             &["access", "caller", "add", "ops"],
+            &["access", "log", "--limit", "5"],
             &["access", "status"],
         ] {
             let mut input = args(&["herdr"]);

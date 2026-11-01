@@ -1,4 +1,4 @@
-// herdr-fork: classify a socket peer's lineage into a caller class, and carry the raw caller identity on every api request. Unofficial stopgap; see FORK.md.
+// herdr-fork: classify a socket peer's lineage into a caller class, and carry the raw caller identity on every api request; a Peer caller carries its connection number for the input log. Unofficial stopgap; see FORK.md.
 use crate::platform::{PeerLineage, ProcessIdentity};
 use crate::terminal::TerminalId;
 
@@ -13,6 +13,8 @@ pub(crate) enum Caller {
         lineage: PeerLineage,
         token: Option<String>,
         remote: bool,
+        /// Which connection carried the request, for the input log (`api:<conn>`).
+        conn: u64,
     },
     /// Tests that don't care how a caller was derived pick a class directly.
     #[cfg(test)]
@@ -27,11 +29,13 @@ impl std::fmt::Debug for Caller {
                 lineage,
                 token,
                 remote,
+                conn,
             } => f
                 .debug_struct("Peer")
                 .field("lineage", lineage)
                 .field("token", &token.as_ref().map(|_| "<redacted>"))
                 .field("remote", remote)
+                .field("conn", conn)
                 .finish(),
             #[cfg(test)]
             Self::Classified(class) => f.debug_tuple("Classified").field(class).finish(),

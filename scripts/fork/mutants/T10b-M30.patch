@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M30. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/access/log.rs b/src/cli/access/log.rs
+index 276303ff..f07dae7e 100644
+--- a/src/cli/access/log.rs
++++ b/src/cli/access/log.rs
+@@ -142,7 +142,6 @@ fn is_layout_character(c: char) -> bool {
+             | '\u{1bca0}'..='\u{1bca3}'
+             | '\u{1d173}'..='\u{1d17a}'
+             | '\u{e0001}'
+-            | '\u{e0020}'..='\u{e007f}'
+     )
+ }
+ 

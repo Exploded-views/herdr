@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M7b. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless/lifecycle.rs b/src/server/headless/lifecycle.rs
+--- a/src/server/headless/lifecycle.rs
++++ b/src/server/headless/lifecycle.rs
+@@ -319,8 +319,6 @@
+         };
+         info!(%reason, "server shutdown initiated");
+         self.shutting_down = true;
+-        // Everything recorded so far reaches the file before the server stops.
+-        self.app.flush_input_log();
+ 
+         // Clear client-local host graphics, then send ServerShutdown to all connected clients.
+         let shutdown_msg = ServerMessage::ServerShutdown {

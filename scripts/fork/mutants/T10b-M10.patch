@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M10. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -80,7 +80,7 @@
+                         continue;
+                     }
+                     // The identity cached at spawn or adoption: no proc walk here.
+-                    match runtime.child_identity() {
++                    match crate::platform::process_identity(pid) {
+                         Some(identity) => panes.push((terminal.clone(), identity)),
+                         // A pane shell that sits in the caller's lineage but can't be
+                         // read can't be ruled out, so the caller is not shown to be outside.

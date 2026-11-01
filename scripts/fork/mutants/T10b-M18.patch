@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M18. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -369,7 +369,7 @@
+             node: node.to_owned(),
+         };
+         // A file that already has entries keeps its header: one per file.
+-        if this.size == 0 {
++        if true {
+             this.write_line(&header_line(node, now_ms()))?;
+         }
+         Ok(this)

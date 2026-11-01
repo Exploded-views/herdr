@@ -1,8 +1,10 @@
-// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove) and `herdr access pane` (set, get); tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
+// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove), `herdr access pane` (set, get) and `herdr access log`; tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::api::schema::{Method, Request, ResponseResult};
+
+mod log;
 
 const HELP: &str = "Usage:
   herdr access caller add <name> --target-pane <pane> --token-file <path>
@@ -12,6 +14,7 @@ const HELP: &str = "Usage:
   herdr access caller remove <name>
   herdr access pane set <pane> --accept-from <list>
   herdr access pane get <pane>
+  herdr access log [--limit N] [--json] [--file]
 
 A caller holds a secret token and may send input only to the pane it is bound to.
 The token is written to the token file (mode 0600) and is never printed.
@@ -19,7 +22,11 @@ The token is written to the token file (mode 0600) and is never printed.
 the old token stops working.
 <list> is `any`, or a comma-separated or repeated list of `none`, `outside` and
 `caller:<name>`. `pane set` is for a caller outside every pane only; `any` removes
-the policy and opens the pane on purpose.";
+the policy and opens the pane on purpose.
+`log` prints the input-origin log, newest first: who sent each pane input (path, sender
+class, client, host kind, byte count; never the content). It is for a caller outside
+every pane only. An entry is written within 50 ms after its request handler returns; the first entry after idle is written within 100 ms of the input unless the handler itself runs longer. No entry is skipped in either case.
+`--file` reads the log files in the data directory when the server is down.";
 
 pub(super) fn run_access_command(args: &[String]) -> io::Result<i32> {
     run_access(
@@ -41,6 +48,7 @@ fn run_access(
     match args.first().map(String::as_str) {
         Some("caller") => run_caller(&args[1..], send, out, err),
         Some("pane") => run_pane(&args[1..], send, out, err),
+        Some("log") => log::run_log(&args[1..], send, out, err),
         _ => {
             writeln!(err, "{HELP}")?;
             Ok(2)

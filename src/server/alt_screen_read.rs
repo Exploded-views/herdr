@@ -1,4 +1,4 @@
-// herdr-fork: a pending harvest remembers its caller so the server can stop it when Input stops being allowed. Unofficial stopgap; see FORK.md.
+// herdr-fork: a pending harvest remembers its caller so the server can stop it when Input stops being allowed; a test accessor tells when a read is in its harvest phase. Unofficial stopgap; see FORK.md.
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -123,6 +123,12 @@ impl PendingAltScreenRead {
                 crate::app::limit_snapshot_lines(snapshot.text, line_limit)
             }
         }
+    }
+
+    /// True while the read is sending wheel-up events to walk the history.
+    #[cfg(test)]
+    pub(crate) fn in_harvest_phase(&self) -> bool {
+        self.phase == Phase::Harvest
     }
 
     pub(crate) fn abort(mut self, runtime: Option<&TerminalRuntime>, now: Instant) -> PollOutcome {

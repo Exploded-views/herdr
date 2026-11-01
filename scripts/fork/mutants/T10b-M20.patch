@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M20. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_log.rs b/src/app/access_log.rs
+--- a/src/app/access_log.rs
++++ b/src/app/access_log.rs
+@@ -240,7 +240,6 @@
+             .unwrap_or(DEFAULT_LOG_LIMIT)
+             .clamp(1, crate::access::input_log::RING_CAP as u32) as usize;
+         // What the read shows is in the file by the time it answers.
+-        self.sync_input_log();
+         let (events, dropped) = self.input_log_snapshot(limit);
+         let events = events
+             .into_iter()

@@ -1,4 +1,4 @@
-// herdr-fork: test-only child pid setter for access classification tests. Unofficial stopgap; see FORK.md.
+// herdr-fork: test-only child pid setter for access classification tests; exposes the cached shell identity and the sent byte count. Unofficial stopgap; see FORK.md.
 use std::sync::Arc;
 
 use crate::render_signal::RenderSignal;
@@ -595,9 +595,27 @@ impl TerminalRuntime {
         self.0.child_pid()
     }
 
+    /// The pane shell's identity cached at spawn or adoption; `None` after it exits.
+    pub(crate) fn child_identity(&self) -> Option<crate::platform::ProcessIdentity> {
+        self.0.child_identity()
+    }
+
+    /// Bytes users have written to this pane's PTY through `try_send_bytes`.
+    pub(crate) fn user_bytes_sent(&self) -> u64 {
+        self.0.user_bytes_sent()
+    }
+
     #[cfg(test)]
     pub(crate) fn test_set_child_pid(&self, pid: u32) {
         self.0.test_set_child_pid(pid);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_child_identity(
+        &self,
+        identity: Option<crate::platform::ProcessIdentity>,
+    ) {
+        self.0.test_set_child_identity(identity);
     }
 
     pub(crate) fn current_size(&self) -> (u16, u16) {

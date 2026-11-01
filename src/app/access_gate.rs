@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding; classification uses the shell identity cached at spawn or adoption, and Input requests are recorded in the input log when it is on. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -57,9 +57,8 @@ impl App {
     }
 
     /// Classify a caller. A pane shell is matched by pid first (an integer
-    /// compare per pane, no syscall) and only a pid that appears in the
-    /// caller's lineage has its identity read, so the cost follows the lineage
-    /// and not the pane count.
+    /// compare per pane), and only a pid that appears in the caller's lineage
+    /// has its cached identity compared. Nothing is read from the system here.
     pub(crate) fn classify_caller(&self, caller: &Caller) -> CallerClass {
         #[cfg(test)]
         CLASSIFY_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -70,6 +69,7 @@ impl App {
                 lineage,
                 token,
                 remote,
+                ..
             } => {
                 let mut panes = Vec::new();
                 for (terminal, runtime) in self.terminal_runtimes.iter() {
@@ -79,7 +79,8 @@ impl App {
                     if !lineage.chain.iter().any(|entry| entry.pid == pid) {
                         continue;
                     }
-                    match crate::platform::process_identity(pid) {
+                    // The identity cached at spawn or adoption: no proc walk here.
+                    match runtime.child_identity() {
                         Some(identity) => panes.push((terminal.clone(), identity)),
                         // A pane shell that sits in the caller's lineage but can't be
                         // read can't be ruled out, so the caller is not shown to be outside.
@@ -114,17 +115,47 @@ impl App {
     /// the gate is idle and the method is neither an `access.*` one nor an
     /// `agent.start` with `accept_from`. An `agent.start` that loosens a policy
     /// must pass both the pane's rule and the admin rule.
+    #[cfg(test)]
     pub(crate) fn check_access(
         &self,
         method: &Method,
         caller: &Caller,
     ) -> Result<(), AccessDenied> {
+        self.check_access_logging(method, caller, None)
+    }
+
+    /// `check_access` for a request the server is about to run: it also records the
+    /// request's origin when `input_log` is on. A refusal is always recorded; an allow is
+    /// recorded only when `last` is set, the check right before dispatch, so one request
+    /// is one entry.
+    pub(crate) fn gate_input(
+        &self,
+        method: &Method,
+        caller: &Caller,
+        last: bool,
+    ) -> Result<(), AccessDenied> {
+        self.check_access_logging(method, caller, Some(last))
+    }
+
+    fn check_access_logging(
+        &self,
+        method: &Method,
+        caller: &Caller,
+        log: Option<bool>,
+    ) -> Result<(), AccessDenied> {
         let operation = method.operation();
         let binds_at_start =
             matches!(method, Method::AgentStart(params) if params.accept_from.is_some());
+        let logs_input =
+            log.is_some() && self.state.input_log && operation.access == AccessClass::Input;
+        // With the log on, the last check of an Input request classifies the caller even when
+        // nothing is protected, to name it in the log. The early check of an idle gate cannot
+        // refuse anything and has nothing to record, so it still returns first.
+        let classifies_for_log = logs_input && log == Some(true);
         if self.access_gate_idle(caller)
             && !operation.name.starts_with("access.")
             && !binds_at_start
+            && !classifies_for_log
         {
             return Ok(());
         }
@@ -148,7 +179,28 @@ impl App {
         } else {
             Ok(())
         };
-        pane_result.and(admin_result).map_err(|denied| {
+        let result = pane_result.and(admin_result);
+        if let (true, Some(last)) = (logs_input, log) {
+            if let GateTarget::Input {
+                label, terminal, ..
+            }
+            | GateTarget::PaneControl {
+                label, terminal, ..
+            } = &target
+            {
+                if result.is_err() || last {
+                    self.log_api_input(
+                        method,
+                        caller,
+                        &class,
+                        label.clone(),
+                        terminal,
+                        result.is_ok(),
+                    );
+                }
+            }
+        }
+        result.map_err(|denied| {
             let denied = self.with_bridge_binding(self.with_public_pane_id(&class, denied));
             let terminal = match &target {
                 GateTarget::Input { terminal, .. } | GateTarget::PaneControl { terminal, .. } => {
@@ -250,6 +302,8 @@ impl App {
             // Admin: only an outside caller changes a pane's policy, even to
             // tighten it and even when nothing is protected yet.
             Method::AccessPaneSet(_) => GateTarget::AccessAdmin,
+            // Admin: the input log names every sender, so only an outside caller reads it.
+            Method::AccessLog(_) => GateTarget::AccessAdmin,
             // Open (Meta): reading a policy writes nothing into any pane.
             Method::AccessPaneGet(_) => GateTarget::Open,
             // Open: nothing here writes caller-chosen bytes into an existing pane.
@@ -755,6 +809,7 @@ mod tests {
             lineage: PeerLineage::default(),
             token: None,
             remote: false,
+            conn: 0,
         };
         for caller in [outside(), carrier] {
             assert!(app.check_access(&method, &caller).is_ok());
@@ -768,6 +823,7 @@ mod tests {
             lineage: PeerLineage::default(),
             token: Some("t".into()),
             remote: false,
+            conn: 0,
         };
         let app = app_with_panes(1);
         let before = classify_calls();
@@ -856,6 +912,7 @@ mod tests {
             lineage,
             token: None,
             remote: false,
+            conn: 0,
         };
         assert_eq!(app.classify_caller(&caller), CallerClass::Pane(target));
         let _ = shell.kill();
@@ -885,6 +942,7 @@ mod tests {
             },
             token: None,
             remote: false,
+            conn: 0,
         };
         assert_eq!(
             app.classify_caller(&caller),
@@ -909,6 +967,7 @@ mod tests {
             lineage,
             token: None,
             remote: false,
+            conn: 0,
         };
         assert!(!matches!(
             app.classify_caller(&caller),
@@ -918,12 +977,85 @@ mod tests {
         let _ = shell.wait();
     }
 
+    /// `check_access` is the gate without the log: its idle shortcut is the only thing that
+    /// lets a request through unexamined, so a protected pane and bridge-only must defeat it.
+    #[tokio::test]
+    async fn idle_shortcut_yields_to_a_protected_pane_and_to_bridge_only() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let target = app.public_pane_id(0, panes[0]).unwrap();
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[1])));
+        // Nothing protected: open.
+        assert!(app.check_access(&send_text(&target), &from_pane).is_ok());
+        // A protected pane refuses a pane caller.
+        let terminal = terminal_of(&app, panes[0]);
+        protect(&mut app, &terminal, vec![Principal::Outside]);
+        assert!(app.check_access(&send_text(&target), &from_pane).is_err());
+        // Bridge-only refuses a remote caller with no policy bound anywhere.
+        app.state.terminals.get_mut(&terminal).unwrap().access = None;
+        app.state.remote_settings.input = RemoteInput::BridgeOnly;
+        let remote = Caller::Classified(CallerClass::Remote);
+        assert!(app.check_access(&send_text(&target), &remote).is_err());
+    }
+
+    #[tokio::test]
+    async fn classification_reads_the_cached_identity_not_the_system() {
+        let mut app = app_with_panes(1);
+        let pane = pane_ids(&app)[0];
+        // A pid no process has: only a cached identity can make this pane match.
+        let identity = crate::platform::ProcessIdentity {
+            pid: 3_999_500,
+            start_token: 77,
+        };
+        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_set_child_pid(identity.pid);
+        runtime.test_set_child_identity(Some(identity));
+        let terminal = terminal_of(&app, pane);
+        app.terminal_runtimes.insert(terminal.clone(), runtime);
+        let caller = Caller::Peer {
+            lineage: PeerLineage {
+                chain: vec![identity],
+                complete: true,
+                via_ssh: false,
+            },
+            token: None,
+            remote: false,
+            conn: 0,
+        };
+        assert_eq!(
+            app.classify_caller(&caller),
+            CallerClass::Pane(terminal.clone())
+        );
+        // A reused pid carries another start token and never matches the cached one.
+        let mut reused = caller.clone();
+        if let Caller::Peer { lineage, .. } = &mut reused {
+            lineage.chain[0].start_token += 1;
+        }
+        assert!(!matches!(
+            app.classify_caller(&reused),
+            CallerClass::Pane(_)
+        ));
+        // Once the child has exited its identity is gone, and a lineage holding that pid is
+        // not shown to be outside.
+        app.terminal_runtimes
+            .get(&terminal)
+            .unwrap()
+            .test_set_child_identity(None);
+        assert_eq!(
+            app.classify_caller(&caller),
+            CallerClass::Unknown { remote_hint: false }
+        );
+    }
+
     /// Budget (global constraints): off p95 <= 1 us; on p95 <= 50 us with 16
     /// panes, 1 policy and 2 callers; the lineage walk p95 <= 250 us on macOS
     /// and <= 1 ms on the aarch64 Linux image. Run by `just bench-access`.
     #[tokio::test]
     #[ignore = "manual access gate budget benchmark"]
     async fn access_gate_profile() {
+        use crate::access::input_log::{
+            InputEvent, InputLog, InputPath, LoggedClass, DECISION_ALLOW, DECISION_DENY, RING_CAP,
+        };
         use std::hint::black_box;
         use std::time::{Duration, Instant};
 
@@ -974,6 +1106,7 @@ mod tests {
             lineage: own_lineage,
             token: None,
             remote: false,
+            conn: 1,
         };
         let mut stranger_chain = crate::platform::process_lineage(std::process::id());
         stranger_chain
@@ -983,6 +1116,7 @@ mod tests {
             lineage: stranger_chain,
             token: None,
             remote: false,
+            conn: 2,
         };
 
         let off = measure(|| {
@@ -1012,6 +1146,210 @@ mod tests {
             )));
         });
 
+        // Delta R2 (§5): the input-origin log, with the work measured directly. The gate is
+        // back to its defaults (nothing protected, remote input `any`) and the log is on.
+        const LOG_BUDGET: Duration = Duration::from_micros(5);
+        app.state.remote_settings.input = RemoteInput::Any;
+        let classify_cached = measure(|| {
+            black_box(app.classify_caller(black_box(&in_pane)));
+        })
+        .max(measure(|| {
+            black_box(app.classify_caller(black_box(&stranger)));
+        }));
+
+        let log_event = |decision: &'static str, at_ms: u64| InputEvent {
+            at_ms,
+            pane: "1-1".into(),
+            terminal: "term_bench".into(),
+            path: InputPath::Api,
+            route: "pane.send_text",
+            class: LoggedClass::Outside,
+            principal: None,
+            client: "api:1".into(),
+            host: "local",
+            bytes: 1,
+            decision,
+            count: 1,
+        };
+        // These cases time the successful path through `record`: an entry is queued, and now
+        // and then the writer is woken. The channel (1024) must therefore never be full while
+        // timing, or `send` returns early on the drop path and the numbers mean nothing. The
+        // writer is the one the server runs (it sleeps with no timer and is woken by the
+        // first entry after it went idle), and `sync` below, outside the timed region, lets
+        // it empty the channel. Every case asserts that nothing was dropped.
+        const CHUNK: usize = 400;
+        let fill_ring = |log: &mut InputLog| {
+            for chunk in 0..(RING_CAP / 512) {
+                for n in 0..512usize {
+                    let mut event = log_event(DECISION_ALLOW, (chunk * 512 + n) as u64);
+                    event.terminal = format!("term_fill_{chunk}_{n}");
+                    log.record(event);
+                }
+                log.sync();
+            }
+        };
+        let measure_synced = |sync: &mut dyn FnMut(), run: &mut dyn FnMut()| -> Duration {
+            for _ in 0..128 {
+                run();
+            }
+            let mut samples = Vec::with_capacity(ITERATIONS);
+            while samples.len() < ITERATIONS {
+                sync();
+                for _ in 0..CHUNK {
+                    let start = Instant::now();
+                    run();
+                    samples.push(start.elapsed());
+                }
+            }
+            sync();
+            p95(samples)
+        };
+        let bench_dir = crate::access::registry::TestDir::new("bench-log");
+        let writer_log = |label: &str| {
+            std::fs::create_dir_all(bench_dir.path().join(label)).unwrap();
+            let mut log = InputLog::new();
+            log.attach_writer(bench_dir.path().join(label), "node-a".into())
+                .unwrap();
+            log
+        };
+
+        let allow_log = std::cell::RefCell::new(writer_log("allow"));
+        fill_ring(&mut allow_log.borrow_mut());
+        let record_allow_coalesce =
+            measure_synced(&mut || allow_log.borrow_mut().sync(), &mut || {
+                allow_log
+                    .borrow_mut()
+                    .record(black_box(log_event(DECISION_ALLOW, 1_000_000)));
+            });
+        let allow_dropped = allow_log.borrow().dropped();
+        allow_log.borrow_mut().flush_and_stop();
+
+        let deny_log = std::cell::RefCell::new(writer_log("deny"));
+        fill_ring(&mut deny_log.borrow_mut());
+        let record_deny_immediate =
+            measure_synced(&mut || deny_log.borrow_mut().sync(), &mut || {
+                deny_log
+                    .borrow_mut()
+                    .record(black_box(log_event(DECISION_DENY, 2_000_000)));
+            });
+        let deny_dropped = deny_log.borrow().dropped();
+        deny_log.borrow_mut().flush_and_stop();
+
+        // The first entry after the writer has gone idle pays for waking it. Each sample is
+        // taken with the writer parked: `sync` returns once it has written everything, and a
+        // short sleep lets it reach its park. Half the samples are a refusal (sent at once),
+        // half an entry closed by the next one.
+        let idle_log = std::cell::RefCell::new(writer_log("idle"));
+        fill_ring(&mut idle_log.borrow_mut());
+        let mut idle_samples = Vec::with_capacity(200);
+        for turn in 0..200u64 {
+            let mut log = idle_log.borrow_mut();
+            log.sync();
+            std::thread::sleep(Duration::from_millis(3));
+            let mut event = log_event(DECISION_ALLOW, 3_000_000 + turn * 10_000);
+            event.terminal = format!("term_idle_{turn}");
+            if turn % 2 == 0 {
+                // A refusal is sent the moment it is recorded.
+                event.decision = DECISION_DENY;
+            } else {
+                // An open entry, closed (and sent) by the timed record below.
+                log.record(event.clone());
+                event.terminal = format!("term_idle_closer_{turn}");
+            }
+            let start = Instant::now();
+            log.record(black_box(event));
+            idle_samples.push(start.elapsed());
+        }
+        let record_after_idle = p95(idle_samples);
+        let idle_dropped = idle_log.borrow().dropped();
+        // Information only, off the input path: what the server pays after the reply to wake
+        // an idle writer for the entry the request recorded. It has no per-input budget.
+        let mut unpark_samples = Vec::with_capacity(200);
+        for turn in 0..200u64 {
+            let mut log = idle_log.borrow_mut();
+            log.sync();
+            std::thread::sleep(Duration::from_millis(3));
+            let mut event = log_event(DECISION_DENY, 4_000_000 + turn);
+            event.terminal = format!("term_unpark_{turn}");
+            log.record(event);
+            let start = Instant::now();
+            log.wake_writer();
+            unpark_samples.push(start.elapsed());
+        }
+        let deferred_unpark_after_reply = p95(unpark_samples);
+        idle_log.borrow_mut().flush_and_stop();
+
+        // The per-keystroke client path and the whole API gate, on a full ring. The callers
+        // and the clients alternate, so each record closes the one before it and sends it, and
+        // the pane caller makes the principal scan run.
+        *app.input_log.lock().unwrap() = writer_log("whole");
+        fill_ring(&mut app.input_log.lock().unwrap());
+        let client_terminal = terminal_of(&app, panes[0]);
+        let client_pane = target.clone();
+        let callers = [&stranger, &in_pane];
+        let mut turn = 0usize;
+        let client_keystroke = measure_synced(&mut || app.sync_input_log(), &mut || {
+            turn += 1;
+            let caller = callers[turn % 2];
+            let _ = black_box(app.check_client_shell_input(black_box(caller), &client_pane));
+            app.log_client_input(crate::app::access_log::ClientInput {
+                terminal: &client_terminal,
+                // Alternately the pane id is not at hand and has to be found, as for attach.
+                pane: (turn % 4 < 2).then_some(client_pane.as_str()),
+                route: "shell.pane_input",
+                client: format!("shell:{}", turn % 3),
+                caller,
+                bytes: 1,
+                allowed: true,
+            });
+        });
+        let mut turn = 0usize;
+        let api_log_on = measure_synced(&mut || app.sync_input_log(), &mut || {
+            turn += 1;
+            let caller = callers[turn % 2];
+            let _ = black_box(app.gate_input(black_box(&method), black_box(caller), true));
+        });
+        let whole_dropped = app.input_log.lock().unwrap().dropped();
+        app.input_log.lock().unwrap().flush_and_stop();
+        *app.input_log.lock().unwrap() = InputLog::new();
+
+        println!(
+            "access_gate classify_cached_16_panes_p95_ns={}",
+            classify_cached.as_nanos()
+        );
+        println!(
+            "access_gate record_allow_coalesce_p95_ns={}",
+            record_allow_coalesce.as_nanos()
+        );
+        println!(
+            "access_gate record_deny_immediate_p95_ns={}",
+            record_deny_immediate.as_nanos()
+        );
+        println!(
+            "access_gate client_keystroke_16_panes_full_ring_p95_ns={}",
+            client_keystroke.as_nanos()
+        );
+        println!(
+            "access_gate api_input_log_on_16_panes_p95_ns={}",
+            api_log_on.as_nanos()
+        );
+        println!(
+            "access_gate record_after_idle_p95_ns={}",
+            record_after_idle.as_nanos()
+        );
+        println!(
+            "access_gate deferred_unpark_after_reply_p95_ns={} (information, no budget)",
+            deferred_unpark_after_reply.as_nanos()
+        );
+        println!(
+            "access_gate dropped allow={allow_dropped} deny={deny_dropped} idle={idle_dropped} whole={whole_dropped}"
+        );
+        // A case that drops is timing the cheapest path through `send`, not a real send.
+        assert_eq!(
+            (allow_dropped, deny_dropped, idle_dropped, whole_dropped),
+            (0, 0, 0, 0),
+            "a timed case dropped entries"
+        );
         println!("access_gate off_p95_ns={}", off.as_nanos());
         println!("access_gate on_pane_p95_ns={}", on_pane.as_nanos());
         println!("access_gate on_outside_p95_ns={}", on_outside.as_nanos());
@@ -1030,6 +1368,27 @@ mod tests {
             lineage <= lineage_budget,
             "lineage walk p95 {lineage:?} is over {lineage_budget:?}"
         );
+        for (name, measured, budget) in [
+            ("classify_cached_16_panes", classify_cached, LOG_BUDGET),
+            ("record_allow_coalesce", record_allow_coalesce, LOG_BUDGET),
+            ("record_deny_immediate", record_deny_immediate, LOG_BUDGET),
+            ("record_after_idle", record_after_idle, LOG_BUDGET),
+            (
+                "client_keystroke_16_panes_full_ring",
+                client_keystroke,
+                LOG_BUDGET,
+            ),
+            (
+                "api_input_log_on_16_panes",
+                api_log_on,
+                OFF_BUDGET + LOG_BUDGET,
+            ),
+        ] {
+            assert!(
+                measured <= budget,
+                "{name} p95 {measured:?} is over {budget:?}"
+            );
+        }
     }
 
     fn start_with(app: &App, pane: usize, accept_from: &[&str]) -> Method {
@@ -1363,6 +1722,7 @@ mod tests {
             },
             token: Some(token.to_string()),
             remote: false,
+            conn: 0,
         }
     }
 

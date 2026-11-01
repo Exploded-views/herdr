@@ -1,0 +1,16 @@
+# herdr-fork: mutant T10b-M16. Unofficial stopgap; see FORK.md.
+diff --git a/src/pane.rs b/src/pane.rs
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -2659,10 +2659,7 @@
+             let child_identity = input_meta.child_identity.clone();
+             let on_reader_exit = Box::new(move || {
+                 cwd_process_exited.store(true, Ordering::Release);
+-                // The pid may be reused from now on: stop matching callers against it.
+-                if let Ok(mut identity) = child_identity.lock() {
+-                    *identity = None;
+-                }
++                let _ = &child_identity;
+                 // Imported handoff panes have no child wait handle, so their exit cause is
+                 // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
+                 let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {

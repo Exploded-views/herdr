@@ -1,4 +1,4 @@
-// herdr-fork: resolve `[access]` and load the caller registry once at startup, bind defaults after restore, and gate input methods (access_gate). Unofficial stopgap; see FORK.md.
+// herdr-fork: resolve `[access]` and load the caller registry once at startup, bind defaults after restore, and gate input methods (access_gate); owns the input log and starts its writer. Unofficial stopgap; see FORK.md.
 //! Application orchestration.
 //!
 //! - `state.rs` — AppState, Mode, and pure data structs
@@ -6,6 +6,7 @@
 
 mod access;
 pub(crate) mod access_gate;
+pub(crate) mod access_log;
 #[cfg(test)]
 mod access_tests;
 pub(crate) mod actions;
@@ -82,6 +83,8 @@ pub(crate) struct AppPolicy {
     pub(crate) background_updates: bool,
     /// Load and save the `access.caller.*` registry in the data dir.
     pub(crate) persist_access_callers: bool,
+    /// Write the input-origin log to the data dir. Tests keep the ring only.
+    pub(crate) persist_input_log: bool,
 }
 
 impl AppPolicy {
@@ -91,6 +94,7 @@ impl AppPolicy {
         persist_plugin_registry: true,
         background_updates: true,
         persist_access_callers: true,
+        persist_input_log: true,
     };
 
     #[cfg(test)]
@@ -100,6 +104,7 @@ impl AppPolicy {
         persist_plugin_registry: false,
         background_updates: false,
         persist_access_callers: false,
+        persist_input_log: false,
     };
 
     #[cfg(unix)]
@@ -109,6 +114,7 @@ impl AppPolicy {
         persist_plugin_registry: true,
         background_updates: true,
         persist_access_callers: true,
+        persist_input_log: true,
     };
 }
 
@@ -145,6 +151,8 @@ fn load_access_callers_at(
 
 pub struct App {
     pub state: AppState,
+    /// Origin of every pane input; see `access::input_log`.
+    pub(crate) input_log: std::sync::Mutex<crate::access::input_log::InputLog>,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
@@ -627,6 +635,8 @@ impl App {
             access_callers_path,
             access_callers_unreadable,
             remote_owner_tui: resolved_access.remote_owner_tui,
+            input_log: resolved_access.input_log,
+            node_name: resolved_access.node_name,
             terminal_runtime_shutdowns: Vec::new(),
         };
 
@@ -669,7 +679,16 @@ impl App {
         let endpoint_commands =
             custom_commands::EndpointCommandRegistry::new(&state.keybinds.custom_commands);
 
+        let mut input_log = crate::access::input_log::InputLog::new();
+        if policy.persist_input_log && state.input_log {
+            if let Err(err) =
+                input_log.attach_writer(crate::session::data_dir(), state.node_name.clone())
+            {
+                tracing::warn!(%err, "input log file could not be opened; keeping the ring only");
+            }
+        }
         let mut app = Self {
+            input_log: std::sync::Mutex::new(input_log),
             plugin_installation_leases,
             plugin_installation_cleanup_allowed,
             config_diagnostic_deadline: None,

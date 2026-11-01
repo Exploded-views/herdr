@@ -1,4 +1,4 @@
-// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
+// herdr-fork: peer lineage walk (verified process ancestry of a socket peer) random_secret, create_private_file, open_private_append, is_writable_by_others and is_owned_by_other_user. Unofficial stopgap; see FORK.md.
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ChildPipe(std::fs::File);
@@ -506,6 +506,37 @@ pub(crate) fn create_private_file(path: &Path) -> std::io::Result<std::fs::File>
         .create_new(true)
         .mode(0o600)
         .open(path)
+}
+
+/// Open `path` for appending, creating it with mode 0600 if it is missing. Holds the
+/// input-origin log. A symlink at `path` is refused (`O_NOFOLLOW`). The open never blocks
+/// (`O_NONBLOCK`, so a FIFO is not waited on), and anything but a regular file with a single
+/// link is refused, so the appends and the `fchmod` can only touch a file made for this.
+pub(crate) fn open_private_append(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .mode(0o600)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file with exactly one link",
+        ));
+    }
+    let fd = file.as_raw_fd();
+    // SAFETY: fd is open for the life of `file`; F_GETFL and F_SETFL take plain integers.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 /// True when group or others can write `file` (mode bits 022). The caller

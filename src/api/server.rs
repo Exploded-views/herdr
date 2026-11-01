@@ -1,4 +1,4 @@
-// herdr-fork: build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch. Unofficial stopgap; see FORK.md.
+// herdr-fork: build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -348,6 +348,12 @@ impl std::fmt::Debug for RequestEnvelope {
     }
 }
 
+/// Numbers API connections for the input log (`api:<seq>`). Starts at 1 in each process.
+fn next_connection_seq() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Each field is read on its own, so a mistyped one (say a numeric
 /// `caller_token`) becomes `None` without costing the other. In particular the
 /// bridge's `caller_origin` stamp survives whatever the token holds.
@@ -423,6 +429,7 @@ fn handle_connection_with_stop(
         lineage: crate::platform::local_stream_peer_lineage(&stream),
         token: envelope.caller_token,
         remote: envelope.caller_origin.as_deref() == Some("remote"),
+        conn: next_connection_seq(),
     };
 
     let request_id = request.id.clone();
@@ -1491,6 +1498,7 @@ mod tests {
             lineage: Default::default(),
             token: Some("tok-secret-7".into()),
             remote: true,
+            conn: 0,
         };
         let envelope = parse_request_envelope(&format!(r#"{{"id":"x",{PROMPT_LINE_TAIL}"#));
         for printed in [format!("{caller:?}"), format!("{envelope:?}")] {
@@ -1534,6 +1542,7 @@ mod tests {
                 lineage: crate::platform::local_stream_peer_lineage(&client),
                 token: Some("tok-secret-7".into()),
                 remote: true,
+                conn: 0,
             };
             writeln!(
                 client,
@@ -1545,8 +1554,22 @@ mod tests {
             drop(api_tx);
             let callers = responder.join().unwrap();
             assert!(!callers.is_empty(), "{name}: nothing reached the app");
+            // Every sub-request of one connection carries that connection's number.
+            let numbers: std::collections::HashSet<u64> = callers
+                .iter()
+                .filter_map(|(_, caller)| match caller {
+                    Caller::Peer { conn, .. } => Some(*conn),
+                    #[cfg(test)]
+                    Caller::Classified(_) => None,
+                })
+                .collect();
+            assert_eq!(numbers.len(), 1, "{name}: {numbers:?}");
             for (method, caller) in &callers {
-                assert_eq!(caller, &expected, "{name}: {method}");
+                let mut caller = caller.clone();
+                if let Caller::Peer { conn, .. } = &mut caller {
+                    *conn = 0;
+                }
+                assert_eq!(caller, expected, "{name}: {method}");
             }
             if wait.is_empty() {
                 assert_eq!(callers.last().map(|c| c.0), Some("agent.prompt"));

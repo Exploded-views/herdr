@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M1. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -188,7 +188,7 @@
+                 label, terminal, ..
+             } = &target
+             {
+-                if result.is_err() || last {
++                if result.is_ok() && last {
+                     self.log_api_input(
+                         method,
+                         caller,

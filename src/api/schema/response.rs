@@ -1,7 +1,7 @@
-// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy). Unofficial stopgap; see FORK.md.
+// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy), and the access.log result (AccessInputLog). Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
-use super::access::{AccessCallerInfo, CallerToken};
+use super::access::{AccessCallerInfo, AccessInputEvent, CallerToken};
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
@@ -69,6 +69,12 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binding: Option<String>,
         accept_from: Vec<String>,
+    },
+    /// The input-origin log, newest first. `dropped` counts entries that never reached the file.
+    AccessInputLog {
+        node: String,
+        events: Vec<AccessInputEvent>,
+        dropped: u64,
     },
     WorkspaceInfo {
         workspace: WorkspaceInfo,

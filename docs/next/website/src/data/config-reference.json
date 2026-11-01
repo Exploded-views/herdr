@@ -1562,7 +1562,13 @@
           "key": "access.input_log",
           "type": "boolean",
           "default": "true",
-          "description": "Reserved; no effect yet (used by the input-origin log in a later release). Read once at startup."
+          "description": "Fork-only. Log the origin of every pane input (path, sender class, client, host kind and byte count; never the content) to access-input.log in the data directory, mode 0600, at most 2 MiB. Set false to turn the log off. Read once at startup."
+        },
+        {
+          "key": "access.node_name",
+          "type": "string",
+          "default": "\"node\"",
+          "description": "Fork-only. The name written in the input log's header line. It is never the hostname. Letters, digits, '-', '_' and '.', at most 64 characters. Read once at startup."
         }
       ]
     }

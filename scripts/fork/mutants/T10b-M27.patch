@@ -1,0 +1,24 @@
+# herdr-fork: mutant T10b-M27. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 8bf8b70a..0a6a62a3 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -3153,8 +3153,6 @@ impl HeadlessServer {
+         skip_default_workspace_for_request: bool,
+         client_local: bool,
+     ) -> bool {
+-        // The input log's writer is woken when this returns, on every path.
+-        let _wake = self.app.wake_after_reply();
+         if self.shutting_down || self.host_shutdown_requested() {
+             // During shutdown, respond with server_unavailable.
+             Self::reject_api_request_for_shutdown(msg);
+@@ -3381,6 +3379,9 @@ impl HeadlessServer {
+                 }
+             }
+         }
++        if response.contains("\"result\"") {
++            let _wake = self.app.wake_after_reply();
++        }
+         let _ = msg.respond_to.send(response);
+ 
+         // Forward new toast state only when a client-local delivery mode is selected.

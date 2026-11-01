@@ -1,4 +1,4 @@
-// herdr-fork: startup-resolved access defaults and remote settings, and the caller registry, on AppState. Unofficial stopgap; see FORK.md.
+// herdr-fork: startup-resolved access defaults and remote settings, and the caller registry, on AppState; `input_log` and `node_name`. Unofficial stopgap; see FORK.md.
 use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -898,6 +898,10 @@ pub struct AppState {
     pub(crate) access_callers_unreadable: bool,
     #[allow(dead_code)] // read by the remote TUI input check (Task 10)
     pub(crate) remote_owner_tui: crate::access::policy::RemoteOwnerTui,
+    /// `[access] input_log`: classify Input requests and record their origin. Read once at startup.
+    pub(crate) input_log: bool,
+    /// `[access] node_name`: the name in the log file's header line.
+    pub(crate) node_name: String,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
@@ -1138,6 +1142,8 @@ impl AppState {
             access_callers_path: None,
             access_callers_unreadable: false,
             remote_owner_tui: Default::default(),
+            input_log: true,
+            node_name: "node".to_string(),
             terminal_runtime_shutdowns: Vec::new(),
         }
     }

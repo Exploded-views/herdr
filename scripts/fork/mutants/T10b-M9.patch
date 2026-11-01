@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M9. Unofficial stopgap; see FORK.md.
+diff --git a/src/pane.rs b/src/pane.rs
+--- a/src/pane.rs
++++ b/src/pane.rs
+@@ -2585,7 +2585,6 @@
+         // An adopted pane's shell keeps its pid and start token across the handoff: cache them
+         // so the new server classifies callers without reading /proc or calling proc_pidinfo.
+         let input_meta = InputMeta::default();
+-        input_meta.cache_child_identity(child_pid);
+         let child_pid = Arc::new(AtomicU32::new(child_pid));
+         let reported_cwd = Arc::new(Mutex::new(None));
+         let cwd_process_exited = Arc::new(AtomicBool::new(false));

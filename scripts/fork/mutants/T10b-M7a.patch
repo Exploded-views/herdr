@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M7a. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -197,7 +197,7 @@
+     /// App thread, O(1), never blocks.
+     pub fn record(&mut self, ev: InputEvent) {
+         let mergeable = !std::mem::take(&mut self.sealed);
+-        if ev.decision == DECISION_DENY {
++        if ev.decision == "never" {
+             // A refusal is never merged and never waits: it goes out as its own entry.
+             self.close_open();
+             self.push_ring(ev.clone());

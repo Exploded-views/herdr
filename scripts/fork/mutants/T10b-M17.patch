@@ -1,0 +1,13 @@
+# herdr-fork: mutant T10b-M17. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -477,7 +477,7 @@
+             return false;
+         }
+         self.failed += 1;
+-        let first = !self.failing;
++        let first = true;
+         self.failing = true;
+         first
+     }

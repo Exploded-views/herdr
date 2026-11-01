@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10b-M28. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+index 22475355..574f5740 100644
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -193,7 +193,7 @@ impl InputLog {
+         let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_CAP);
+         // The same Pacer for the life of the log, so a guard taken before a restart still
+         // reaches the new writer.
+-        self.shared.pacer.reset();
++        self.shared.pacer = std::sync::Arc::new(Pacer::default());
+         spawn_writer(rx, dir.clone(), &node, self.shared.clone())?;
+         self.tx = Some(tx);
+         #[cfg(unix)]
