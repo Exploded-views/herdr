@@ -26,7 +26,8 @@ the policy and opens the pane on purpose.
 <mode> is `any` (the default) or `human-only`. `human-only` refuses input sent through the
 herdr API, and client input unless the client is a person at an outside terminal. It is
 independent of the policy: `pane set <pane> --input-mode human-only` leaves who the pane
-accepts from as it is. `pane get` prints the pane, its binding, the list and the mode.
+accepts from as it is. `pane get` prints the pane, its binding, the list, the mode and
+`explicit` (an admin chose the mode on purpose) or `default`.
 `log` prints the input-origin log, newest first: who sent each pane input (path, sender
 class, client, host kind, byte count; never the content). It is for a caller outside
 every pane only. An entry is written within 50 ms after its request handler returns; the first entry after idle is written within 100 ms of the input unless the handler itself runs longer. No entry is skipped in either case.
@@ -791,6 +792,11 @@ mod tests {
         });
         assert_eq!(code, 0);
         assert_eq!(out, "w1:p1\t-\tany\thuman-only\tdefault\n");
+    }
+
+    #[test]
+    fn the_help_names_the_explicit_column() {
+        assert!(HELP.contains("explicit"), "{HELP}");
     }
 
     #[test]

@@ -1280,14 +1280,6 @@ mod tests {
             .max()
             .unwrap();
 
-        // The same for an attached client's keystroke: one lookup and a compare, no copy.
-        let attach_terminal = terminal_of(&app, panes[0]);
-        let input_mode_attach_any = measure(|| {
-            let _ = black_box(
-                app.check_attach_input(black_box(&stranger), black_box(&attach_terminal)),
-            );
-        });
-
         let log_event = |decision: &'static str, at_ms: u64| InputEvent {
             at_ms,
             pane: "1-1".into(),
@@ -1453,10 +1445,6 @@ mod tests {
             input_mode_any.as_nanos()
         );
         println!(
-            "access_gate input_mode_attach_any_p95_ns={}",
-            input_mode_attach_any.as_nanos()
-        );
-        println!(
             "access_gate record_allow_coalesce_p95_ns={}",
             record_allow_coalesce.as_nanos()
         );
@@ -1509,7 +1497,6 @@ mod tests {
         );
         for (name, measured, budget) in [
             ("input_mode_any", input_mode_any, OFF_BUDGET),
-            ("input_mode_attach_any", input_mode_attach_any, OFF_BUDGET),
             ("classify_cached_16_panes", classify_cached, LOG_BUDGET),
             ("record_allow_coalesce", record_allow_coalesce, LOG_BUDGET),
             ("record_deny_immediate", record_deny_immediate, LOG_BUDGET),

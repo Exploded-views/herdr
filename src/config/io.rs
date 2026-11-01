@@ -152,7 +152,8 @@ impl Config {
         };
 
         match deserialize_with_ignored::<Config, _>(toml::Deserializer::new(&content)) {
-            Ok((config, ignored_keys)) => {
+            Ok((mut config, ignored_keys)) => {
+                config.access.record_input_mode_lines(&content);
                 let (unknown_sections, mut diagnostics) =
                     unknown_top_level_sections_from_str(&content);
                 diagnostics.extend(unknown_config_key_diagnostics(
@@ -387,6 +388,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
 
     diagnostics.extend(config.theme.diagnostics());
+    config.access.record_input_mode_lines(content);
 
     Ok(LoadedConfig {
         config,
@@ -1207,5 +1209,27 @@ mouse_capture = false
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
         assert_eq!(loaded.config.terminal.default_shell, "pwsh.exe");
+    }
+
+    #[test]
+    fn a_mistyped_access_input_mode_names_its_line_and_echoes_no_value() {
+        let content =
+            "[ui]\n\n[access.worker]\naccept_from = [\"outside\"]\ninput_mode = \"human_only\"\n";
+        let loaded = load_live_config_from_str(content).unwrap();
+        let resolved = loaded.config.access.resolve();
+        assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
+        let diagnostic = &resolved.diagnostics[0];
+        assert!(
+            diagnostic.contains("access.worker.input_mode"),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains("line 5"), "{diagnostic}");
+        assert!(diagnostic.contains("human-only"), "{diagnostic}");
+        assert!(!diagnostic.contains("human_only"), "{diagnostic}");
+        // The same table in dotted form is found as well.
+        let content = "access.worker.input_mode = \"nope\"\n";
+        let mut config: Config = toml::from_str(content).unwrap();
+        config.access.record_input_mode_lines(content);
+        assert!(config.access.resolve().diagnostics[0].contains("line 1"));
     }
 }

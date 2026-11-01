@@ -1098,6 +1098,8 @@ pub struct AccessConfig {
     /// Name written in the input log's header line, never the hostname. Default "node".
     pub node_name: Option<String>,
     pub sections: std::collections::BTreeMap<String, AccessSection>,
+    /// Line of each `[access.<name>] input_mode` in the file, for diagnostics.
+    input_mode_lines: std::collections::BTreeMap<String, usize>,
     /// Problems met while reading the table, reported by `resolve`.
     read_diagnostics: Vec<String>,
 }
@@ -1149,6 +1151,33 @@ impl<'de> Deserialize<'de> for AccessConfig {
             }
         }
         Ok(out)
+    }
+}
+
+impl AccessConfig {
+    /// Note the line of each `[access.<name>] input_mode` in `content`, so a diagnostic can
+    /// name it. The values carry no span after parsing, so the text is read again.
+    pub(crate) fn record_input_mode_lines(&mut self, content: &str) {
+        let Ok(document) = toml_edit::ImDocument::parse(content) else {
+            return;
+        };
+        let Some(access) = document.get("access").and_then(|item| item.as_table_like()) else {
+            return;
+        };
+        for name in self.sections.keys() {
+            let span = access
+                .get(name)
+                .and_then(|item| item.as_table_like())
+                .and_then(|section| section.get("input_mode"))
+                .and_then(|item| item.span());
+            if let Some(span) = span {
+                let line = 1 + content.as_bytes()[..span.start.min(content.len())]
+                    .iter()
+                    .filter(|byte| **byte == b'\n')
+                    .count();
+                self.input_mode_lines.insert(name.clone(), line);
+            }
+        }
     }
 }
 
@@ -1238,8 +1267,12 @@ impl AccessConfig {
                 None => None,
                 Some(Ok(mode)) => Some(mode),
                 Some(Err(err)) => {
+                    let place = self
+                        .input_mode_lines
+                        .get(name)
+                        .map_or(String::new(), |line| format!(" (line {line})"));
                     out.diagnostics.push(format!(
-                        "access.{name}.input_mode: {err}; using \"human-only\""
+                        "access.{name}.input_mode{place}: {err}; using \"human-only\""
                     ));
                     Some(crate::access::policy::InputMode::HumanOnly)
                 }

@@ -134,12 +134,7 @@ impl HeadlessServer {
             let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
                 return true;
             };
-            let Some(terminal) = self
-                .app
-                .state
-                .terminals
-                .keys()
-                .find(|id| id.as_str() == terminal_id.as_str())
+            let Some((terminal, _)) = self.app.state.terminals.get_key_value(terminal_id.as_str())
             else {
                 return true;
             };

@@ -1589,5 +1589,22 @@ mod tests {
             assert_eq!(response["error"]["code"], "agent_start_input_failed");
             assert!(rig.app.state.terminals[&terminal].input_mode_set_explicitly);
         }
+
+        #[tokio::test]
+        async fn renaming_the_agent_clears_the_explicit_mode_mark() {
+            let mut rig = rig();
+            agent_in(&mut rig, 0, "worker");
+            set_mode(&mut rig, 0, "any");
+            assert!(rig.app.state.terminals[&rig.terminals[0]].input_mode_set_explicitly);
+            let response = rig.app.handle_api_request(crate::api::schema::Request {
+                id: "rename".into(),
+                method: Method::AgentRename(crate::api::schema::AgentRenameParams {
+                    target: "worker".into(),
+                    name: Some("builder".into()),
+                }),
+            });
+            assert!(response.contains("agent_info"), "{response}");
+            assert!(!rig.app.state.terminals[&rig.terminals[0]].input_mode_set_explicitly);
+        }
     }
 }

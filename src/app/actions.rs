@@ -1711,7 +1711,27 @@ impl AppState {
             let previous_agent_name = terminal.agent_name.clone();
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
+            // An admin's mark on the mode is for the agent that was here. Note who that was
+            // (only when a mark exists, so the common path pays nothing).
+            let marked_occupant = terminal.input_mode_set_explicitly.then(|| {
+                (
+                    terminal.effective_agent_label().map(str::to_owned),
+                    previous_agent_name.clone(),
+                )
+            });
             let mutation = update(terminal);
+            if let Some((label, name)) = marked_occupant {
+                // Gone, replaced or renamed: a new occupant starts without the mark, so the
+                // default mode reaches it. An agent not yet seen (a restored pane) is not a change.
+                let replaced = label
+                    .as_deref()
+                    .is_some_and(|label| terminal.effective_agent_label() != Some(label));
+                let renamed = name.is_some() && terminal.agent_name != name;
+                if replaced || renamed {
+                    terminal.input_mode_set_explicitly = false;
+                    self.session_dirty = true;
+                }
+            }
             // Any mutation that leaves an agent here (a detection, a label switch at
             // the same state, a name) can be the first sight of it.
             if super::access::apply_default_access(

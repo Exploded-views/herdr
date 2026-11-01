@@ -3173,7 +3173,13 @@ impl HeadlessServer {
         let response = serde_json::to_string(&api::schema::ErrorResponse {
             id: msg.request.id,
             error: api::schema::ErrorBody {
-                code: "access_denied".into(),
+                code: match denied {
+                    crate::access::policy::AccessDenied::BridgeInputMode { .. } => {
+                        "access_bridge_input_mode"
+                    }
+                    _ => "access_denied",
+                }
+                .into(),
                 message: denied.message(),
             },
         })

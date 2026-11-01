@@ -3152,10 +3152,13 @@ async fn agent_start_into_a_moded_pane_under_the_bridge_name_gets_the_bridge_tex
     };
     // The bridge guard answers first; the pane is refused either way and nothing is typed.
     let response = f.call(outside(), start("relay"));
-    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert_eq!(
+        error_code(&response).as_deref(),
+        Some("access_bridge_input_mode")
+    );
     assert_eq!(
         error_message(&response),
-        "access_denied: input mode must stay \"any\" on the bridge (relay), which receives by API by design"
+        "input mode must stay \"any\" on the bridge (relay), which receives by API by design"
     );
     let response = f.call(outside(), start("worker"));
     assert_eq!(error_message(&response), human_only_denial(&target));
@@ -3205,5 +3208,41 @@ async fn the_attach_refusal_notice_is_rearmed_by_an_allowed_input() {
     key(&mut f);
     assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
     assert!(f.server.clients[&112].refused_pane.is_none());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+/// Budget: an attached client's keystroke on a pane with mode `any` (the client lookup, the
+/// terminal lookup and the mode check) is p95 <= 1 us, with 16 panes and no mode set anywhere.
+/// Run by `just bench-access`.
+#[tokio::test]
+#[ignore = "timing: run by just bench-access"]
+async fn input_mode_attach_any() {
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+    let mut f = gate_fixture(16);
+    attach_client(&mut f, 120, 0, lineage_for(false, true));
+    let mut samples = Vec::with_capacity(10_000);
+    for turn in 0..10_256 {
+        let start = Instant::now();
+        let allowed = black_box(
+            f.server
+                .attach_input_permitted(black_box(120), "attach.input", 1),
+        );
+        let took = start.elapsed();
+        assert!(allowed);
+        if turn >= 256 {
+            samples.push(took);
+        }
+    }
+    samples.sort_unstable();
+    let p95 = samples[samples.len() * 95 / 100];
+    println!(
+        "access_gate input_mode_attach_any_p95_ns={}",
+        p95.as_nanos()
+    );
+    assert!(
+        p95 <= Duration::from_micros(1),
+        "input_mode_attach_any p95 {p95:?} is over 1us"
+    );
     shutdown_test_runtimes(&mut f.server);
 }

@@ -153,9 +153,14 @@ impl App {
         if terminal.effective_agent_label().is_none() {
             return Err(AgentRenameError::NotAgent);
         }
+        // A mode an admin chose was for the agent under its old name.
+        let previous_name = terminal.agent_name.clone();
         match normalized_name {
             Some(name) => terminal.set_agent_name(name),
             None => terminal.clear_agent_name(),
+        }
+        if previous_name.is_some() && terminal.agent_name != previous_name {
+            terminal.input_mode_set_explicitly = false;
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();

@@ -159,7 +159,10 @@ pub(crate) fn apply_default_access(
     bridge: Option<&str>,
     terminal: &mut TerminalState,
 ) -> bool {
-    if defaults.default.is_none() && defaults.default_mode.is_any() {
+    if defaults.default.is_none()
+        && defaults.default_mode.is_any()
+        && defaults.mode_by_name.is_empty()
+    {
         return false;
     }
     if !terminal.is_agent_terminal() {
@@ -185,14 +188,16 @@ pub(crate) fn apply_default_access(
     }
     let name = terminal.agent_name.as_deref();
     let on_bridge = bridge.is_some_and(|bridge| name == Some(bridge));
-    let named = name.is_some_and(|name| defaults.mode_by_name.contains_key(name));
-    if !defaults.default_mode.is_any()
+    // The agent's own section decides when it has an `input_mode` (even `any`), else the default.
+    let wanted = name
+        .and_then(|name| defaults.mode_by_name.get(name).copied())
+        .unwrap_or(defaults.default_mode);
+    if !wanted.is_any()
         && terminal.input_mode.is_any()
         && !terminal.input_mode_set_explicitly
         && !on_bridge
-        && !named
     {
-        terminal.input_mode = defaults.default_mode;
+        terminal.input_mode = wanted;
         bound = true;
     }
     bound
@@ -222,7 +227,10 @@ impl AppState {
                 "the bridge pane has an input mode; it receives by API by design and will refuse its input"
             );
         }
-        if self.access_defaults.default.is_none() && self.access_defaults.default_mode.is_any() {
+        if self.access_defaults.default.is_none()
+            && self.access_defaults.default_mode.is_any()
+            && self.access_defaults.mode_by_name.is_empty()
+        {
             return;
         }
         let ids: Vec<TerminalId> = self.terminals.keys().cloned().collect();

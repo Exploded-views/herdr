@@ -200,9 +200,7 @@ pub(crate) fn parse_input_mode(text: &str) -> Result<InputMode, String> {
         "flag" => Err(
             "input mode \"flag\" is not available in v1; use \"any\" or \"human-only\"".to_string(),
         ),
-        other => Err(format!(
-            "unknown input mode {other:?}; use \"any\" or \"human-only\""
-        )),
+        _ => Err("unknown input mode; use \"any\" or \"human-only\"".to_string()),
     }
 }
 
@@ -320,9 +318,7 @@ impl AccessDenied {
             AccessDenied::Control { label, from } => format!(
                 "access_denied: pane {label} does not accept control requests from {from}. {TAIL}"
             ),
-            AccessDenied::BridgeInputMode { bridge } => {
-                format!("access_denied: {}", bridge_mode_text(bridge))
-            }
+            AccessDenied::BridgeInputMode { bridge } => bridge_mode_text(bridge),
             AccessDenied::HumanOnly { label } => format!(
                 "access_denied: pane {label} accepts only typed input; input sent through the herdr API is refused. {TAIL}"
             ),

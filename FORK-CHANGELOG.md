@@ -95,4 +95,12 @@ a plan to send it upstream, and nothing has been proposed upstream.
   text says the pane accepts only typed input. The mode is checked after the pane's allow-list,
   is saved with the session, and shows in `access pane get`. The default is `any`, which
   changes nothing. The bridge's pane stays `any`. `flag` and an alert file are not in v1.
-  *upstream candidate*
+  An admin who sets a pane's mode with `--input-mode` (even to `any`) marks it as chosen on
+  purpose: `access pane get` shows `explicit`, the sticky default leaves it alone, and the mark
+  is dropped when a different agent takes the pane (a new `agent start`, a rename, the agent
+  exiting or another being detected). The `[access.default]` mode applies to every agent pane
+  whatever its policy; an `[access.<name>]` section with its own `input_mode` (even `any`)
+  overrides it, and is applied when the pane is started, renamed or detected under that name.
+  A mode in the config that cannot be read counts as `human-only`, with a diagnostic that names
+  the key and the line. A start under the bridge's name into a pane with a mode is refused with
+  the code `access_bridge_input_mode`. *upstream candidate*
