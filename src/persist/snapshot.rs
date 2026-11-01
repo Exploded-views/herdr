@@ -1,4 +1,4 @@
-// herdr-fork: PaneSnapshot carries the optional per-pane access policy. Unofficial stopgap; see FORK.md.
+// herdr-fork: PaneSnapshot carries the optional per-pane access policy and the input mode. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -120,6 +120,33 @@ pub struct PaneSnapshot {
     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) access_opened_explicitly: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::access::policy::InputMode::is_any",
+        deserialize_with = "lenient_input_mode"
+    )]
+    pub(crate) input_mode: crate::access::policy::InputMode,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) input_mode_set_explicitly: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_mode_mark_owner: Option<String>,
+}
+
+/// An unreadable `input_mode` must not cost the session, and must not loosen the pane: it
+/// comes back `human-only` and a warning is logged.
+fn lenient_input_mode<'de, D>(deserializer: D) -> Result<crate::access::policy::InputMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use crate::access::policy::InputMode;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match serde_json::from_value::<InputMode>(value) {
+        Ok(mode) => Ok(mode),
+        Err(err) => {
+            tracing::warn!(%err, "saved pane input mode is malformed; restoring the pane human-only");
+            Ok(InputMode::HumanOnly)
+        }
+    }
 }
 
 /// A malformed `access` field must not cost the whole session. The pane comes
@@ -387,6 +414,11 @@ fn capture_tab(
         let access = terminal.and_then(|terminal| terminal.access.clone());
         let access_opened_explicitly =
             terminal.is_some_and(|terminal| terminal.access_opened_explicitly);
+        let input_mode = terminal.map_or_else(Default::default, |terminal| terminal.input_mode);
+        let input_mode_set_explicitly =
+            terminal.is_some_and(|terminal| terminal.input_mode_set_explicitly);
+        let input_mode_mark_owner =
+            terminal.and_then(|terminal| terminal.input_mode_mark_owner.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -427,6 +459,9 @@ fn capture_tab(
                 launch_argv,
                 access,
                 access_opened_explicitly,
+                input_mode,
+                input_mode_set_explicitly,
+                input_mode_mark_owner,
             },
         );
     }
@@ -748,6 +783,9 @@ mod tests {
                 launch_argv: None,
                 access: None,
                 access_opened_explicitly: false,
+                input_mode: Default::default(),
+                input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
         panes.insert(
@@ -762,6 +800,9 @@ mod tests {
                 launch_argv: None,
                 access: None,
                 access_opened_explicitly: false,
+                input_mode: Default::default(),
+                input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
 
@@ -1450,6 +1491,9 @@ mod tests {
                 launch_argv: None,
                 access: None,
                 access_opened_explicitly: false,
+                input_mode: Default::default(),
+                input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
         panes.insert(
@@ -1466,6 +1510,9 @@ mod tests {
                 launch_argv: None,
                 access: None,
                 access_opened_explicitly: false,
+                input_mode: Default::default(),
+                input_mode_set_explicitly: false,
+                input_mode_mark_owner: None,
             },
         );
 

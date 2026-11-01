@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M24: a released agent keeps the mark. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/actions.rs b/src/app/actions.rs
+index 59e80fcf..7fdd37f2 100644
+--- a/src/app/actions.rs
++++ b/src/app/actions.rs
+@@ -1728,7 +1728,7 @@ impl AppState {
+             // is no change.
+             if terminal.input_mode_set_explicitly {
+                 let released = mutation.as_ref().is_some_and(|m| m.agent_released);
+-                if released {
++                if false && released {
+                     terminal.clear_input_mode_mark();
+                     self.session_dirty = true;
+                 } else if terminal.drop_stale_input_mode_mark() {

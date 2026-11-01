@@ -3,7 +3,7 @@ title: CLI reference
 description: Herdr commands for sessions, workspaces, tabs, panes, notifications, agents, waits, integrations, and status.
 ---
 
-{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` and the caller token file; see FORK.md */}
+{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` (including `--input-mode`) and the caller token file; see FORK.md */}
 
 Herdr’s CLI talks to the running server over the same local socket API used by integrations and agents.
 
@@ -460,11 +460,15 @@ Every bound pane has a binding id (`acc_` and 32 hex digits). An agent target th
 A fork-only feature. Only a caller outside every pane may change a pane's policy.
 
 ```bash
-herdr access pane set <pane> --accept-from LIST
+herdr access pane set <pane> [--accept-from LIST] [--input-mode MODE]
 herdr access pane get <pane>
 ```
 
-`LIST` is `any`, or a comma-separated or repeated list of `none`, `outside` and `caller:<name>`. `set` binds the policy (keeping the pane's binding id if it has one); `any` removes it and opens the pane on purpose; callers bound to the old binding stay dangling (and refused) until you re-run `access caller retarget`. `get` is open to every caller and shows the whole `accept_from` list, including caller names such as `caller:ops`. Both print one line: the pane, its binding id (`-` when it has none) and the list (`any` when it has no policy). The API methods are `access.pane.set` and `access.pane.get`.
+`LIST` is `any`, or a comma-separated or repeated list of `none`, `outside` and `caller:<name>`. `set` binds the policy (keeping the pane's binding id if it has one); `any` removes it and opens the pane on purpose; callers bound to the old binding stay dangling (and refused) until you re-run `access caller retarget`. `get` is open to every caller and shows the whole `accept_from` list, including caller names such as `caller:ops`. Both print one line: the pane, its binding id (`-` when it has none), the list (`any` when it has no policy) the input mode, and `explicit` when an admin set that mode on purpose with `--input-mode` (even to `any`; the sticky default then leaves it alone, until the agent it was set for is released, exits, is renamed or is replaced by another, or a new agent is started in the pane; a pane marked while empty drops it when the first agent arrives, and a restored pane keeps it only for the same agent) or `default`. An `input_mode` in the config that cannot be read counts as `human-only`, with a diagnostic. The API methods are `access.pane.set` and `access.pane.get`.
+
+`MODE` is `any` (the default) or `human-only`. `human-only` keeps a pane to typed input: input sent through the herdr API (`agent prompt`, `agent send-keys`, `agent start`, `pane send-text`, `pane send-keys`, `pane run`) is refused, whoever sends it, and client input (typing, mouse reports and image paste from a TUI, attached or not) is taken only from a client outside every pane. A TUI that runs inside a pane, or a client that is not shown to be outside, is refused with the same text. The refusal is immediate and final; nothing is held for approval. Every bridge-guard refusal (an `agent start` under the bridge's name into a pane that has a mode, an `agent rename` to that name, and `access pane set --input-mode` on the bridge) uses the error code `access_bridge_input_mode` and the bridge text; every other refusal uses `access_denied`. The mode is checked after the pane's `--accept-from` list, so a request that list refuses keeps the list's refusal text. It is independent of the list: `pane set <pane> --input-mode human-only` leaves who the pane accepts from as it is, and a pane can have a mode and no policy. `flag` is not available in v1. Only a caller outside every pane may set a mode. The mode is saved with the session. `[access.default]` and `[access.<name>]` accept `input_mode = "human-only"` next to `accept_from` (or alone), bound with the sticky default and at `agent start <name>`. The agent that is this node's bridge (`[access] bridge_agent`, under `remote_input = "bridge-only"`) receives by API by design, so its mode must stay `any`: a config entry for it is a diagnostic and is ignored, and setting, starting or renaming a pane into that state is refused.
+
+What the mode can tell: input sent through the herdr API from keystrokes typed at a client. It does not tell the owner from an agent that drives a TUI from outside every pane (`expect`, `script`, or a remote `herdr --remote`); that client counts as the owner. A process that escapes its pane's ancestry (`setsid`, `tmux`) and then attaches counts as outside too. Input that reaches a PTY outside herdr (`TIOCSTI`, `ptrace`) is not seen. Popup input is logged but never moded.
 
 The input-origin log is on by default and records where each pane input came from. Read it with:
 

@@ -1,0 +1,20 @@
+# herdr-fork: mutant T10c-M8: the mode check runs before the allow-list. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index 2afdc7f8..b9769d52 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -237,10 +237,11 @@ impl App {
+             Ok(())
+         };
+         // The mode check runs last: an allow-list refusal keeps its own text.
+-        let result = pane_result
++        let result = self
++            .input_mode_check(&target, &class, InputPath::Api)
++            .and(pane_result)
+             .and(admin_result)
+-            .and_then(|()| self.bridge_start_check(method, &target))
+-            .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
++            .and_then(|()| self.bridge_start_check(method, &target));
+         if let (true, Some(last)) = (logs_input, log) {
+             if let GateTarget::Input {
+                 label, terminal, ..

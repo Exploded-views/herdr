@@ -1,4 +1,4 @@
-// herdr-fork: `[access]` config (default and named accept_from sections, remote node keys; an invalid `remote_owner_tui` under bridge-only fails closed); `[access] input_log` is wired and `node_name` is read. Unofficial stopgap; see FORK.md.
+// herdr-fork: `[access]` config (default and named accept_from and input_mode sections, remote node keys; a non-`any` mode on the bridge is a config error; an invalid `remote_owner_tui` under bridge-only fails closed); `[access] input_log` is wired and `node_name` is read. Unofficial stopgap; see FORK.md.
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use crossterm::event::KeyModifiers;
@@ -1079,6 +1079,8 @@ impl Default for RemoteConfig {
 #[serde(default)]
 pub struct AccessSection {
     pub accept_from: Vec<String>,
+    /// "any" (default) or "human-only". May be set without `accept_from`.
+    pub input_mode: Option<String>,
 }
 
 /// `[access]`: scalar node keys plus `[access.<name>]` tables. Resolved once at
@@ -1096,6 +1098,8 @@ pub struct AccessConfig {
     /// Name written in the input log's header line, never the hostname. Default "node".
     pub node_name: Option<String>,
     pub sections: std::collections::BTreeMap<String, AccessSection>,
+    /// Line of each `[access.<name>] input_mode` in the file, for diagnostics.
+    input_mode_lines: std::collections::BTreeMap<String, usize>,
     /// Problems met while reading the table, reported by `resolve`.
     read_diagnostics: Vec<String>,
 }
@@ -1150,6 +1154,33 @@ impl<'de> Deserialize<'de> for AccessConfig {
     }
 }
 
+impl AccessConfig {
+    /// Note the line of each `[access.<name>] input_mode` in `content`, so a diagnostic can
+    /// name it. The values carry no span after parsing, so the text is read again.
+    pub(crate) fn record_input_mode_lines(&mut self, content: &str) {
+        let Ok(document) = toml_edit::ImDocument::parse(content) else {
+            return;
+        };
+        let Some(access) = document.get("access").and_then(|item| item.as_table_like()) else {
+            return;
+        };
+        for name in self.sections.keys() {
+            let span = access
+                .get(name)
+                .and_then(|item| item.as_table_like())
+                .and_then(|section| section.get("input_mode"))
+                .and_then(|item| item.span());
+            if let Some(span) = span {
+                let line = 1 + content.as_bytes()[..span.start.min(content.len())]
+                    .iter()
+                    .filter(|byte| **byte == b'\n')
+                    .count();
+                self.input_mode_lines.insert(name.clone(), line);
+            }
+        }
+    }
+}
+
 /// What startup reads from `[access]`.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct ResolvedAccess {
@@ -1165,7 +1196,9 @@ pub(crate) struct ResolvedAccess {
 
 impl AccessConfig {
     pub(crate) fn resolve(&self) -> ResolvedAccess {
-        use crate::access::policy::{parse_accept_from, AcceptFrom, RemoteInput, RemoteOwnerTui};
+        use crate::access::policy::{
+            parse_accept_from, parse_input_mode, AcceptFrom, RemoteInput, RemoteOwnerTui,
+        };
         let mut out = ResolvedAccess {
             input_log: self.input_log.unwrap_or(true),
             node_name: "node".to_string(),
@@ -1229,6 +1262,34 @@ impl AccessConfig {
             )),
         }
         for (name, section) in &self.sections {
+            // A mode that can't be read fails closed: a typo must not leave a pane open.
+            let mode = match section.input_mode.as_deref().map(parse_input_mode) {
+                None => None,
+                Some(Ok(mode)) => Some(mode),
+                Some(Err(err)) => {
+                    let place = self
+                        .input_mode_lines
+                        .get(name)
+                        .map_or(String::new(), |line| format!(" (line {line})"));
+                    out.diagnostics.push(format!(
+                        "access.{name}.input_mode{place}: {err}; using \"human-only\""
+                    ));
+                    Some(crate::access::policy::InputMode::HumanOnly)
+                }
+            };
+            // A section with only an `input_mode` binds no policy.
+            let mode_only = section.accept_from.is_empty() && section.input_mode.is_some();
+            if let Some(mode) = mode {
+                if name == "default" {
+                    out.defaults.default_mode = mode;
+                } else {
+                    // A named `any` is kept: it overrides the default mode for that name.
+                    out.defaults.mode_by_name.insert(name.clone(), mode);
+                }
+            }
+            if mode_only {
+                continue;
+            }
             match parse_accept_from(&section.accept_from) {
                 Ok(AcceptFrom::Only(list)) if name == "default" => {
                     out.defaults.default = Some(list)
@@ -1246,8 +1307,30 @@ impl AccessConfig {
                     .push(format!("access.{name}: {err}; section skipped")),
             }
         }
+        // The bridge receives by API by design, so its mode must stay `any`.
+        if let (RemoteInput::BridgeOnly, Some(bridge)) =
+            (out.remote.input, out.remote.bridge_agent.as_deref())
+        {
+            if check_bridge_mode(bridge, &mut out.defaults.mode_by_name) {
+                out.diagnostics.push(format!(
+                    "access.{bridge}.input_mode must stay \"any\" on the bridge ({bridge}), which receives by API by design; ignored"
+                ));
+            }
+        }
         out
     }
+}
+
+/// Drop the bridge's non-`any` mode from the named modes. True when one was dropped.
+fn check_bridge_mode(
+    bridge: &str,
+    modes: &mut std::collections::BTreeMap<String, crate::access::policy::InputMode>,
+) -> bool {
+    if modes.get(bridge).is_some_and(|mode| !mode.is_any()) {
+        modes.remove(bridge);
+        return true;
+    }
+    false
 }
 
 #[derive(Debug, Default, Deserialize)]

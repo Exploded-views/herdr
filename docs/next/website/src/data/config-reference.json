@@ -1550,7 +1550,7 @@
           "key": "access.bridge_agent",
           "type": "string",
           "default": "unset",
-          "description": "Fork-only. Agent name of this node's bridge, used only in the remote denial text."
+          "description": "Fork-only. Agent name of this node's bridge, used in the remote denial text. Under access.remote_input = \"bridge-only\" the bridge receives by API by design, so an input_mode other than \"any\" in [access.<bridge_agent>] is a config error and is ignored. Sections take input_mode = \"any\" or \"human-only\" next to accept_from (or alone)."
         },
         {
           "key": "access.remote_owner_tui",

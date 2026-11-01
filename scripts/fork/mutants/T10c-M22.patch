@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M22: the agent identity leaves out the name. Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+index 208e4782..35c65381 100644
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2130,7 +2130,7 @@ impl TerminalState {
+     /// name. `None` while no agent is detected.
+     pub(crate) fn agent_identity(&self) -> Option<String> {
+         self.effective_agent_label()
+-            .map(|label| format!("{label}|{}", self.agent_name.as_deref().unwrap_or("")))
++            .map(|label| format!("{label}|"))
+     }
+ 
+     /// An admin chose this pane's mode on purpose, for the agent that is here now.

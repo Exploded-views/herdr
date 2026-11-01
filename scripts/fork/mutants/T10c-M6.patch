@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M6: the bridge guard is not re-checked at agent start. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index 3bcb6b56..1128f76c 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -221,7 +221,7 @@ impl App {
+             return Err(AgentStartError::TargetBusy(params.pane_id));
+         }
+         // The bridge receives by API by design, so a pane with an input mode can't become it.
+-        if !terminal.input_mode.is_any() && self.state.is_bridge_name(&name) {
++        if !terminal.input_mode.is_any() && self.state.is_bridge_name("") {
+             return Err(AgentStartError::BridgeInputMode(name));
+         }
+         let runtime = self

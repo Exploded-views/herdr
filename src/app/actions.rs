@@ -1,4 +1,4 @@
-// herdr-fork: bind the sticky default access policy when an agent is first detected. Unofficial stopgap; see FORK.md.
+// herdr-fork: bind the sticky default access policy and input mode when an agent is first detected. Unofficial stopgap; see FORK.md.
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
@@ -1673,6 +1673,15 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_update_terminal_state(
+        &mut self,
+        pane_id: PaneId,
+        update: impl FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
+    ) {
+        self.update_terminal_state(pane_id, update);
+    }
+
     fn update_terminal_state<F>(&mut self, pane_id: PaneId, update: F) -> Option<PaneStateUpdate>
     where
         F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
@@ -1712,9 +1721,27 @@ impl AppState {
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
             let mutation = update(terminal);
+            // An admin's mark on the mode is for the agent it was set for. When the agent is
+            // released, or a different one (or the same one under another name) is detected,
+            // the new occupant starts without it, so the default mode reaches it in the same
+            // mutation. A detection that blinks, or a restored pane before its agent is seen,
+            // is no change.
+            if terminal.input_mode_set_explicitly {
+                let released = mutation.as_ref().is_some_and(|m| m.agent_released);
+                if released {
+                    terminal.clear_input_mode_mark();
+                    self.session_dirty = true;
+                } else if terminal.drop_stale_input_mode_mark() {
+                    self.session_dirty = true;
+                }
+            }
             // Any mutation that leaves an agent here (a detection, a label switch at
             // the same state, a name) can be the first sight of it.
-            if super::access::apply_default_access(&self.access_defaults, terminal) {
+            if super::access::apply_default_access(
+                &self.access_defaults,
+                self.remote_settings.bridge_if_bridge_only(),
+                terminal,
+            ) {
                 self.session_dirty = true;
             }
             terminal.reconcile_reported_resume();

@@ -1,4 +1,4 @@
-// herdr-fork: per-pane `access` policy (not cleared by agent release). Unofficial stopgap; see FORK.md.
+// herdr-fork: per-pane `access` policy and `input_mode` (neither cleared by agent release). Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -160,6 +160,15 @@ pub struct TerminalState {
     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
     /// Set when a pane was opened on purpose (`unbind_access`); the default never rebinds it.
     pub(crate) access_opened_explicitly: bool,
+    /// Where this pane's input may come from, apart from the allow-list. Independent of
+    /// `access`: a pane can have a mode and no policy. Sticky like `access`.
+    pub(crate) input_mode: crate::access::policy::InputMode,
+    /// Set when an admin chose the mode on purpose (`access.pane.set --input-mode`); the
+    /// sticky default mode never touches such a pane. Cleared when a new agent is started.
+    pub(crate) input_mode_set_explicitly: bool,
+    /// The agent the mark was set for (see `agent_identity`); `None` when the pane was empty.
+    /// The mark holds only while the pane's agent is that one.
+    pub(crate) input_mode_mark_owner: Option<String>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -202,6 +211,9 @@ impl TerminalState {
             last_agent_completion_seq: None,
             access: None,
             access_opened_explicitly: false,
+            input_mode: crate::access::policy::InputMode::Any,
+            input_mode_set_explicitly: false,
+            input_mode_mark_owner: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
@@ -2112,6 +2124,41 @@ impl TerminalState {
 
     pub fn clear_manual_label(&mut self) {
         self.manual_label = None;
+    }
+
+    /// Who is in the pane, as far as the input mode mark cares: the agent in effect and its
+    /// name. `None` while no agent is detected.
+    pub(crate) fn agent_identity(&self) -> Option<String> {
+        self.effective_agent_label()
+            .map(|label| format!("{label}|{}", self.agent_name.as_deref().unwrap_or("")))
+    }
+
+    /// An admin chose this pane's mode on purpose, for the agent that is here now.
+    pub(crate) fn mark_input_mode_explicit(&mut self) {
+        self.input_mode_set_explicitly = true;
+        self.input_mode_mark_owner = self.agent_identity();
+    }
+
+    pub(crate) fn clear_input_mode_mark(&mut self) {
+        self.input_mode_set_explicitly = false;
+        self.input_mode_mark_owner = None;
+    }
+
+    /// Drop the mark when a different agent is in the pane than the one it was set for. An
+    /// agent that is not detected right now (a restored pane, a detection that blinked) is not
+    /// a change. Returns true when the mark was dropped.
+    pub(crate) fn drop_stale_input_mode_mark(&mut self) -> bool {
+        let Some(current) = self.agent_identity() else {
+            return false;
+        };
+        if self.input_mode_set_explicitly
+            && (self.input_mode_mark_owner.is_none()
+                || self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
+        {
+            self.clear_input_mode_mark();
+            return true;
+        }
+        false
     }
 
     pub fn set_agent_name(&mut self, name: String) {

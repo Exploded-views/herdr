@@ -1,10 +1,10 @@
-// herdr-fork: handlers for the `access.pane.*` methods. Unofficial stopgap; see FORK.md.
+// herdr-fork: handlers for the `access.pane.*` methods, including the pane's input mode. Unofficial stopgap; see FORK.md.
 //! `access.pane.set` and `access.pane.get`. The gate has already decided who
 //! may ask: `set` is an `AccessAdmin` request (only a caller outside every
 //! pane), `get` is open. Nothing here handles a token.
 
 use super::responses;
-use crate::access::policy::{parse_accept_from, AcceptFrom};
+use crate::access::policy::{parse_accept_from, parse_input_mode, AcceptFrom};
 use crate::api::schema::{AccessPaneGetParams, AccessPaneSetParams, ResponseResult};
 use crate::app::App;
 use crate::terminal::TerminalId;
@@ -29,14 +29,25 @@ impl App {
         Ok((public, terminal))
     }
 
-    /// The pane's policy as the wire shows it: no binding and `["any"]` when
-    /// the pane holds none.
+    /// The pane's policy and input mode as the wire shows them: no binding and `["any"]`
+    /// when the pane holds no policy.
     fn access_policy_response(&self, id: String, pane_id: String, terminal: &TerminalId) -> String {
         let policy = self
             .state
             .terminals
             .get(terminal)
             .and_then(|state| state.access.as_ref());
+        let input_mode = self
+            .state
+            .terminals
+            .get(terminal)
+            .map_or("any", |state| state.input_mode.as_str())
+            .to_string();
+        let input_mode_explicit = self
+            .state
+            .terminals
+            .get(terminal)
+            .is_some_and(|state| state.input_mode_set_explicitly);
         let (binding, accept_from) = match policy {
             Some(policy) => (
                 Some(policy.binding.to_string()),
@@ -55,6 +66,8 @@ impl App {
                 pane_id,
                 binding,
                 accept_from,
+                input_mode,
+                input_mode_explicit,
             },
         )
     }
@@ -68,13 +81,48 @@ impl App {
             Ok(found) => found,
             Err(message) => return responses::encode_error(id, "pane_not_found", message),
         };
-        let accept = match parse_accept_from(&params.accept_from) {
-            Ok(accept) => accept,
-            Err(message) => return responses::encode_error(id, "invalid_accept_from", message),
+        // Validate everything before changing anything.
+        let accept = match params.accept_from.as_deref().map(parse_accept_from) {
+            Some(Ok(accept)) => Some(accept),
+            Some(Err(message)) => {
+                return responses::encode_error(id, "invalid_accept_from", message)
+            }
+            None => None,
         };
+        let mode = match params.input_mode.as_deref().map(parse_input_mode) {
+            Some(Ok(mode)) => Some(mode),
+            Some(Err(message)) => {
+                return responses::encode_error(id, "invalid_input_mode", message)
+            }
+            None => None,
+        };
+        // The bridge receives by API by design: its pane stays `any`.
+        if mode.is_some_and(|mode| !mode.is_any()) {
+            let bridge = self
+                .state
+                .terminals
+                .get(&terminal)
+                .and_then(|state| state.agent_name.as_deref())
+                .filter(|name| self.state.is_bridge_name(name));
+            if let Some(bridge) = bridge {
+                return responses::encode_error(
+                    id,
+                    "access_bridge_input_mode",
+                    crate::app::access::bridge_mode_message(bridge),
+                );
+            }
+        }
+        if accept.is_none() && mode.is_none() {
+            return responses::encode_error(
+                id,
+                "access_pane_set_empty",
+                "set needs accept_from, input_mode or both",
+            );
+        }
         match accept {
-            AcceptFrom::Any => self.state.unbind_access(&terminal),
-            AcceptFrom::Only(list) => {
+            None => {}
+            Some(AcceptFrom::Any) => self.state.unbind_access(&terminal),
+            Some(AcceptFrom::Only(list)) => {
                 if let Err(err) = self.state.bind_access(&terminal, list) {
                     tracing::error!(%err, pane = %pane_id, "could not bind a pane's access policy");
                     return responses::encode_error(
@@ -82,6 +130,19 @@ impl App {
                         "access_bind_failed",
                         format!("could not bind the pane's access policy: {err}"),
                     );
+                }
+            }
+        }
+        if let Some(mode) = mode {
+            if let Some(state) = self.state.terminals.get_mut(&terminal) {
+                // Chosen on purpose, even when it is `any`: the sticky default leaves it be.
+                let changed = state.input_mode != mode
+                    || !state.input_mode_set_explicitly
+                    || state.input_mode_mark_owner != state.agent_identity();
+                state.input_mode = mode;
+                state.mark_input_mode_explicit();
+                if changed {
+                    self.state.mark_session_dirty();
                 }
             }
         }

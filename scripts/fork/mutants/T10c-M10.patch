@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M10: a via_ssh client counts as human on the client path (I2). Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index b71608d3..520f18bf 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -483,7 +483,7 @@ pub(crate) fn check_input_mode(
+             InputPath::Api => Err(AccessDenied::HumanOnly {
+                 label: label.to_string(),
+             }),
+-            InputPath::Client if matches!(caller, CallerClass::Outside { via_ssh: false }) => {
++            InputPath::Client if matches!(caller, CallerClass::Outside { .. }) => {
+                 Ok(())
+             }
+             InputPath::Client => Err(AccessDenied::HumanOnly {
