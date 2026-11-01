@@ -1,4 +1,4 @@
-// herdr-fork: bind, unbind and default-bind per-pane access policies. Unofficial stopgap; see FORK.md.
+// herdr-fork: bind, unbind and default-bind per-pane access policies and input modes; the bridge keeps mode `any`. Unofficial stopgap; see FORK.md.
 //! Policy state only. Nothing here gates a request; the server gate reads
 //! `TerminalState::access` in a later task.
 
@@ -102,38 +102,75 @@ impl AppState {
                 }
             }
         }
+        // `[access.<name>] input_mode` is bound at the start, unless the pane has a mode
+        // already. The bridge never gets one (its config entry was dropped at load).
+        if let Some(mode) = self.access_defaults.mode_by_name.get(name).copied() {
+            if !self.is_bridge_name(name) {
+                if let Some(state) = self.terminals.get_mut(terminal) {
+                    if state.input_mode.is_any() {
+                        state.input_mode = mode;
+                        self.mark_session_dirty();
+                    }
+                }
+            }
+        }
         Ok(())
     }
+
+    /// Is `name` the bridge agent while remote input is bridge-only? The bridge receives
+    /// by API by design, so its pane's input mode must stay `any`.
+    pub(crate) fn is_bridge_name(&self, name: &str) -> bool {
+        self.remote_settings.bridge_if_bridge_only() == Some(name)
+    }
+}
+
+/// The refusal for a non-`any` mode on the bridge.
+pub(crate) fn bridge_mode_message(bridge: &str) -> String {
+    format!(
+        "input mode must stay \"any\" on the bridge ({bridge}), which receives by API by design"
+    )
 }
 
 /// Bind `[access.default]` to a terminal that is an agent, holds no policy
 /// and was not opened on purpose. Returns true when it bound. One `Option`
-/// check when no default is configured.
+/// check when no default is configured. The default's `input_mode` is bound
+/// with it, except on the bridge, whose mode stays `any`.
 pub(crate) fn apply_default_access(
     defaults: &AccessDefaults,
+    bridge: Option<&str>,
     terminal: &mut TerminalState,
 ) -> bool {
-    let Some(default) = defaults.default.as_ref() else {
+    if defaults.default.is_none() && defaults.default_mode.is_any() {
         return false;
-    };
+    }
     if terminal.access.is_some()
         || terminal.access_opened_explicitly
         || !terminal.is_agent_terminal()
     {
         return false;
     }
-    let binding = match AccessBindingId::mint() {
-        Ok(binding) => binding,
-        Err(err) => {
-            tracing::error!(%err, "could not mint an access binding; pane left open");
-            return false;
+    let mut bound = false;
+    if let Some(default) = defaults.default.as_ref() {
+        match AccessBindingId::mint() {
+            Ok(binding) => {
+                terminal.access = Some(AccessPolicy {
+                    binding,
+                    accept_from: default.clone(),
+                });
+                bound = true;
+            }
+            Err(err) => {
+                tracing::error!(%err, "could not mint an access binding; pane left open");
+                return false;
+            }
         }
-    };
-    terminal.access = Some(AccessPolicy {
-        binding,
-        accept_from: default.clone(),
-    });
-    true
+    }
+    let on_bridge = bridge.is_some_and(|bridge| terminal.agent_name.as_deref() == Some(bridge));
+    if !defaults.default_mode.is_any() && terminal.input_mode.is_any() && !on_bridge {
+        terminal.input_mode = defaults.default_mode;
+        bound = true;
+    }
+    bound
 }
 
 impl AppState {
@@ -143,14 +180,18 @@ impl AppState {
         let Some(state) = self.terminals.get_mut(terminal) else {
             return;
         };
-        if apply_default_access(&self.access_defaults, state) {
+        if apply_default_access(
+            &self.access_defaults,
+            self.remote_settings.bridge_if_bridge_only(),
+            state,
+        ) {
             self.mark_session_dirty();
         }
     }
 
     /// After a restore: panes that already hold agents get the default too.
     pub(crate) fn bind_default_access_all(&mut self) {
-        if self.access_defaults.default.is_none() {
+        if self.access_defaults.default.is_none() && self.access_defaults.default_mode.is_any() {
             return;
         }
         let ids: Vec<TerminalId> = self.terminals.keys().cloned().collect();

@@ -1,4 +1,4 @@
-// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config or starting with `acc_` are refused; `input_log` and `node_name` are reserved agent names. Unofficial stopgap; see FORK.md.
+// herdr-fork: `agent start` binds, keeps or opens a pane's access policy, and agent names reserved for the access config or starting with `acc_` are refused; `input_log` and `node_name` are reserved agent names; an `agent start` or rename into the bridge's name is refused on a pane with an input mode, and a failed start puts the mode back. Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -128,6 +128,9 @@ impl App {
             }
         }
 
+        let is_bridge = normalized_name
+            .as_deref()
+            .is_some_and(|name| self.state.is_bridge_name(name));
         let Some(terminal) = self
             .state
             .terminals
@@ -138,6 +141,12 @@ impl App {
                 target: target.to_string(),
             }));
         };
+        // The bridge receives by API by design, so a pane with an input mode can't become it.
+        if is_bridge && !terminal.input_mode.is_any() {
+            return Err(AgentRenameError::BridgeInputMode(
+                normalized_name.unwrap_or_default(),
+            ));
+        }
         if terminal.managed_agent_launch_pending() {
             return Err(AgentRenameError::PendingLaunch);
         }
@@ -211,6 +220,10 @@ impl App {
         if terminal.is_agent_terminal() || terminal.managed_agent_kind().is_some() {
             return Err(AgentStartError::TargetBusy(params.pane_id));
         }
+        // The bridge receives by API by design, so a pane with an input mode can't become it.
+        if !terminal.input_mode.is_any() && self.state.is_bridge_name(&name) {
+            return Err(AgentStartError::BridgeInputMode(name));
+        }
         let runtime = self
             .terminal_runtimes
             .get(&terminal_id)
@@ -238,11 +251,13 @@ impl App {
 
         // Settle the policy before anything is sent, so a pane never runs an
         // agent it could not bind. A failed send puts the previous state back.
-        let previous_access = self
-            .state
-            .terminals
-            .get(&terminal_id)
-            .map(|terminal| (terminal.access.clone(), terminal.access_opened_explicitly));
+        let previous_access = self.state.terminals.get(&terminal_id).map(|terminal| {
+            (
+                terminal.access.clone(),
+                terminal.access_opened_explicitly,
+                terminal.input_mode,
+            )
+        });
         self.state
             .bind_access_for_start(&terminal_id, &name, explicit_access)
             .map_err(|err| AgentStartError::AccessBindFailed(err.to_string()))?;
@@ -256,9 +271,10 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
-            if let Some((access, opened)) = previous_access {
+            if let Some((access, opened, mode)) = previous_access {
                 terminal.access = access;
                 terminal.access_opened_explicitly = opened;
+                terminal.input_mode = mode;
             }
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
@@ -318,6 +334,10 @@ impl App {
             AgentStartError::InputFailed(message) => crate::api::schema::ErrorBody {
                 code: "agent_start_input_failed".into(),
                 message,
+            },
+            AgentStartError::BridgeInputMode(bridge) => crate::api::schema::ErrorBody {
+                code: "access_bridge_input_mode".into(),
+                message: super::access::bridge_mode_message(&bridge),
             },
             AgentStartError::DuplicateName { name, candidates } => crate::api::schema::ErrorBody {
                 code: "agent_name_taken".into(),
@@ -380,6 +400,10 @@ impl App {
     ) -> crate::api::schema::ErrorBody {
         match err {
             AgentRenameError::Target(err) => self.agent_target_error_body(err),
+            AgentRenameError::BridgeInputMode(bridge) => crate::api::schema::ErrorBody {
+                code: "access_bridge_input_mode".into(),
+                message: super::access::bridge_mode_message(&bridge),
+            },
             AgentRenameError::InvalidName => crate::api::schema::ErrorBody {
                 code: "invalid_agent_name".into(),
                 message: INVALID_AGENT_NAME_MESSAGE.into(),
@@ -508,6 +532,8 @@ pub(super) enum AgentStartError {
     TargetBusy(String),
     TargetUnavailable(String),
     InputFailed(String),
+    /// The name is the bridge's and the pane has an input mode.
+    BridgeInputMode(String),
     DuplicateName {
         name: String,
         candidates: Vec<crate::api::schema::AgentInfo>,
@@ -515,6 +541,8 @@ pub(super) enum AgentStartError {
 }
 
 pub(super) enum AgentRenameError {
+    /// The name is the bridge's and the pane has an input mode.
+    BridgeInputMode(String),
     Target(TerminalTargetError),
     InvalidName,
     NotAgent,

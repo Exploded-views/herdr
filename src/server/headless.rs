@@ -1,4 +1,4 @@
-// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes; shell-client pane input and pane clipboard-image paste are checked against the pane's policy with the client's own caller class; client input is recorded in the input log. Unofficial stopgap; see FORK.md.
+// herdr-fork: gate every api request through check_access before it touches a pane, and again right before dispatch; reads skip the alt-screen wheel harvest when Input would be refused, and a harvest stops when that changes; shell-client pane input and pane clipboard-image paste are checked against the pane's policy with the client's own caller class; client input is recorded in the input log; a pane's input mode is checked for attached terminals' keystrokes, mouse reports, scrolling and image paste. Unofficial stopgap; see FORK.md.
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -1272,13 +1272,22 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
+                let terminal_id = terminal_id.clone();
+                if !self.attach_input_permitted(
+                    client_id,
+                    &terminal_id,
+                    "attach.input",
+                    path.len() as u64,
+                ) {
+                    return true;
+                }
+                if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
                     let payload = paste_payload_for_runtime(runtime, &path);
                     let sent = payload.len() as u64;
                     if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
                         warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach clipboard image paste failed");
                     } else {
-                        self.log_attach_input(client_id, terminal_id, "attach.input", sent);
+                        self.log_attach_input(client_id, &terminal_id, "attach.input", sent, true);
                     }
                 }
                 true
@@ -1483,14 +1492,18 @@ impl HeadlessServer {
         else {
             return false;
         };
-        let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) else {
-            return false;
-        };
-
+        let terminal_id = terminal_id.clone();
         // A page key the child owns is the client's own bytes; a wheel is a mouse report.
         let route = match &source {
             AttachScrollSource::PageKey { .. } => "attach.input",
             AttachScrollSource::Wheel => "attach.mouse",
+        };
+        if !self.attach_input_permitted(client_id, &terminal_id, route, 0) {
+            return true;
+        }
+        let terminal_id = &terminal_id;
+        let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) else {
+            return false;
         };
         let bytes_before = runtime.user_bytes_sent();
         if let Err(err) =
@@ -1503,6 +1516,7 @@ impl HeadlessServer {
             terminal_id,
             route,
             runtime.user_bytes_sent().saturating_sub(bytes_before),
+            true,
         );
         true
     }
@@ -1526,6 +1540,12 @@ impl HeadlessServer {
             return false;
         };
         let terminal_id = terminal_id.clone();
+        if !self.attach_input_permitted(client_id, &terminal_id, "attach.mouse", 0) {
+            return true;
+        }
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
         let terminal_size = client.terminal_size;
         let cell_size = client.cell_size;
         let pixel_mouse = client.pixel_mouse;
@@ -1560,6 +1580,7 @@ impl HeadlessServer {
             &terminal_id,
             "attach.mouse",
             runtime.user_bytes_sent().saturating_sub(bytes_before),
+            true,
         );
         true
     }
@@ -2253,6 +2274,16 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
+                let terminal_id = terminal_id.clone();
+                if !self.attach_input_permitted(
+                    client_id,
+                    &terminal_id,
+                    "attach.input",
+                    data.len() as u64,
+                ) {
+                    return true;
+                }
+                let terminal_id = &terminal_id;
                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                     let bytes_before = runtime.user_bytes_sent();
                     if let Err(err) = apply_terminal_attach_input(runtime, data) {
@@ -2263,6 +2294,7 @@ impl HeadlessServer {
                         terminal_id,
                         "attach.input",
                         runtime.user_bytes_sent().saturating_sub(bytes_before),
+                        true,
                     );
                 }
                 true

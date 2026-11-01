@@ -7,7 +7,10 @@
 input (`agent prompt`, `agent send-keys`, `pane send-text`, `pane send-keys`, `pane run`,
 `agent start`, and typing through a TUI client running inside another pane; attach is
 excepted, see the known bypasses) unless it comes from a sender
-on its allow-list. The allow-list is off by default.
+on its allow-list. The allow-list is off by default. A pane can also be set to an input mode,
+`human-only`, which refuses input sent through the herdr API and takes client input only from a
+person at a terminal outside every pane (see "The input mode" below). The mode is `any`, which
+changes nothing, by default.
 
 The official path is upstream discussion
 [#5638](https://github.com/herdrdev/herdr/discussions/5638). herdr does not accept
@@ -61,6 +64,21 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   (default `node`), never the hostname. A burst of typing is one entry per 2 seconds; a
   refusal is always its own entry (written within 50 ms after its handler returns). The server flushes the log before
   it stops or hands off.
+- **The input mode (`human-only`).** `herdr access pane set <pane> --input-mode human-only`
+  (or `input_mode = "human-only"` in `[access.default]` or `[access.<name>]`) keeps a pane to
+  typed input. The `api` path (`agent prompt`, `agent send-keys`, `agent start`,
+  `pane send-text`, `pane send-keys`, `pane run`) is refused for every sender, and the `client`
+  path (a TUI's typing, mouse reports and image paste, attached or not) is taken only from a
+  client classified outside every pane (local, or over SSH under `remote_owner_tui = "allow"`).
+  A client in a pane, or one not shown to be outside, gets the same refusal. It refuses rather
+  than holds: a held input needs an approval UI, a queue and a rule for who releases it, which
+  are new attack surface, and it leaves the sender waiting and tempted to try another route.
+  The mode runs after the allow-list, so a request the allow-list refuses keeps the
+  allow-list's text. It is independent of the allow-list. The bridge (`bridge_agent` under
+  `remote_input = "bridge-only"`) receives by API by design, so its pane stays `any`: the config
+  entry is a diagnostic and is ignored, and `access pane set`, `agent start <bridge>` and
+  `agent rename` to the bridge's name are refused when they would break that. `flag` and an
+  alert file are not in v1.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 
@@ -128,13 +146,25 @@ stop a process that sets out to get around it:
   the next input arrives, a read or a stop closes it: on a quiet pane it may stay out of the file
   indefinitely, and a crash loses it however old it is. A read with `access log` writes everything first. When the writer falls behind, entries are dropped and a `dropped` marker is written;
   `access log` shows the count.
+- **What the input mode can tell.** It tells input sent through the herdr API apart from
+  keystrokes at an attached or shell client. It does not tell the owner from an agent driving a
+  TUI from outside every pane, local or remote (`expect`, `script`, or a remote `herdr
+  --remote`): keystrokes from an outside client count as human. A process that escapes its
+  pane's ancestry (`setsid`, `tmux`) and then attaches counts as an outside client, and so as
+  human. Input that reaches a PTY outside herdr (`TIOCSTI`, `ptrace`) is not seen, logged or
+  moded, and popup input is logged but never moded. An attached pane client that only scrolls a
+  `human-only` pane's history is refused too. The sticky default's `input_mode` is bound the first
+  time an agent is seen in a pane that holds no policy and was not opened on purpose, so lowering
+  a pane with `--input-mode any` can be undone the next time such a pane is detected.
 - "The human" can't be identified. A client outside every pane is treated as the human, and
   a daemonized process looks the same.
 
 **Known bypasses in v1.** These are scheduled for v1.1 or left to upstream:
 
 - **Attach.** `herdr agent attach` from inside a pane can still type into a protected pane.
-  Terminal attach and the attach client's raw input are not gated.
+  Terminal attach and the attach client's raw input are not gated by the allow-list. They are
+  gated by the input mode: a pane set to `human-only` takes attach input only from an outside
+  client.
 - **Live handoff.** `herdr server live-handoff --import-exe` can swap in a build without the
   allow-list.
 - **Control requests** (close, rename, report-agent on another pane, `server stop`,

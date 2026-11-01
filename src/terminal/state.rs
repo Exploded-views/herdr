@@ -1,4 +1,4 @@
-// herdr-fork: per-pane `access` policy (not cleared by agent release). Unofficial stopgap; see FORK.md.
+// herdr-fork: per-pane `access` policy and `input_mode` (neither cleared by agent release). Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -160,6 +160,9 @@ pub struct TerminalState {
     pub(crate) access: Option<crate::access::policy::AccessPolicy>,
     /// Set when a pane was opened on purpose (`unbind_access`); the default never rebinds it.
     pub(crate) access_opened_explicitly: bool,
+    /// Where this pane's input may come from, apart from the allow-list. Independent of
+    /// `access`: a pane can have a mode and no policy. Sticky like `access`.
+    pub(crate) input_mode: crate::access::policy::InputMode,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -202,6 +205,7 @@ impl TerminalState {
             last_agent_completion_seq: None,
             access: None,
             access_opened_explicitly: false,
+            input_mode: crate::access::policy::InputMode::Any,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,

@@ -1300,11 +1300,21 @@
         "AccessPaneSetParams": {
           "properties": {
             "accept_from": {
-              "description": "Who the pane accepts input from: `none`, `outside`, `caller:<name>`, or\n`any` alone, which removes the policy and opens the pane on purpose.",
+              "description": "Who the pane accepts input from: `none`, `outside`, `caller:<name>`, or\n`any` alone, which removes the policy and opens the pane on purpose. Omit it to\nleave the policy as it is (when setting `input_mode` alone).",
               "items": {
                 "type": "string"
               },
-              "type": "array"
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "input_mode": {
+              "description": "Where the pane's input may come from: `any` (default) or `human-only`, which\nrefuses input sent through the herdr API and client input from anything but an\noutside client. `flag` is not available in v1. Omit it to leave the mode as it is.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "pane_id": {
               "description": "Public id of the pane whose policy is set.",
@@ -1312,8 +1322,7 @@
             }
           },
           "required": [
-            "pane_id",
-            "accept_from"
+            "pane_id"
           ],
           "type": "object"
         },
@@ -9603,6 +9612,11 @@
                     "string",
                     "null"
                   ]
+                },
+                "input_mode": {
+                  "default": "any",
+                  "description": "`any` or `human-only`.",
+                  "type": "string"
                 },
                 "pane_id": {
                   "type": "string"

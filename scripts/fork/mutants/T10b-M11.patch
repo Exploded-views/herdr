@@ -1,8 +1,9 @@
 # herdr-fork: mutant T10b-M11. Unofficial stopgap; see FORK.md.
 diff --git a/src/server/headless.rs b/src/server/headless.rs
+index e982acc9..520d5c92 100644
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -1498,12 +1498,7 @@
+@@ -1511,13 +1511,7 @@ impl HeadlessServer {
          {
              warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
          }
@@ -11,6 +12,7 @@ diff --git a/src/server/headless.rs b/src/server/headless.rs
 -            terminal_id,
 -            route,
 -            runtime.user_bytes_sent().saturating_sub(bytes_before),
+-            true,
 -        );
 +        let _ = (route, bytes_before);
          true

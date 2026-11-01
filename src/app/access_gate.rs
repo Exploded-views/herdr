@@ -1,4 +1,4 @@
-// herdr-fork: the access gate: classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding; classification uses the shell identity cached at spawn or adoption, and Input requests are recorded in the input log when it is on. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate (a pane's input mode is checked after its allow-list, on the api path, the shell-client path and for attached terminals): classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding; classification uses the shell identity cached at spawn or adoption, and Input requests are recorded in the input log when it is on. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -9,9 +9,10 @@
 //! `agent.start` that carries `accept_from`, which are always checked.
 
 use crate::access::caller::{classify, Caller};
+use crate::access::input_log::InputPath;
 use crate::access::policy::{
-    decide, is_looser, parse_accept_from, AcceptFrom, AccessDenied, AccessPolicy, CallerClass,
-    GateTarget, RemoteInput, RemoteOwnerTui,
+    check_input_mode, decide, is_looser, parse_accept_from, AcceptFrom, AccessDenied, AccessPolicy,
+    CallerClass, GateTarget, InputMode, RemoteInput, RemoteOwnerTui,
 };
 use crate::api::schema::{AccessClass, AgentStartParams, Method};
 use crate::terminal::TerminalId;
@@ -35,16 +36,42 @@ fn denied_from(denied: &AccessDenied) -> &str {
     match denied {
         AccessDenied::Input { from, .. } | AccessDenied::Control { from, .. } => from,
         AccessDenied::Remote { .. } => "remote",
+        AccessDenied::HumanOnly { .. } => "human-only",
     }
 }
 
 impl App {
-    /// True when some pane holds a policy.
+    /// True when some pane holds a policy or an input mode.
     pub(crate) fn any_access_protected(&self) -> bool {
         self.state
             .terminals
             .values()
-            .any(|terminal| terminal.access.is_some())
+            .any(|terminal| terminal.access.is_some() || !terminal.input_mode.is_any())
+    }
+
+    /// Apply the pane's input mode to an input the allow-list admitted. A target that is
+    /// not a pane has no mode. `Any` reads one field and returns.
+    fn input_mode_check(
+        &self,
+        target: &GateTarget<'_>,
+        class: &CallerClass,
+        path: InputPath,
+    ) -> Result<(), AccessDenied> {
+        let (GateTarget::Input {
+            label, terminal, ..
+        }
+        | GateTarget::PaneControl {
+            label, terminal, ..
+        }) = target
+        else {
+            return Ok(());
+        };
+        let mode = self
+            .state
+            .terminals
+            .get(*terminal)
+            .map_or(InputMode::Any, |state| state.input_mode);
+        check_input_mode(mode, path, class, label)
     }
 
     /// The gate has nothing to enforce for this caller: no pane is protected,
@@ -179,7 +206,10 @@ impl App {
         } else {
             Ok(())
         };
-        let result = pane_result.and(admin_result);
+        // The mode check runs last: an allow-list refusal keeps its own text.
+        let result = pane_result
+            .and(admin_result)
+            .and_then(|()| self.input_mode_check(&target, &class, InputPath::Api));
         if let (true, Some(last)) = (logs_input, log) {
             if let GateTarget::Input {
                 label, terminal, ..
@@ -233,6 +263,9 @@ impl App {
         let class = self.classify_caller(caller);
         let target = self.pane_gate_target(ws_idx, pane_id, false);
         decide(&target, &class, &self.state.remote_settings).is_ok()
+            && self
+                .input_mode_check(&target, &class, InputPath::Api)
+                .is_ok()
     }
 
     /// False when this read could send synthetic input into its pane (the
@@ -518,7 +551,7 @@ impl App {
         match denied {
             AccessDenied::Input { label, .. } => AccessDenied::Input { label, from },
             AccessDenied::Control { label, .. } => AccessDenied::Control { label, from },
-            remote @ AccessDenied::Remote { .. } => remote,
+            other @ (AccessDenied::Remote { .. } | AccessDenied::HumanOnly { .. }) => other,
         }
     }
 
@@ -568,7 +601,31 @@ impl App {
         let class = self.owner_tui_class(self.classify_caller(caller));
         let target = self.pane_gate_target(ws_idx, pane, false);
         decide(&target, &class, &self.state.remote_settings)
+            .and_then(|()| self.input_mode_check(&target, &class, InputPath::Client))
             .map_err(|denied| self.with_bridge_binding(self.with_public_pane_id(&class, denied)))
+    }
+
+    /// May an attached terminal's client send keystrokes, mouse reports or a pasted image
+    /// into `terminal`? Attach input is not gated by the allow-list (the documented attach
+    /// bypass), but it counts for the input mode: `human-only` takes it only from a client
+    /// classified `Outside`. A pane with mode `any` reads one field and returns.
+    pub(crate) fn check_attach_input(
+        &self,
+        caller: &Caller,
+        terminal: &TerminalId,
+    ) -> Result<(), AccessDenied> {
+        let mode = self
+            .state
+            .terminals
+            .get(terminal)
+            .map_or(InputMode::Any, |state| state.input_mode);
+        if mode.is_any() {
+            return Ok(());
+        }
+        let class = self.owner_tui_class(self.classify_caller(caller));
+        let label = self.pane_label_of_terminal(terminal);
+        check_input_mode(mode, InputPath::Client, &class, &label)
+            .map_err(|denied| self.with_public_pane_id(&class, denied))
     }
 
     /// May a shell client type into, or paste an image into, the popup terminal? Pane
@@ -977,6 +1034,20 @@ mod tests {
         let _ = shell.wait();
     }
 
+    #[tokio::test]
+    async fn read_harvest_and_pane_input_checks_honor_human_only() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let terminal = terminal_of(&app, panes[0]);
+        assert!(app.terminal_input_allowed(&terminal, &outside()));
+        // A mode alone, with no policy anywhere, turns the gate on.
+        app.state.terminals.get_mut(&terminal).unwrap().input_mode = InputMode::HumanOnly;
+        assert!(app.any_access_protected());
+        assert!(!app.terminal_input_allowed(&terminal, &outside()));
+        assert!(!app.input_allowed_on(0, panes[0], &outside()));
+        assert!(app.input_allowed_on(0, panes[1], &outside()));
+    }
+
     /// `check_access` is the gate without the log: its idle shortcut is the only thing that
     /// lets a request through unexamined, so a protected pane and bridge-only must defeat it.
     #[tokio::test]
@@ -1049,7 +1120,8 @@ mod tests {
 
     /// Budget (global constraints): off p95 <= 1 us; on p95 <= 50 us with 16
     /// panes, 1 policy and 2 callers; the lineage walk p95 <= 250 us on macOS
-    /// and <= 1 ms on the aarch64 Linux image. Run by `just bench-access`.
+    /// and <= 1 ms on the aarch64 Linux image; the input mode check on an `any` pane <= 1 us.
+    /// Run by `just bench-access`.
     #[tokio::test]
     #[ignore = "manual access gate budget benchmark"]
     async fn access_gate_profile() {
@@ -1156,6 +1228,24 @@ mod tests {
         .max(measure(|| {
             black_box(app.classify_caller(black_box(&stranger)));
         }));
+
+        // Delta R2 (§5): the input mode check on a pane whose mode is `any`, which is every
+        // pane unless an operator set one: a lookup of the pane's mode and one compare.
+        let mode_target = app.gate_target(&method);
+        let mode_class = CallerClass::Outside { via_ssh: false };
+        let input_mode_any = [InputPath::Api, InputPath::Client]
+            .into_iter()
+            .map(|path| {
+                measure(|| {
+                    let _ = black_box(app.input_mode_check(
+                        black_box(&mode_target),
+                        black_box(&mode_class),
+                        black_box(path),
+                    ));
+                })
+            })
+            .max()
+            .unwrap();
 
         let log_event = |decision: &'static str, at_ms: u64| InputEvent {
             at_ms,
@@ -1318,6 +1408,10 @@ mod tests {
             classify_cached.as_nanos()
         );
         println!(
+            "access_gate input_mode_any_p95_ns={}",
+            input_mode_any.as_nanos()
+        );
+        println!(
             "access_gate record_allow_coalesce_p95_ns={}",
             record_allow_coalesce.as_nanos()
         );
@@ -1369,6 +1463,7 @@ mod tests {
             "lineage walk p95 {lineage:?} is over {lineage_budget:?}"
         );
         for (name, measured, budget) in [
+            ("input_mode_any", input_mode_any, OFF_BUDGET),
             ("classify_cached_16_panes", classify_cached, LOG_BUDGET),
             ("record_allow_coalesce", record_allow_coalesce, LOG_BUDGET),
             ("record_deny_immediate", record_deny_immediate, LOG_BUDGET),
@@ -1808,7 +1903,8 @@ mod tests {
     fn pane_set(pane: &str, accept_from: &[&str]) -> Method {
         Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
             pane_id: pane.into(),
-            accept_from: accept_from.iter().map(|s| s.to_string()).collect(),
+            accept_from: Some(accept_from.iter().map(|s| s.to_string()).collect()),
+            input_mode: None,
         })
     }
 

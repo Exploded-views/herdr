@@ -1,0 +1,16 @@
+# herdr-fork: mutant T10c-M2: human-only lets the API through: the api arm is skipped. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 6837d90d..e71ba3d0 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -465,9 +465,7 @@ pub(crate) fn check_input_mode(
+     match mode {
+         InputMode::Any => Ok(()),
+         InputMode::HumanOnly => match path {
+-            InputPath::Api => Err(AccessDenied::HumanOnly {
+-                label: label.to_string(),
+-            }),
++            InputPath::Api => Ok(()),
+             InputPath::Client if matches!(caller, CallerClass::Outside { .. }) => Ok(()),
+             InputPath::Client => Err(AccessDenied::HumanOnly {
+                 label: label.to_string(),

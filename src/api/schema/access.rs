@@ -1,4 +1,4 @@
-// herdr-fork: params and results for the `access.caller.*`, `access.pane.*` and `access.log` methods. Unofficial stopgap; see FORK.md.
+// herdr-fork: params and results for the `access.caller.*`, `access.pane.*` (including the pane's input mode) and `access.log` methods. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -26,8 +26,15 @@ pub struct AccessPaneSetParams {
     /// Public id of the pane whose policy is set.
     pub pane_id: String,
     /// Who the pane accepts input from: `none`, `outside`, `caller:<name>`, or
-    /// `any` alone, which removes the policy and opens the pane on purpose.
-    pub accept_from: Vec<String>,
+    /// `any` alone, which removes the policy and opens the pane on purpose. Omit it to
+    /// leave the policy as it is (when setting `input_mode` alone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_from: Option<Vec<String>>,
+    /// Where the pane's input may come from: `any` (default) or `human-only`, which
+    /// refuses input sent through the herdr API and client input from anything but an
+    /// outside client. `flag` is not available in v1. Omit it to leave the mode as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

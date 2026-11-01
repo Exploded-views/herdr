@@ -1,4 +1,4 @@
-// herdr-fork: restore the per-pane access policy in every restore branch; a test pins that an adopted pane caches its shell identity. Unofficial stopgap; see FORK.md.
+// herdr-fork: restore the per-pane access policy and input mode in every restore branch; a test pins that an adopted pane caches its shell identity. Unofficial stopgap; see FORK.md.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -454,6 +454,7 @@ fn unavailable_restored_terminal(
         terminal.launch_argv = pane.launch_argv.clone();
         terminal.access = pane.access.clone();
         terminal.access_opened_explicitly = pane.access_opened_explicitly;
+        terminal.input_mode = pane.input_mode;
         if let Some(session) = restored_terminal_agent_session(pane.agent_session.as_ref(), false) {
             terminal.set_persisted_agent_session(session);
         }
@@ -599,6 +600,7 @@ fn restore_tab(
             terminal.access = saved_pane.and_then(|pane| pane.access.clone());
             terminal.access_opened_explicitly =
                 saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
+            terminal.input_mode = saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -697,6 +699,8 @@ fn restore_tab(
                 terminal.access = saved_pane.and_then(|pane| pane.access.clone());
                 terminal.access_opened_explicitly =
                     saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
+                terminal.input_mode =
+                    saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1565,6 +1569,7 @@ mod tests {
                             launch_argv: None,
                             access: None,
                             access_opened_explicitly: false,
+                            input_mode: Default::default(),
                         },
                     )]),
                     zoomed: false,
@@ -1649,6 +1654,7 @@ mod tests {
                                 launch_argv: None,
                                 access: None,
                                 access_opened_explicitly: false,
+                                input_mode: Default::default(),
                             },
                         ),
                         (
@@ -1663,6 +1669,7 @@ mod tests {
                                 launch_argv: None,
                                 access: None,
                                 access_opened_explicitly: false,
+                                input_mode: Default::default(),
                             },
                         ),
                     ]),
@@ -1719,6 +1726,7 @@ mod tests {
                     launch_argv: None,
                     access: None,
                     access_opened_explicitly: false,
+                    input_mode: Default::default(),
                 },
             )
         };
@@ -1737,6 +1745,7 @@ mod tests {
             launch_argv: None,
             access: None,
             access_opened_explicitly: false,
+            input_mode: Default::default(),
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1891,6 +1900,7 @@ mod tests {
                             launch_argv: None,
                             access: None,
                             access_opened_explicitly: false,
+                            input_mode: Default::default(),
                         },
                     )]),
                     zoomed: false,
@@ -2267,6 +2277,7 @@ mod tests {
                 launch_argv: None,
                 access: None,
                 access_opened_explicitly: false,
+                input_mode: Default::default(),
             },
         );
         let mut history = SessionHistorySnapshot {

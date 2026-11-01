@@ -505,7 +505,9 @@ async fn explicit_open_survives_a_snapshot_round_trip() {
         default: Some(vec![Principal::None]),
         ..Default::default()
     };
-    assert!(!super::access::apply_default_access(&defaults, restored));
+    assert!(!super::access::apply_default_access(
+        &defaults, None, restored
+    ));
     assert!(restored.access.is_none());
 }
 
@@ -803,4 +805,204 @@ fn invalid_remote_owner_tui_denies_remote_shell_client_under_bridge_only() {
     let resolved = config.access.resolve();
     assert_eq!(resolved.remote_owner_tui, RemoteOwnerTui::Allow);
     assert_eq!(resolved.remote.input, RemoteInput::Any);
+}
+
+// Per-pane input mode.
+
+fn set_mode_request(pane: &str, mode: &str) -> crate::api::schema::Request {
+    crate::api::schema::Request {
+        id: "mode".into(),
+        method: crate::api::schema::Method::AccessPaneSet(
+            crate::api::schema::AccessPaneSetParams {
+                pane_id: pane.into(),
+                accept_from: None,
+                input_mode: Some(mode.into()),
+            },
+        ),
+    }
+}
+
+#[tokio::test]
+async fn input_mode_defaults_any_and_persists() {
+    use crate::access::policy::InputMode;
+    let mut app = test_app(&Config::default());
+    app.state.workspaces.push(Workspace::test_new("w"));
+    app.state.ensure_test_terminals();
+    app.state.active = Some(0);
+    let pane = *app.state.workspaces[0].panes.keys().next().unwrap();
+    let terminal = app.state.workspaces[0]
+        .pane_state(pane)
+        .unwrap()
+        .attached_terminal_id
+        .clone();
+    app.state.terminals.get_mut(&terminal).unwrap().cwd = std::env::current_dir().unwrap();
+    let public = app.public_pane_id(0, pane).unwrap();
+
+    // The default is `any`, and an `any` pane writes nothing about it.
+    assert_eq!(app.state.terminals[&terminal].input_mode, InputMode::Any);
+    let json = serde_json::to_string(&snapshot_of(&app.state)).unwrap();
+    assert!(!json.contains("input_mode"), "{json}");
+
+    // A mode set through the API survives a snapshot round trip. It needs no policy.
+    app.state.session_dirty = false;
+    let response = app.handle_api_request(set_mode_request(&public, "human-only"));
+    assert!(
+        response.contains("\"input_mode\":\"human-only\""),
+        "{response}"
+    );
+    assert!(app.state.terminals[&terminal].access.is_none());
+    assert!(app.state.session_dirty);
+    let json = serde_json::to_string(&snapshot_of(&app.state)).unwrap();
+    assert!(json.contains("\"input_mode\":\"human-only\""), "{json}");
+    let snapshot: SessionSnapshot = serde_json::from_str(&json).unwrap();
+    let restored = restore_terminals(&snapshot);
+    assert_eq!(restored.len(), 1);
+    assert!(restored
+        .values()
+        .all(|t| t.input_mode == InputMode::HumanOnly && t.access.is_none()));
+
+    // A saved mode that can't be read comes back human-only, never loosened.
+    let garbled = json.replace("\"human-only\"", "\"flag\"");
+    let snapshot: SessionSnapshot = serde_json::from_str(&garbled).unwrap();
+    assert!(restore_terminals(&snapshot)
+        .values()
+        .all(|t| t.input_mode == InputMode::HumanOnly));
+
+    // Lowering it back drops the field again.
+    app.handle_api_request(set_mode_request(&public, "any"));
+    let json = serde_json::to_string(&snapshot_of(&app.state)).unwrap();
+    assert!(!json.contains("input_mode"), "{json}");
+}
+
+#[test]
+fn access_config_parses_input_modes() {
+    use crate::access::policy::InputMode;
+    let config = config_from(
+        "[access.default]\ninput_mode = \"human-only\"\n[access.locked]\naccept_from = [\"none\"]\ninput_mode = \"human-only\"\n[access.plain]\ninput_mode = \"any\"\n[access.moded]\ninput_mode = \"human-only\"\n",
+    );
+    let resolved = config.access.resolve();
+
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
+    // A section with only a mode binds no policy.
+    assert_eq!(resolved.defaults.default, None);
+    assert_eq!(resolved.defaults.default_mode, InputMode::HumanOnly);
+    assert_eq!(
+        resolved.defaults.by_name.get("locked"),
+        Some(&vec![Principal::None])
+    );
+    assert!(!resolved.defaults.by_name.contains_key("moded"));
+    assert_eq!(
+        resolved.defaults.mode_by_name.get("locked"),
+        Some(&InputMode::HumanOnly)
+    );
+    assert_eq!(
+        resolved.defaults.mode_by_name.get("moded"),
+        Some(&InputMode::HumanOnly)
+    );
+    // `any` is the default and is not stored.
+    assert!(!resolved.defaults.mode_by_name.contains_key("plain"));
+
+    let config = config_from(
+        "[access.worker]\ninput_mode = \"flag\"\n[access.other]\ninput_mode = \"sometimes\"\n",
+    );
+    let resolved = config.access.resolve();
+    assert!(resolved.defaults.mode_by_name.is_empty());
+    assert_eq!(resolved.diagnostics.len(), 2, "{:?}", resolved.diagnostics);
+    assert!(resolved.diagnostics[1].contains("not available in v1"));
+    // A section with neither key is still a mistake.
+    let config = config_from("[access.empty]\n");
+    assert_eq!(config.access.resolve().diagnostics.len(), 1);
+}
+
+#[test]
+fn bridge_only_with_human_only_on_bridge_is_config_error() {
+    use crate::access::policy::InputMode;
+    let config = config_from(
+        "[access]\nremote_input = \"bridge-only\"\nbridge_agent = \"relay\"\n[access.relay]\naccept_from = [\"outside\"]\ninput_mode = \"human-only\"\n[access.worker]\ninput_mode = \"human-only\"\n",
+    );
+    let resolved = config.access.resolve();
+
+    // The key is ignored, so the bridge stays `any`; its policy and the others are untouched.
+    assert!(!resolved.defaults.mode_by_name.contains_key("relay"));
+    assert_eq!(
+        resolved.defaults.mode_by_name.get("worker"),
+        Some(&InputMode::HumanOnly)
+    );
+    assert_eq!(
+        resolved.defaults.by_name.get("relay"),
+        Some(&vec![Principal::Outside])
+    );
+    assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
+    assert!(resolved.diagnostics[0].contains("access.relay.input_mode"));
+    assert!(resolved.diagnostics[0].contains("bridge"));
+    assert!(config
+        .collect_diagnostics()
+        .iter()
+        .any(|d| d.contains("access.relay.input_mode")));
+
+    // The same section is fine when remote input is open to everyone, or names no bridge.
+    for toml in [
+        "[access.relay]\ninput_mode = \"human-only\"\n[access]\nbridge_agent = \"relay\"\n",
+        "[access]\nremote_input = \"bridge-only\"\n[access.relay]\ninput_mode = \"human-only\"\n",
+    ] {
+        let resolved = config_from(toml).access.resolve();
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
+        assert_eq!(
+            resolved.defaults.mode_by_name.get("relay"),
+            Some(&InputMode::HumanOnly)
+        );
+    }
+}
+
+#[tokio::test]
+async fn sticky_default_mode_binds_to_an_agent_pane_and_skips_the_bridge() {
+    use crate::access::policy::{AccessDefaults, InputMode, RemoteInput};
+    let defaults = AccessDefaults {
+        default: Some(vec![Principal::Outside]),
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    let agent_pane = |name: &str| {
+        let (mut state, _pane, terminal) = state_with_pane();
+        state.access_defaults = defaults.clone();
+        state.remote_settings.input = RemoteInput::BridgeOnly;
+        state.remote_settings.bridge_agent = Some("relay".into());
+        state
+            .terminals
+            .get_mut(&terminal)
+            .unwrap()
+            .set_agent_name(name.into());
+        state.bind_default_access(&terminal);
+        state.terminals.remove(&terminal).unwrap()
+    };
+
+    // An ordinary agent gets the default policy and the default mode.
+    let worker = agent_pane("worker");
+    assert!(worker.access.is_some());
+    assert_eq!(worker.input_mode, InputMode::HumanOnly);
+
+    // The bridge gets the policy but never the mode: it receives by API by design.
+    let relay = agent_pane("relay");
+    assert!(relay.access.is_some());
+    assert_eq!(relay.input_mode, InputMode::Any);
+
+    // A mode-only default needs no policy.
+    let (mut state, _pane, terminal) = state_with_pane();
+    state.access_defaults.default_mode = InputMode::HumanOnly;
+    state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .set_agent_name("worker".into());
+    state.bind_default_access_all();
+    assert!(state.terminals[&terminal].access.is_none());
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
 }

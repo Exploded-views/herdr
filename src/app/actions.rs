@@ -1,4 +1,4 @@
-// herdr-fork: bind the sticky default access policy when an agent is first detected. Unofficial stopgap; see FORK.md.
+// herdr-fork: bind the sticky default access policy and input mode when an agent is first detected. Unofficial stopgap; see FORK.md.
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
@@ -1714,7 +1714,11 @@ impl AppState {
             let mutation = update(terminal);
             // Any mutation that leaves an agent here (a detection, a label switch at
             // the same state, a name) can be the first sight of it.
-            if super::access::apply_default_access(&self.access_defaults, terminal) {
+            if super::access::apply_default_access(
+                &self.access_defaults,
+                self.remote_settings.bridge_if_bridge_only(),
+                terminal,
+            ) {
                 self.session_dirty = true;
             }
             terminal.reconcile_reported_resume();

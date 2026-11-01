@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M1: the input mode is ignored: check_input_mode never refuses. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+index 6837d90d..13e7b49e 100644
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -462,7 +462,7 @@ pub(crate) fn check_input_mode(
+     caller: &CallerClass,
+     label: &str,
+ ) -> Result<(), AccessDenied> {
+-    match mode {
++    match InputMode::Any {
+         InputMode::Any => Ok(()),
+         InputMode::HumanOnly => match path {
+             InputPath::Api => Err(AccessDenied::HumanOnly {

@@ -1,4 +1,4 @@
-// herdr-fork: tests for binding access at `agent start`. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for binding access at `agent start`, the named input mode and the bridge guard. Unofficial stopgap; see FORK.md.
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -1350,6 +1350,187 @@ mod tests {
                     "{tight:?}"
                 );
             }
+        }
+
+        // The bridge guard and the input mode.
+
+        fn set_mode(rig: &mut Rig, pane: usize, mode: &str) -> serde_json::Value {
+            let response = rig.app.handle_api_request(crate::api::schema::Request {
+                id: "mode".into(),
+                method: Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+                    pane_id: rig.panes[pane].clone(),
+                    accept_from: None,
+                    input_mode: Some(mode.into()),
+                }),
+            });
+            serde_json::from_str(&response).unwrap()
+        }
+
+        fn mode_of(rig: &Rig, pane: usize) -> crate::access::policy::InputMode {
+            rig.app.state.terminals[&rig.terminals[pane]].input_mode
+        }
+
+        const BRIDGE_MODE_MESSAGE: &str =
+            "input mode must stay \"any\" on the bridge (relay), which receives by API by design";
+
+        /// Remote input is bridge-only and the bridge is the agent named `relay`.
+        fn bridge_only(rig: &mut Rig) {
+            rig.app.state.remote_settings.input = crate::access::policy::RemoteInput::BridgeOnly;
+            rig.app.state.remote_settings.bridge_agent = Some("relay".into());
+        }
+
+        fn agent_in(rig: &mut Rig, pane: usize, name: &str) {
+            let terminal = rig
+                .app
+                .state
+                .terminals
+                .get_mut(&rig.terminals[pane])
+                .unwrap();
+            terminal.set_agent_name(name.into());
+            terminal.set_detected_state(
+                Some(crate::detect::Agent::Pi),
+                crate::detect::AgentState::Idle,
+            );
+        }
+
+        fn start_named(rig: &mut Rig, pane: usize, name: &str) -> serde_json::Value {
+            let mut params = params(&rig.panes[pane], None);
+            params.name = name.into();
+            let response = rig.app.handle_api_request(crate::api::schema::Request {
+                id: "req".into(),
+                method: Method::AgentStart(params),
+            });
+            serde_json::from_str(&response).unwrap()
+        }
+
+        #[tokio::test]
+        async fn access_pane_set_refuses_non_any_mode_on_bridge() {
+            let mut rig = rig();
+            bridge_only(&mut rig);
+            agent_in(&mut rig, 0, "relay");
+            agent_in(&mut rig, 1, "worker");
+
+            let response = set_mode(&mut rig, 0, "human-only");
+            assert_eq!(response["error"]["code"], "access_bridge_input_mode");
+            assert_eq!(response["error"]["message"], BRIDGE_MODE_MESSAGE);
+            assert_eq!(mode_of(&rig, 0), crate::access::policy::InputMode::Any);
+            // `flag` would refuse for its own reason first; either way the bridge stays `any`.
+            assert!(set_mode(&mut rig, 0, "flag")["error"].is_object());
+            assert_eq!(mode_of(&rig, 0), crate::access::policy::InputMode::Any);
+            // A policy on the bridge is fine, and so is `any`; another agent can be moded.
+            let response = set_mode(&mut rig, 0, "any");
+            assert_eq!(response["result"]["input_mode"], "any");
+            let response = set_mode(&mut rig, 1, "human-only");
+            assert_eq!(response["result"]["input_mode"], "human-only");
+            assert_eq!(
+                mode_of(&rig, 1),
+                crate::access::policy::InputMode::HumanOnly
+            );
+
+            // Without bridge-only the name means nothing.
+            rig.app.state.remote_settings.input = crate::access::policy::RemoteInput::Any;
+            let response = set_mode(&mut rig, 0, "human-only");
+            assert_eq!(response["result"]["input_mode"], "human-only");
+        }
+
+        #[tokio::test]
+        async fn agent_start_bridge_into_moded_pane_refused() {
+            let mut rig = rig();
+            bridge_only(&mut rig);
+            set_mode(&mut rig, 0, "human-only");
+
+            let response = start_named(&mut rig, 0, "relay");
+            assert_eq!(response["error"]["code"], "access_bridge_input_mode");
+            assert_eq!(response["error"]["message"], BRIDGE_MODE_MESSAGE);
+            // Nothing happened: no name, no bytes, mode untouched.
+            let terminal = &rig.app.state.terminals[&rig.terminals[0]];
+            assert!(terminal.agent_name.is_none());
+            assert_eq!(
+                mode_of(&rig, 0),
+                crate::access::policy::InputMode::HumanOnly
+            );
+            let rx = rig._receivers[0]
+                .downcast_mut::<tokio::sync::mpsc::Receiver<Bytes>>()
+                .unwrap();
+            assert!(rx.try_recv().is_err());
+
+            // The same start into a pane with the default mode is fine, as is another name.
+            let response = start_named(&mut rig, 1, "relay");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+            let response = start_named(&mut rig, 0, "worker");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+        }
+
+        #[tokio::test]
+        async fn rename_to_bridge_on_moded_pane_refused() {
+            let mut rig = rig();
+            bridge_only(&mut rig);
+            agent_in(&mut rig, 0, "worker");
+            agent_in(&mut rig, 1, "other");
+            set_mode(&mut rig, 0, "human-only");
+
+            let rename = |rig: &mut Rig, target: &str, name: &str| {
+                let response = rig.app.handle_api_request(crate::api::schema::Request {
+                    id: "rename".into(),
+                    method: Method::AgentRename(crate::api::schema::AgentRenameParams {
+                        target: target.into(),
+                        name: Some(name.into()),
+                    }),
+                });
+                serde_json::from_str::<serde_json::Value>(&response).unwrap()
+            };
+            let response = rename(&mut rig, "worker", "relay");
+            assert_eq!(response["error"]["code"], "access_bridge_input_mode");
+            assert_eq!(response["error"]["message"], BRIDGE_MODE_MESSAGE);
+            assert_eq!(
+                rig.app.state.terminals[&rig.terminals[0]]
+                    .agent_name
+                    .as_deref(),
+                Some("worker")
+            );
+            // Renaming a pane with the default mode to the bridge works, and so does another name.
+            let response = rename(&mut rig, "other", "relay");
+            assert_eq!(response["result"]["type"], "agent_info", "{response}");
+            let response = rename(&mut rig, "worker", "builder");
+            assert_eq!(response["result"]["type"], "agent_info", "{response}");
+        }
+
+        #[tokio::test]
+        async fn agent_start_binds_the_named_sections_input_mode() {
+            let mut rig = rig();
+            rig.app
+                .state
+                .access_defaults
+                .mode_by_name
+                .insert("worker".into(), crate::access::policy::InputMode::HumanOnly);
+            let response = start_named(&mut rig, 0, "worker");
+            assert_eq!(response["result"]["type"], "agent_started", "{response}");
+            assert_eq!(
+                mode_of(&rig, 0),
+                crate::access::policy::InputMode::HumanOnly
+            );
+            // Other names, and the other pane, are untouched.
+            assert_eq!(mode_of(&rig, 1), crate::access::policy::InputMode::Any);
+        }
+
+        #[tokio::test]
+        async fn a_failed_start_send_restores_the_mode() {
+            let mut rig = rig();
+            rig.app
+                .state
+                .access_defaults
+                .mode_by_name
+                .insert("worker".into(), crate::access::policy::InputMode::HumanOnly);
+            let terminal = rig.terminals[0].clone();
+            let (runtime, _rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+            runtime
+                .try_send_bytes(Bytes::from_static(b"occupied"))
+                .unwrap();
+            rig.app.terminal_runtimes.insert(terminal, runtime);
+            let response = start_named(&mut rig, 0, "worker");
+            assert_eq!(response["error"]["code"], "agent_start_input_failed");
+            assert_eq!(mode_of(&rig, 0), crate::access::policy::InputMode::Any);
         }
     }
 }

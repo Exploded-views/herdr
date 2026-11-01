@@ -86,3 +86,13 @@ a plan to send it upstream, and nothing has been proposed upstream.
   false` turns it off and restores the old behaviour exactly: nothing is classified for Input
   requests. The names `input_log` and `node_name` are no longer accepted for agents.
   *fork-only*
+- A pane can be set to an input mode, `human-only`, with `herdr access pane set <pane>
+  --input-mode human-only` (or `input_mode = "human-only"` in `[access.default]` or
+  `[access.<name>]`). Input sent through the herdr API (`agent prompt`, `agent send-keys`,
+  `agent start`, `pane send-text`, `pane send-keys`, `pane run`) is then refused for every
+  sender, and client input (typing, mouse reports and image paste, in a TUI or an attached
+  terminal) is taken only from a client outside every pane. The refusal is immediate and the
+  text says the pane accepts only typed input. The mode is checked after the pane's allow-list,
+  is saved with the session, and shows in `access pane get`. The default is `any`, which
+  changes nothing. The bridge's pane stays `any`. `flag` and an alert file are not in v1.
+  *upstream candidate*

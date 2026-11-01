@@ -1,0 +1,15 @@
+# herdr-fork: mutant T10c-M5b: the bridge guard is skipped in the config. Unofficial stopgap; see FORK.md.
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 3713ecb5..dd1b6f2a 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -1290,7 +1290,8 @@ fn check_bridge_mode(
+     bridge: &str,
+     modes: &mut std::collections::BTreeMap<String, crate::access::policy::InputMode>,
+ ) -> bool {
+-    modes.remove(bridge).is_some()
++    let _ = (bridge, modes);
++    false
+ }
+ 
+ #[derive(Debug, Default, Deserialize)]

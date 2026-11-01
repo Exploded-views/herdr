@@ -3,7 +3,7 @@ title: CLI リファレンス
 description: セッション、ワークスペース、タブ、ペイン、通知、エージェント、wait、インテグレーション、ステータスのための Herdr コマンド。
 ---
 
-{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` and the caller token file; see FORK.md */}
+{/* herdr-fork: documents `agent start --accept-from`, `access caller`, `access pane` (including `--input-mode`) and the caller token file; see FORK.md */}
 
 Herdr の CLI は、インテグレーションやエージェントが使うのと同じローカルソケット API を通じて、実行中のサーバーと通信します。
 
@@ -420,11 +420,15 @@ HERDR_CALLER_TOKEN_FILE=PATH herdr pane send-text w1:p1 "hello"
 フォーク専用の機能です。ペインのポリシーを変更できるのは、どのペインの外側にいる呼び出し元だけです。
 
 ```bash
-herdr access pane set <pane> --accept-from LIST
+herdr access pane set <pane> [--accept-from LIST] [--input-mode MODE]
 herdr access pane get <pane>
 ```
 
-`LIST` は `any`、または `none`、`outside`、`caller:<name>` のカンマ区切りまたは繰り返し指定のリストです。`set` はポリシーをバインドします(ペインにバインド ID があればそれを維持します)。`any` はポリシーを削除し、意図的にペインを開放します。古いバインドに紐づく呼び出し元は、`access caller retarget` を再実行するまで宙に浮いた状態(かつ拒否される状態)のままです。`get` はすべての呼び出し元に開かれており、`caller:ops` のような呼び出し元名を含む `accept_from` リスト全体を表示します。どちらも 1 行を出力します。ペイン、そのバインド ID(ない場合は `-`)、リスト(ポリシーがない場合は `any`)です。API メソッドは `access.pane.set` と `access.pane.get` です。
+`LIST` は `any`、または `none`、`outside`、`caller:<name>` のカンマ区切りまたは繰り返し指定のリストです。`set` はポリシーをバインドします(ペインにバインド ID があればそれを維持します)。`any` はポリシーを削除し、意図的にペインを開放します。古いバインドに紐づく呼び出し元は、`access caller retarget` を再実行するまで宙に浮いた状態(かつ拒否される状態)のままです。`get` はすべての呼び出し元に開かれており、`caller:ops` のような呼び出し元名を含む `accept_from` リスト全体を表示します。どちらも 1 行を出力します。ペイン、そのバインド ID(ない場合は `-`)、リスト(ポリシーがない場合は `any`)、入力モードです。API メソッドは `access.pane.set` と `access.pane.get` です。
+
+`MODE` は `any`(既定)または `human-only` です。`human-only` はペインを人が打った入力だけに限ります。herdr API 経由で送られた入力(`agent prompt`、`agent send-keys`、`agent start`、`pane send-text`、`pane send-keys`、`pane run`)は、誰が送っても拒否されます。クライアントの入力(TUI からのタイプ、マウスレポート、画像の貼り付け。attach の有無を問いません)は、どのペインの外側にあるクライアントからだけ受け付けます。ペイン内で動く TUI や、外側にあると確認できないクライアントは、同じ文面で拒否されます。拒否は即時かつ最終で、承認待ちの保留はありません。モードはペインの `--accept-from` リストの後で確認されるため、そのリストが拒否するリクエストにはリストの拒否文面が残ります。モードはリストとは独立しています。`pane set <pane> --input-mode human-only` は、ペインが誰から受け付けるかを変えません。ポリシーなしでモードだけを持つペインもあります。`flag` は v1 では使えません。モードを設定できるのは、どのペインの外側にいる呼び出し元だけです。モードはセッションとともに保存されます。`[access.default]` と `[access.<name>]` は、`accept_from` と並べて(または単独で)`input_mode = "human-only"` を受け付け、固定のデフォルトと `agent start <name>` で適用されます。このノードのブリッジ(`remote_input = "bridge-only"` のときの `[access] bridge_agent`)は設計上 API で受信するため、そのモードは `any` のままでなければなりません。設定ファイルの該当エントリは診断になって無視され、その状態になる設定、起動、名前変更は拒否されます。
+
+このモードが見分けられるのは、herdr API 経由の入力とクライアントで打たれたキー入力です。所有者と、すべてのペインの外側から TUI を操作するエージェント(`expect`、`script`、リモートの `herdr --remote`)は区別できず、そのクライアントは所有者として扱われます。ペインの祖先関係から抜け出し(`setsid`、`tmux`)、その後 attach するプロセスも外側として扱われます。herdr の外で PTY に届く入力(`TIOCSTI`、`ptrace`)は見えません。ポップアップ入力は記録されますが、モードの対象にはなりません。
 
 入力元ログ(フォーク専用)は既定で有効で、各ペイン入力がどこから来たかを記録します。次のコマンドで読みます。
 

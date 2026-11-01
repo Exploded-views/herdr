@@ -1,7 +1,8 @@
-// herdr-fork: access policy types and the `decide` function; `AccessBindingId` has a redacting Debug; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
+// herdr-fork: access policy types and the `decide` function; the per-pane `InputMode` and `check_input_mode`, which runs after `decide`; `AccessBindingId` has a redacting Debug; narrow dead-code allows remain only for the access.* methods that have not landed. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io;
 
+use crate::access::input_log::InputPath;
 use crate::terminal::TerminalId;
 
 /// Who a pane accepts input from. Text form: `none`, `outside`, `caller:<name>`.
@@ -158,6 +159,50 @@ pub(crate) struct AccessPolicy {
 pub(crate) struct AccessDefaults {
     pub default: Option<Vec<Principal>>,
     pub by_name: std::collections::BTreeMap<String, Vec<Principal>>,
+    /// `[access.default] input_mode`, bound with the sticky default.
+    pub default_mode: InputMode,
+    /// `[access.<name>] input_mode`, bound at `agent start <name>`. Only non-`any` modes.
+    pub mode_by_name: std::collections::BTreeMap<String, InputMode>,
+}
+
+/// Where a pane's input may come from, apart from the allow-list. Wire form: `any` or
+/// `human-only`. `flag` is not part of v1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum InputMode {
+    /// Input from anywhere the allow-list admits.
+    #[default]
+    Any,
+    /// Only typed input: nothing sent through the herdr API, and client input only from a
+    /// client classified `Outside`.
+    HumanOnly,
+}
+
+impl InputMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            InputMode::Any => "any",
+            InputMode::HumanOnly => "human-only",
+        }
+    }
+
+    pub(crate) fn is_any(&self) -> bool {
+        matches!(self, InputMode::Any)
+    }
+}
+
+/// Parse an input mode from its wire text. `flag` is named so the refusal is clear.
+pub(crate) fn parse_input_mode(text: &str) -> Result<InputMode, String> {
+    match text {
+        "any" => Ok(InputMode::Any),
+        "human-only" => Ok(InputMode::HumanOnly),
+        "flag" => Err(
+            "input mode \"flag\" is not available in v1; use \"any\" or \"human-only\"".to_string(),
+        ),
+        other => Err(format!(
+            "unknown input mode {other:?}; use \"any\" or \"human-only\""
+        )),
+    }
 }
 
 /// `[access] remote_owner_tui`: whether the owner's remote TUI may still type
@@ -220,6 +265,17 @@ pub(crate) struct RemoteSettings {
     pub bridge_binding: Option<AccessBindingId>,
 }
 
+impl RemoteSettings {
+    /// The bridge's agent name, when remote input is bridge-only and a bridge is named. The
+    /// bridge receives by API by design, so its pane's input mode must stay `any`.
+    pub(crate) fn bridge_if_bridge_only(&self) -> Option<&str> {
+        match (self.input, self.bridge_agent.as_deref()) {
+            (RemoteInput::BridgeOnly, Some(bridge)) => Some(bridge),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AccessDenied {
     Input {
@@ -235,6 +291,10 @@ pub(crate) enum AccessDenied {
         bridge_agent: Option<String>,
         bridge_binding: Option<AccessBindingId>,
     },
+    /// The pane's input mode is `human-only` and this input is not typed by a human.
+    HumanOnly {
+        label: String,
+    },
 }
 
 const TAIL: &str = "This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator.";
@@ -247,6 +307,9 @@ impl AccessDenied {
             }
             AccessDenied::Control { label, from } => format!(
                 "access_denied: pane {label} does not accept control requests from {from}. {TAIL}"
+            ),
+            AccessDenied::HumanOnly { label } => format!(
+                "access_denied: pane {label} accepts only typed input; input sent through the herdr API is refused. {TAIL}"
             ),
             AccessDenied::Remote {
                 label,
@@ -387,6 +450,28 @@ pub(crate) fn decide(
         GateTarget::AccessAdmin => match caller {
             CallerClass::Outside { .. } => Ok(()),
             _ => Err(control_denied("server", caller)),
+        },
+    }
+}
+
+/// Apply a pane's input mode to an input that the allow-list admitted. `Any` returns at
+/// once; this is the only thing the mode check does on the common path.
+pub(crate) fn check_input_mode(
+    mode: InputMode,
+    path: InputPath,
+    caller: &CallerClass,
+    label: &str,
+) -> Result<(), AccessDenied> {
+    match mode {
+        InputMode::Any => Ok(()),
+        InputMode::HumanOnly => match path {
+            InputPath::Api => Err(AccessDenied::HumanOnly {
+                label: label.to_string(),
+            }),
+            InputPath::Client if matches!(caller, CallerClass::Outside { .. }) => Ok(()),
+            InputPath::Client => Err(AccessDenied::HumanOnly {
+                label: label.to_string(),
+            }),
         },
     }
 }
@@ -909,5 +994,82 @@ mod tests {
         let p = pol(1, vec![Principal::Outside]);
         let e = decide(&input(&t, Some(&p)), &local, &bridge_only()).unwrap_err();
         assert!(matches!(e, AccessDenied::Input { .. }));
+    }
+
+    fn every_class() -> Vec<CallerClass> {
+        let t = TerminalId::alloc();
+        vec![
+            CallerClass::Pane(t),
+            CallerClass::Outside { via_ssh: false },
+            CallerClass::Outside { via_ssh: true },
+            CallerClass::Unknown { remote_hint: false },
+            CallerClass::Unknown { remote_hint: true },
+            CallerClass::Remote,
+            caller("ops", 1),
+        ]
+    }
+
+    #[test]
+    fn input_mode_any_check_is_single_compare() {
+        // The common path: one byte-sized enum compare, no allocation, every class and path.
+        assert_eq!(std::mem::size_of::<InputMode>(), 1);
+        for path in [InputPath::Api, InputPath::Client] {
+            for class in every_class() {
+                assert_eq!(check_input_mode(InputMode::Any, path, &class, "p1"), Ok(()));
+            }
+        }
+    }
+
+    #[test]
+    fn human_only_takes_the_api_path_from_nobody() {
+        for class in every_class() {
+            assert_eq!(
+                check_input_mode(InputMode::HumanOnly, InputPath::Api, &class, "p1"),
+                Err(AccessDenied::HumanOnly { label: "p1".into() }),
+                "{class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn human_only_takes_the_client_path_only_from_an_outside_client() {
+        for class in every_class() {
+            let result = check_input_mode(InputMode::HumanOnly, InputPath::Client, &class, "p1");
+            if matches!(class, CallerClass::Outside { .. }) {
+                assert_eq!(result, Ok(()), "{class:?}");
+            } else {
+                assert_eq!(
+                    result,
+                    Err(AccessDenied::HumanOnly { label: "p1".into() }),
+                    "{class:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn human_only_message_is_exact() {
+        assert_eq!(
+            AccessDenied::HumanOnly {
+                label: "w1:p2".into()
+            }
+            .message(),
+            "access_denied: pane w1:p2 accepts only typed input; input sent through the herdr API is refused. This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator."
+        );
+    }
+
+    #[test]
+    fn input_mode_parses_the_wire_text_and_refuses_flag() {
+        assert_eq!(parse_input_mode("any"), Ok(InputMode::Any));
+        assert_eq!(parse_input_mode("human-only"), Ok(InputMode::HumanOnly));
+        let flag = parse_input_mode("flag").unwrap_err();
+        assert!(flag.contains("not available in v1"), "{flag}");
+        assert!(parse_input_mode("Human-Only").is_err());
+        assert!(parse_input_mode("").is_err());
+        assert_eq!(InputMode::HumanOnly.as_str(), "human-only");
+        assert_eq!(
+            serde_json::to_string(&InputMode::HumanOnly).unwrap(),
+            "\"human-only\""
+        );
     }
 }
