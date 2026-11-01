@@ -232,6 +232,18 @@ impl InputLog {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Deliver the wake-up the input path owes the writer, as the server does after a reply
+    /// (through `WakeAfterReply`). Tests and the bench call it directly.
+    #[cfg(test)]
+    pub fn wake_writer(&self) {
+        self.shared.pacer.flush_wake();
+    }
+
+    /// The wake-up state, for the server to deliver the wake-up after a reply.
+    pub fn pacer(&self) -> std::sync::Arc<Pacer> {
+        self.shared.pacer.clone()
+    }
+
     /// Make everything recorded so far reach the file before returning: a read of the log
     /// calls this first, so what it shows and what is on disk agree.
     pub fn sync(&mut self) {
@@ -392,23 +404,40 @@ impl LogFile {
 }
 
 /// Wake-up state shared with the writer thread. The writer sleeps with no timer while nothing
-/// is queued. The first entry after it went idle wakes it (`armed` goes true); it then waits
-/// `WRITER_BATCH_DELAY` so a burst is one write, drains, clears `armed` and sleeps again.
-/// Entries queued while `armed` is set wake nobody, so the app thread pays for at most one
-/// wake-up per batch and not one per entry.
+/// is queued. The input path only queues the entry and, for the first one after the writer went
+/// idle, sets `wake_pending` (two atomic operations, no lock and no system call). The server
+/// delivers the wake-up once the request or client event has been handled and its reply sent
+/// (`flush_wake`): the writer then waits `WRITER_BATCH_DELAY` so a burst is one write, drains,
+/// clears `armed` and sleeps again. Entries queued while `armed` is set add no wake-up, so the
+/// server pays for at most one per batch, off the input path.
 #[derive(Default)]
 pub(crate) struct Pacer {
     armed: std::sync::atomic::AtomicBool,
+    /// A wake-up is owed to the writer and has not been delivered yet.
+    wake_pending: std::sync::atomic::AtomicBool,
     /// A flush or a read is waiting: skip the batch wait.
     urgent: std::sync::atomic::AtomicBool,
-    thread: std::sync::Mutex<Option<std::thread::Thread>>,
+    thread: std::sync::OnceLock<std::thread::Thread>,
     wakes: std::sync::atomic::AtomicU64,
 }
 
 impl Pacer {
-    /// App thread, after queueing an entry.
+    /// App thread, after queueing an entry: record that the writer has work. Never blocks and
+    /// makes no system call.
     pub(crate) fn notify(&self) {
         if !self.armed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.wake_pending
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Deliver the wake-up `notify` owes, if any. The server calls this after the reply to the
+    /// request (or the client event) that recorded the entry has been sent.
+    pub(crate) fn flush_wake(&self) {
+        if self
+            .wake_pending
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
             self.unpark();
         }
     }
@@ -417,14 +446,14 @@ impl Pacer {
     pub(crate) fn wake_now(&self) {
         self.urgent.store(true, std::sync::atomic::Ordering::SeqCst);
         self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.wake_pending
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         self.unpark();
     }
 
     fn unpark(&self) {
-        if let Ok(thread) = self.thread.lock() {
-            if let Some(thread) = thread.as_ref() {
-                thread.unpark();
-            }
+        if let Some(thread) = self.thread.get() {
+            thread.unpark();
         }
     }
 }
@@ -538,9 +567,7 @@ pub(crate) fn spawn_writer(
             }
         }
     })?;
-    if let Ok(mut thread) = pacer.thread.lock() {
-        *thread = Some(handle.thread().clone());
-    }
+    let _ = pacer.thread.set(handle.thread().clone());
     Ok(())
 }
 
@@ -973,6 +1000,7 @@ mod tests {
         let start = std::time::Instant::now();
         for n in 0..150u64 {
             log.record(ev(&format!("t{n}"), DECISION_DENY, n, 1));
+            log.wake_writer();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         let elapsed = start.elapsed();
@@ -1000,6 +1028,7 @@ mod tests {
         log.record(ev("t1", DECISION_DENY, 1, 1));
         log.record(ev("t2", DECISION_ALLOW, 2, 1));
         log.record(ev("t3", DECISION_DENY, 3, 1));
+        log.wake_writer();
         let arrived = loop {
             let text = read(&dir);
             if text.contains(r#""terminal":"t1""#)
@@ -1060,5 +1089,33 @@ mod tests {
             text.contains(r#""bytes":7"#) && text.contains(r#""bytes":5"#),
             "{text}"
         );
+    }
+
+    #[test]
+    fn recording_does_not_wake_the_writer_the_reply_path_does() {
+        let dir = TestDir::new("deferred");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        // Let the writer start and settle into its idle park, or it would find the entry on
+        // its first pass.
+        std::thread::sleep(WRITER_BATCH_DELAY);
+        log.record(ev("t1", DECISION_DENY, 1, 1));
+        std::thread::sleep(WRITER_BATCH_DELAY * 3);
+        // The input path only queued the entry and set a flag: no wake-up, nothing written.
+        assert_eq!(log.writer_wakes(), 0, "record woke the writer");
+        assert!(!read(&dir).contains(r#""terminal":"t1""#), "{}", read(&dir));
+        // After the reply the server delivers the one wake-up; the entry is in the file
+        // within the bound.
+        let start = std::time::Instant::now();
+        log.wake_writer();
+        while !read(&dir).contains(r#""terminal":"t1""#) {
+            assert!(
+                start.elapsed() < WRITER_BATCH_DELAY * 6,
+                "the entry never arrived"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        log.flush_and_stop();
     }
 }

@@ -123,7 +123,7 @@ stop a process that sets out to get around it:
 - **What the input log is.** A local guardrail record, not an audit trail. Any process at the
   same uid can edit or delete it, and it is not synced to disk, so it survives a crash only up
   to the writer's last write. The writer sleeps with no timer and is woken by the first entry
-  after it went idle, then writes within 50 ms, so a crash loses at most the entries from the
+  after it went idle (the server wakes it once the request or client event has been answered, so the input path pays no system call), then writes within 50 ms, so a crash loses at most the entries from the
   last 50 ms (and no more than the 1024 the channel holds) plus the latest burst, which stays open to repeats (up to 2 seconds of typing) and is written when
   the next input arrives, a read or a stop closes it: on a quiet pane it may stay out of the file
   indefinitely, and a crash loses it however old it is. A read with `access log` writes everything first. When the writer falls behind, entries are dropped and a `dropped` marker is written;

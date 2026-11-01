@@ -2,7 +2,7 @@
 diff --git a/src/app/access_log.rs b/src/app/access_log.rs
 --- a/src/app/access_log.rs
 +++ b/src/app/access_log.rs
-@@ -223,7 +223,6 @@
+@@ -240,7 +240,6 @@
              .unwrap_or(DEFAULT_LOG_LIMIT)
              .clamp(1, crate::access::input_log::RING_CAP as u32) as usize;
          // What the read shows is in the file by the time it answers.

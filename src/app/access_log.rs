@@ -33,6 +33,15 @@ pub(crate) struct ClientInput<'a> {
     pub allowed: bool,
 }
 
+/// Delivers the input log writer's pending wake-up when dropped. See `App::wake_after_reply`.
+pub(crate) struct WakeAfterReply(std::sync::Arc<crate::access::input_log::Pacer>);
+
+impl Drop for WakeAfterReply {
+    fn drop(&mut self) {
+        self.0.flush_wake();
+    }
+}
+
 /// The wire form of a class, plus who the entry names and where the caller came from.
 struct Origin {
     class: LoggedClass,
@@ -47,6 +56,14 @@ impl App {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         work(&mut log)
+    }
+
+    /// A guard that delivers the writer's wake-up when dropped. Take it before handling a request
+    /// or a client event: it wakes the writer after the handler has returned, on every path
+    /// (an early return, an error, a panic), so what the input path recorded reaches the file
+    /// within `WRITER_BATCH_DELAY` without the input path paying for the wake-up.
+    pub(crate) fn wake_after_reply(&self) -> WakeAfterReply {
+        WakeAfterReply(self.with_input_log(|log| log.pacer()))
     }
 
     /// Send the open entry to the writer and stop it. Server stop and live handoff.

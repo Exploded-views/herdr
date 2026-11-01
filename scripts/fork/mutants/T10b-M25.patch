@@ -1,0 +1,12 @@
+# herdr-fork: mutant T10b-M25. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -426,6 +426,7 @@
+         if !self.armed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+             self.wake_pending
+                 .store(true, std::sync::atomic::Ordering::SeqCst);
++            self.unpark();
+         }
+     }
+ 

@@ -2,7 +2,7 @@
 diff --git a/src/app/access_log.rs b/src/app/access_log.rs
 --- a/src/app/access_log.rs
 +++ b/src/app/access_log.rs
-@@ -170,7 +170,11 @@
+@@ -187,7 +187,11 @@
                  at_ms: now_ms(),
                  pane,
                  terminal: input.terminal.as_str().to_owned(),

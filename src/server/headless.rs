@@ -1997,6 +1997,8 @@ impl HeadlessServer {
 
     /// Handles a server event. Returns true if the event requires a re-render.
     fn handle_server_event(&mut self, ev: ServerEvent) -> bool {
+        // The input log's writer is woken when this returns, on every path.
+        let _wake = self.app.wake_after_reply();
         if self.handoff_in_progress && Self::ignore_client_event_during_handoff(&ev) {
             return false;
         }
@@ -3151,6 +3153,8 @@ impl HeadlessServer {
         skip_default_workspace_for_request: bool,
         client_local: bool,
     ) -> bool {
+        // The input log's writer is woken when this returns, on every path.
+        let _wake = self.app.wake_after_reply();
         if self.shutting_down || self.host_shutdown_requested() {
             // During shutdown, respond with server_unavailable.
             Self::reject_api_request_for_shutdown(msg);

@@ -1262,6 +1262,21 @@ mod tests {
         }
         let record_after_idle = p95(idle_samples);
         let idle_dropped = idle_log.borrow().dropped();
+        // Information only, off the input path: what the server pays after the reply to wake
+        // an idle writer for the entry the request recorded. It has no per-input budget.
+        let mut unpark_samples = Vec::with_capacity(200);
+        for turn in 0..200u64 {
+            let mut log = idle_log.borrow_mut();
+            log.sync();
+            std::thread::sleep(Duration::from_millis(3));
+            let mut event = log_event(DECISION_DENY, 4_000_000 + turn);
+            event.terminal = format!("term_unpark_{turn}");
+            log.record(event);
+            let start = Instant::now();
+            log.wake_writer();
+            unpark_samples.push(start.elapsed());
+        }
+        let deferred_unpark_after_reply = p95(unpark_samples);
         idle_log.borrow_mut().flush_and_stop();
 
         // The per-keystroke client path and the whole API gate, on a full ring. The callers
@@ -1321,6 +1336,10 @@ mod tests {
         println!(
             "access_gate record_after_idle_p95_ns={}",
             record_after_idle.as_nanos()
+        );
+        println!(
+            "access_gate deferred_unpark_after_reply_p95_ns={} (information, no budget)",
+            deferred_unpark_after_reply.as_nanos()
         );
         println!(
             "access_gate dropped allow={allow_dropped} deny={deny_dropped} idle={idle_dropped} whole={whole_dropped}"

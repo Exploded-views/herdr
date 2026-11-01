@@ -1,0 +1,21 @@
+# herdr-fork: mutant T10b-M24. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -3153,8 +3153,6 @@
+         skip_default_workspace_for_request: bool,
+         client_local: bool,
+     ) -> bool {
+-        // The input log's writer is woken when this returns, on every path.
+-        let _wake = self.app.wake_after_reply();
+         if self.shutting_down || self.host_shutdown_requested() {
+             // During shutdown, respond with server_unavailable.
+             Self::reject_api_request_for_shutdown(msg);
+@@ -3167,6 +3165,7 @@
+             Self::reject_api_request_for_access(msg, &denied);
+             return false;
+         }
++        let _wake = self.app.wake_after_reply();
+ 
+         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
+             AltScreenReadConflict::None => None,

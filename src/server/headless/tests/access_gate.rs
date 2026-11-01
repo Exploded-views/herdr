@@ -2505,3 +2505,98 @@ async fn read_under_bridge_only_sends_no_wheel_bytes_for_a_remote_caller() {
     f.assert_no_bytes(0);
     shutdown_test_runtimes(&mut f.server);
 }
+
+// The writer is woken after the reply, not on the input path. Whatever the request does,
+// the entry it recorded reaches the file within the bound, with no read or flush to help.
+
+fn attach_test_log(f: &mut Fixture, dir: &crate::access::registry::TestDir) {
+    f.server
+        .app
+        .input_log
+        .lock()
+        .unwrap()
+        .attach_writer(dir.path().to_path_buf(), "node-a".into())
+        .unwrap();
+}
+
+fn file_has(dir: &crate::access::registry::TestDir, needle: &str) -> bool {
+    std::fs::read_to_string(dir.path().join("access-input.log"))
+        .unwrap_or_default()
+        .contains(needle)
+}
+
+fn wait_for_file(dir: &crate::access::registry::TestDir, needle: &str) -> Duration {
+    let start = Instant::now();
+    while !file_has(dir, needle) {
+        assert!(
+            start.elapsed() < crate::access::input_log::WRITER_BATCH_DELAY * 6,
+            "{needle} not in the file within the bound"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    start.elapsed()
+}
+
+#[tokio::test]
+async fn a_refused_request_still_wakes_the_writer_after_its_reply() {
+    // The early return of the gate: the request is refused before dispatch.
+    let dir = crate::access::registry::TestDir::new("wake-early");
+    let mut f = gate_fixture(2);
+    attach_test_log(&mut f, &dir);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, send_text(&target));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    wait_for_file(&dir, r#""decision":"deny""#);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn a_request_that_fails_in_dispatch_still_wakes_the_writer() {
+    // Allowed by the gate, then the handler fails (the pane has no live terminal): the
+    // error path of dispatch. A second sender closes the first entry so it is sent.
+    let dir = crate::access::registry::TestDir::new("wake-error");
+    let mut f = gate_fixture(2);
+    attach_test_log(&mut f, &dir);
+    let target = f.public(0);
+    f.server.app.terminal_runtimes.remove(&f.terminals[0]);
+    let response = f.call(outside(), send_text(&target));
+    assert!(error_code(&response).is_some(), "{response}");
+    let caller = f.pane_caller(1);
+    let _ = f.call(caller, send_text(&target));
+    wait_for_file(&dir, r#""class":"outside""#);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn refused_client_input_wakes_the_writer_after_the_event() {
+    let dir = crate::access::registry::TestDir::new("wake-client");
+    let mut f = gate_fixture(2);
+    attach_test_log(&mut f, &dir);
+    f.protect(0, vec![Principal::None]);
+    let target = f.public(0);
+    let _refused = connect_shell_client(&mut f.server, 82, PeerLineage::default());
+    type_into(&mut f.server, 82, &target);
+    wait_for_file(&dir, r#""client":"shell:82""#);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn the_first_entry_after_idle_is_visible_within_the_bound() {
+    let dir = crate::access::registry::TestDir::new("wake-first");
+    let mut f = gate_fixture(2);
+    attach_test_log(&mut f, &dir);
+    f.protect(0, vec![Principal::Outside]);
+    let target = f.public(0);
+    // Let the writer settle into its idle park.
+    std::thread::sleep(Duration::from_millis(100));
+    let caller = f.pane_caller(1);
+    let _ = f.call(caller, send_text(&target));
+    let took = wait_for_file(&dir, r#""decision":"deny""#);
+    assert!(
+        took <= crate::access::input_log::WRITER_BATCH_DELAY * 6,
+        "{took:?}"
+    );
+    shutdown_test_runtimes(&mut f.server);
+}

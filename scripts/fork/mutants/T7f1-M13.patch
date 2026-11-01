@@ -2,7 +2,7 @@
 diff --git a/src/server/headless.rs b/src/server/headless.rs
 --- a/src/server/headless.rs
 +++ b/src/server/headless.rs
-@@ -3284,10 +3284,6 @@
+@@ -3288,10 +3288,6 @@
          // ids (a closed workspace) or make a target resolvable, so decide again
          // on the state the handler will resolve against. Nothing between here
          // and the handler mutates it.

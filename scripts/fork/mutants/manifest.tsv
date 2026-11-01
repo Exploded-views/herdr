@@ -97,3 +97,5 @@ T10b-M20	T10b-M20.patch	test(access_log_read_sees_every_entry_recorded_before_it
 T10b-M21	T10b-M21.patch	test(sync_seals_the_entry_it_closes_so_later_input_is_not_lost)
 T10b-M22	T10b-M22.patch	test(access_log_escapes_format_characters_in_every_field_and_branch)
 T10b-M23	T10b-M23.patch	test(access_log_escapes_format_characters_in_every_field_and_branch)
+T10b-M24	T10b-M24.patch	test(a_refused_request_still_wakes_the_writer_after_its_reply)
+T10b-M25	T10b-M25.patch	test(recording_does_not_wake_the_writer_the_reply_path_does)

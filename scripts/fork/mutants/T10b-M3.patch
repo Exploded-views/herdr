@@ -2,7 +2,7 @@
 diff --git a/src/access/input_log.rs b/src/access/input_log.rs
 --- a/src/access/input_log.rs
 +++ b/src/access/input_log.rs
-@@ -331,7 +331,7 @@
+@@ -341,7 +341,7 @@
              }
              self.unreported = 0;
          }
