@@ -432,7 +432,7 @@ herdr access pane get <pane>
 herdr access log [--limit N] [--json] [--file]
 ```
 
-按从新到旧的顺序每行输出一条:时间(UTC)、窗格、`path/route`(`api/pane.send_text`、`client/shell.pane_input`、`client/attach.input`)、发送者类别(`pane:<id>`、`outside`、`outside_ssh`、`remote`、`caller:<name>` 或 `unknown`)、客户端(`api:<connection>`、`shell:<id>` 或 `attach:<id>`)、主机类型(`local`、`ssh` 或 `remote-stamp`)、字节数、判定,以及合并为一条的连续输入的 `×count`。它从不显示输入的内容。如果写入线程跟不上,最后一行 `dropped: N` 会说明丢失了多少条。`access.log` API 只有位于所有窗格之外的调用方可以使用;该文件本身可被同一 uid 下的任何进程(包括窗格内的代理)读取。控制字符会被转义后输出。服务器未运行时,`--file` 会从 herdr 数据目录读取 `access-input.log`(以及轮转后的 `.1`)。`[access] input_log = false` 可关闭该日志。对应的 API 方法是 `access.log`。
+按从新到旧的顺序每行输出一条:时间(UTC)、窗格、`path/route`(`api/pane.send_text`、`client/shell.pane_input`、`client/attach.input`)、发送者类别(`pane:<id>`、`outside`、`outside_ssh`、`remote`、`caller:<name>` 或 `unknown`)、客户端(`api:<connection>`、`shell:<id>` 或 `attach:<id>`)、主机类型(`local`、`ssh` 或 `remote-stamp`)、字节数、判定,以及合并为一条的连续输入的 `×count`。它从不显示输入的内容。每条记录会在其请求处理程序返回后 50 ms 内写入;空闲后的第一条记录在输入后 100 ms 内写入,除非处理程序本身运行更久。两种情况下都不会跳过任何记录。如果写入线程跟不上,最后一行 `dropped: N` 会说明丢失了多少条。`access.log` API 只有位于所有窗格之外的调用方可以使用;该文件本身可被同一 uid 下的任何进程(包括窗格内的代理)读取。控制字符会被转义后输出。服务器未运行时,`--file` 会从 herdr 数据目录读取 `access-input.log`(以及轮转后的 `.1`)。`[access] input_log = false` 可关闭该日志。对应的 API 方法是 `access.log`。
 
 ## 集成
 

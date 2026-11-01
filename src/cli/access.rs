@@ -25,7 +25,8 @@ the old token stops working.
 the policy and opens the pane on purpose.
 `log` prints the input-origin log, newest first: who sent each pane input (path, sender
 class, client, host kind, byte count; never the content). It is for a caller outside
-every pane only. `--file` reads the log files in the data directory when the server is down.";
+every pane only. An entry is written within 50 ms after its request handler returns; the first entry after idle is written within 100 ms of the input unless the handler itself runs longer. No entry is skipped in either case.
+`--file` reads the log files in the data directory when the server is down.";
 
 pub(super) fn run_access_command(args: &[String]) -> io::Result<i32> {
     run_access(

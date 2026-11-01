@@ -2593,6 +2593,7 @@ async fn refused_client_input_wakes_the_writer_after_the_event() {
 }
 
 #[tokio::test]
+#[ignore = "timing: run by just bench-access"]
 async fn the_first_entry_after_idle_is_in_the_file_within_100ms_of_the_input() {
     let dir = crate::access::registry::TestDir::new("wake-first");
     let mut f = gate_fixture(2);

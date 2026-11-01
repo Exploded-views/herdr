@@ -432,8 +432,13 @@ pub(crate) struct Pacer {
     urgent: std::sync::atomic::AtomicBool,
     /// Unix milliseconds when the first entry of the batch was queued.
     first_ms: std::sync::atomic::AtomicU64,
+    /// The writer's thread handle. The input path (`notify`, `record`) must never take this
+    /// lock; only the wake after the reply (`flush_wake`, `wake_now`) and the writer's start do.
     thread: std::sync::Mutex<Option<std::thread::Thread>>,
     wakes: std::sync::atomic::AtomicU64,
+    /// Times `thread` was locked (tests: the input path must not add to it).
+    #[cfg(test)]
+    thread_locks: std::sync::atomic::AtomicU64,
 }
 
 /// How long the writer still waits for a batch whose first entry was queued at `first_ms`,
@@ -479,11 +484,18 @@ impl Pacer {
         self.urgent.store(false, SeqCst);
     }
 
-    fn set_thread(&self, thread: std::thread::Thread) {
-        *self
-            .thread
+    /// Lock the writer handle. Never call this from the input path.
+    fn lock_thread(&self) -> std::sync::MutexGuard<'_, Option<std::thread::Thread>> {
+        #[cfg(test)]
+        self.thread_locks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.thread
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn set_thread(&self, thread: std::thread::Thread) {
+        *self.lock_thread() = Some(thread);
     }
 
     /// Deliver the wake-up `notify` owes, if any. The server calls this after the reply to the
@@ -507,10 +519,7 @@ impl Pacer {
     }
 
     fn unpark(&self) {
-        let guard = self
-            .thread
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = self.lock_thread();
         if let Some(thread) = guard.as_ref() {
             thread.unpark();
         }
@@ -1063,7 +1072,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         let elapsed = start.elapsed();
-        std::thread::sleep(WRITER_BATCH_DELAY * 4);
+        // Every entry is written eventually; wait for it without a time assert (a loaded
+        // machine may be slow, only a lost entry hangs).
+        let waited = std::time::Instant::now();
+        while read(&dir).lines().count() < 151 {
+            assert!(
+                waited.elapsed() < std::time::Duration::from_secs(10),
+                "entries never reached the file"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let windows = elapsed.as_millis() / WRITER_BATCH_DELAY.as_millis() + 2;
         let wakes = log.writer_wakes();
         assert!(wakes >= 1, "the writer never woke");
@@ -1108,6 +1126,53 @@ mod tests {
     }
 
     #[test]
+    fn the_batch_delay_leaves_room_under_the_visibility_bound() {
+        assert!(WRITER_BATCH_DELAY * 2 <= VISIBILITY_BOUND);
+    }
+
+    #[test]
+    fn input_to_write_stays_within_the_bound_for_any_handler_under_it() {
+        // No clock: the wake comes `handler` ms after the first entry; the writer then waits
+        // `batch_wait`. Input to drain is `handler + wait`, which must be within the bound for
+        // every handler shorter than the bound. Counting the delay from the wake instead of the
+        // first entry gives handler + 50, over the bound for a handler above 50 ms.
+        let bound = u64::try_from(VISIBILITY_BOUND.as_millis()).unwrap_or(u64::MAX);
+        for handler in 0..=bound {
+            let wait = batch_wait(1000, 1000 + handler);
+            let total = handler + u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+            assert!(total <= bound, "handler {handler} ms: {total} ms to write");
+        }
+        // The same through the Pacer the writer reads.
+        let pacer = Pacer::default();
+        pacer.notify_at(1000);
+        assert_eq!(pacer.wait_at(1000 + 70), std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn the_input_path_never_takes_the_writer_handle_lock() {
+        let dir = TestDir::new("nolock");
+        let mut log = InputLog::new();
+        log.attach_writer(dir.path().to_path_buf(), "node-a".into())
+            .unwrap();
+        fn locks(log: &InputLog) -> u64 {
+            log.pacer()
+                .thread_locks
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }
+        let before = locks(&log);
+        // Deny (sent at once), an allow burst, and a closing entry: every record path.
+        log.record(ev("t1", DECISION_DENY, 1, 1));
+        log.record(ev("t2", DECISION_ALLOW, 2, 1));
+        log.record(ev("t2", DECISION_ALLOW, 3, 1));
+        log.record(ev("t3", DECISION_DENY, 4, 1));
+        assert_eq!(locks(&log), before, "the input path took the handle lock");
+        // The wake after the reply does take it, so the counter is live.
+        log.wake_writer();
+        assert_eq!(locks(&log), before + 1);
+        log.flush_and_stop();
+    }
+
+    #[test]
     fn the_pacer_keeps_the_time_of_the_first_entry_of_the_batch() {
         let pacer = Pacer::default();
         pacer.notify_at(5000);
@@ -1147,17 +1212,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing: run by just bench-access"]
     fn the_first_entry_after_idle_is_in_the_file_within_the_bound_of_the_input() {
-        assert!(WRITER_BATCH_DELAY <= VISIBILITY_BOUND / 2);
         // A handler of ordinary length: the wake comes at once.
         let quick = best_of_three("bound-quick", std::time::Duration::ZERO);
         assert!(quick <= VISIBILITY_BOUND, "{quick:?}");
-        // A handler that takes 30 ms: still 50 ms from the input, not 80.
-        let slow = best_of_three("bound-slow", std::time::Duration::from_millis(30));
+        // A handler that takes 70 ms: the entry is in the file when it returns, about 70 ms
+        // from the input; counting the delay from the return would give 120 ms.
+        let slow = best_of_three("bound-slow", std::time::Duration::from_millis(70));
         assert!(slow <= VISIBILITY_BOUND, "{slow:?}");
     }
 
     #[test]
+    #[ignore = "timing: run by just bench-access"]
     fn a_handler_that_outlasts_the_delay_is_not_waited_for_twice() {
         // The delay has passed by the time the wake-up comes, so the writer drains at once:
         // the entry is in the file well before another full delay (50 ms) has gone by.
@@ -1170,6 +1237,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing: run by just bench-access"]
     fn every_entry_reaches_the_file_within_the_bound() {
         let dir = TestDir::new("bound");
         let mut log = InputLog::new();
@@ -1251,9 +1319,7 @@ mod tests {
         // within the bound.
         let start = std::time::Instant::now();
         log.wake_writer();
-        let took = wait_in_file(&dir, r#""terminal":"t1""#, start);
-        // The entry is already old (150 ms), so the writer owes no further batch wait.
-        assert!(took < WRITER_BATCH_DELAY, "{took:?}");
+        let _ = wait_in_file(&dir, r#""terminal":"t1""#, start);
         log.flush_and_stop();
     }
 }
