@@ -34,11 +34,20 @@ pub(crate) struct ClientInput<'a> {
 }
 
 /// Delivers the input log writer's pending wake-up when dropped. See `App::wake_after_reply`.
-pub(crate) struct WakeAfterReply(std::sync::Arc<crate::access::input_log::Pacer>);
+pub(crate) struct WakeAfterReply(Option<std::sync::Arc<crate::access::input_log::Pacer>>);
+
+#[cfg(test)]
+impl WakeAfterReply {
+    pub(crate) fn is_noop(&self) -> bool {
+        self.0.is_none()
+    }
+}
 
 impl Drop for WakeAfterReply {
     fn drop(&mut self) {
-        self.0.flush_wake();
+        if let Some(pacer) = &self.0 {
+            pacer.flush_wake();
+        }
     }
 }
 
@@ -61,9 +70,14 @@ impl App {
     /// A guard that delivers the writer's wake-up when dropped. Take it before handling a request
     /// or a client event: it wakes the writer after the handler has returned, on every path
     /// (an early return, an error, a panic), so what the input path recorded reaches the file
-    /// within `WRITER_BATCH_DELAY` without the input path paying for the wake-up.
+    /// within `WRITER_BATCH_DELAY` of the input (or when the handler returns, if that is later)
+    /// without the input path paying for the wake-up. With the log off nothing is recorded, so
+    /// the guard does nothing and takes no lock.
     pub(crate) fn wake_after_reply(&self) -> WakeAfterReply {
-        WakeAfterReply(self.with_input_log(|log| log.pacer()))
+        if !self.state.input_log {
+            return WakeAfterReply(None);
+        }
+        WakeAfterReply(Some(self.with_input_log(|log| log.pacer())))
     }
 
     /// Send the open entry to the writer and stop it. Server stop and live handoff.

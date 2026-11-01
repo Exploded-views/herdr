@@ -36,7 +36,7 @@ jobs:
       - name: just ci (offline, repo read-only)
         run: scripts/fork/linux-test.sh just ci
 
-  # The input log's per-input timing budgets, measured on native Linux (not in a VM).
+  # The input log's per-input timing budgets, measured on GitHub ubuntu-latest (Azure KVM guest). This is the deciding Linux number.
   bench:
     if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest

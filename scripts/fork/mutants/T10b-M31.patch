@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10b-M31. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+index 22475355..48115396 100644
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -27,7 +27,7 @@ pub(crate) const ROTATE_BYTES: u64 = 1024 * 1024;
+ /// handled, so the file has the entry within the longer of this delay and that handler. An open allow entry (taking repeats)
+ /// is sent when the next record, a read of the log or a stop closes it, so the latest burst
+ /// of a quiet pane stays out of the file until then, however old it is.
+-pub(crate) const WRITER_BATCH_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
++pub(crate) const WRITER_BATCH_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+ /// What tests hold the first entry after idle to, measured from the input (the record) to the
+ /// line being in the file: the batch delay plus a handler of ordinary length and the write.
+ #[cfg(test)]

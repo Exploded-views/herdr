@@ -79,7 +79,7 @@ a plan to send it upstream, and nothing has been proposed upstream.
   itself. The file is `access-input.log` in the herdr data directory (mode 0600, rotated at
   1 MiB with one old file, so at most 2 MiB), headed by the `[access] node_name` (default
   `node`), never the hostname. A burst of typing is one entry per 2 seconds; a refusal is
-  always its own entry and is written at once. The server writes what it has before it stops
+  always its own entry. Every entry reaches the file 50 ms after the input (later only if handling the request or event took longer), and the latest burst of typing when the next input, a read or a stop closes it. The server writes what it has before it stops
   or hands off. `herdr access log [--limit N] [--json]` (API `access.log`) prints the newest
   entries first, with the number dropped if the writer fell behind; `--file` reads the files
   when the server is down. The `access.log` API is for a caller outside every pane only; the file itself can be read by any process at the same uid. `[access] input_log =

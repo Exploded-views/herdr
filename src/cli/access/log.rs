@@ -117,7 +117,8 @@ pub(super) fn format_event(event: &AccessInputEvent) -> String {
 
 /// Characters that print as nothing or change how the text around them is laid out: Unicode
 /// format characters (Cf: soft hyphen, zero-width and bidi marks and overrides, isolates,
-/// the word joiner and invisible operators, the byte order mark, interlinear annotation) and
+/// the word joiner and invisible operators, the byte order mark, interlinear annotation, the
+/// Unicode tag characters, the musical and shorthand format controls) and
 /// the line and paragraph separators (Zl, Zp).
 fn is_layout_character(c: char) -> bool {
     matches!(
@@ -127,12 +128,21 @@ fn is_layout_character(c: char) -> bool {
             | '\u{061c}'
             | '\u{06dd}'
             | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
             | '\u{180e}'
             | '\u{200b}'..='\u{200f}'
             | '\u{2028}'..='\u{202e}'
             | '\u{2060}'..='\u{206f}'
             | '\u{feff}'
             | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
     )
 }
 
@@ -396,5 +406,36 @@ mod tests {
             assert_eq!(line.split('\t').count(), 9, "{line:?}");
             assert!(line.contains("\\u{202e}"), "{line}");
         }
+    }
+
+    #[test]
+    fn access_log_escapes_tag_and_other_invisible_format_characters() {
+        let hidden = [
+            '\u{0890}',
+            '\u{0891}',
+            '\u{08e2}',
+            '\u{110bd}',
+            '\u{110cd}',
+            '\u{13430}',
+            '\u{1343f}',
+            '\u{1bca0}',
+            '\u{1bca3}',
+            '\u{1d173}',
+            '\u{1d17a}',
+            '\u{e0001}',
+            '\u{e0020}',
+            '\u{e0041}',
+            '\u{e007f}',
+        ];
+        let field: String = hidden.iter().collect();
+        let mut hostile = event(1_700_000_000_000, "pane.send_text", "outside", None);
+        hostile.client = format!("api:1{field}");
+        hostile.pane = format!("w1{field}");
+        let line = format_event(&hostile);
+        for c in hidden {
+            assert!(!line.contains(c), "{c:?} written raw in {line:?}");
+        }
+        assert!(line.contains("\\u{e0041}"), "{line}");
+        assert_eq!(line.split('\t').count(), 9, "{line:?}");
     }
 }

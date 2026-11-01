@@ -1,0 +1,17 @@
+# herdr-fork: mutant T10b-M26. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/input_log.rs b/src/access/input_log.rs
+index 22475355..e4b8e882 100644
+--- a/src/access/input_log.rs
++++ b/src/access/input_log.rs
+@@ -440,9 +440,8 @@ pub(crate) struct Pacer {
+ /// when it is `now_ms`: the rest of `WRITER_BATCH_DELAY`, none once it has passed. A clock that
+ /// went backwards counts as no time having passed, so the wait never exceeds the delay.
+ pub(crate) fn batch_wait(first_ms: u64, now_ms: u64) -> std::time::Duration {
+-    WRITER_BATCH_DELAY.saturating_sub(std::time::Duration::from_millis(
+-        now_ms.saturating_sub(first_ms),
+-    ))
++    let _ = (first_ms, now_ms);
++    WRITER_BATCH_DELAY
+ }
+ 
+ impl Pacer {
