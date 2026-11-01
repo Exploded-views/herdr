@@ -30,7 +30,24 @@ fn state_with_pane() -> (AppState, crate::layout::PaneId, TerminalId) {
     (state, pane_id, terminal_id)
 }
 
+/// The process detection read behind the agent in a pane.
+fn identify(state: &mut AppState, pane_id: crate::layout::PaneId, pid: u32) {
+    state.handle_app_event(AppEvent::AgentProcessIdentified {
+        pane_id,
+        process: Some(crate::platform::ProcessIdentity {
+            pid,
+            start_token: 7,
+        }),
+    });
+}
+
+/// The session key `identify(.., pid)` gives an agent with no hook session.
+fn process_key(pid: u32) -> String {
+    format!("proc:{pid}:7|")
+}
+
 fn agent_seen(state: &mut AppState, pane_id: crate::layout::PaneId) {
+    identify(state, pane_id, 4242);
     state.handle_app_event(AppEvent::StateChanged {
         pane_id,
         agent: Some(Agent::Pi),
@@ -872,6 +889,11 @@ async fn input_mode_defaults_any_and_persists() {
         .get_mut(&terminal)
         .unwrap()
         .input_mode_mark_owner = Some("pi|worker".into());
+    app.state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .input_mode_mark_session = Some("proc:4242:7|".into());
     let json_marked = serde_json::to_string(&snapshot_of(&app.state)).unwrap();
     assert!(
         json_marked.contains("input_mode_set_explicitly"),
@@ -879,7 +901,9 @@ async fn input_mode_defaults_any_and_persists() {
     );
     let marked: SessionSnapshot = serde_json::from_str(&json_marked).unwrap();
     assert!(restore_terminals(&marked).values().all(|t| {
-        t.input_mode_set_explicitly && t.input_mode_mark_owner.as_deref() == Some("pi|worker")
+        t.input_mode_set_explicitly
+            && t.input_mode_mark_owner.as_deref() == Some("pi|worker")
+            && t.input_mode_mark_session.as_deref() == Some("proc:4242:7|")
     }));
     app.state
         .terminals
@@ -1170,19 +1194,53 @@ async fn the_explicit_mark_clears_when_the_agent_exits_and_another_arrives() {
         .terminals
         .get_mut(&terminal)
         .unwrap()
-        .input_mode_set_explicitly = true;
+        .mark_input_mode_explicit();
+    assert_eq!(
+        state.terminals[&terminal].input_mode_mark_owner.as_deref(),
+        Some("pi|")
+    );
     state.access_defaults = AccessDefaults {
         default_mode: InputMode::HumanOnly,
         ..Default::default()
     };
     detect(&mut state, pane, None, true);
     assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    identify(&mut state, pane, 5151);
     detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn the_explicit_mark_clears_when_the_agent_exits_unseen_and_another_of_its_kind_starts() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, pane, terminal) = state_with_pane();
+    agent_seen(&mut state, pane);
+    state
+        .terminals
+        .get_mut(&terminal)
+        .unwrap()
+        .mark_input_mode_explicit();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    // The exit shows up only as "no agent", the same as a blink does.
+    detect(&mut state, pane, None, false);
+    assert!(state.terminals[&terminal].input_mode_set_explicitly);
+    // A new agent of the same kind, another process, takes the pane.
+    identify(&mut state, pane, 5151);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    assert!(state.terminals[&terminal].input_mode_mark_session.is_none());
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
 }
 
 /// A pane as the session would bring it back: named, marked for `owner`, no agent seen yet.
-fn restored_marked_pane(owner: &str) -> (AppState, crate::layout::PaneId, TerminalId) {
+fn restored_marked_pane(
+    owner: &str,
+    session: Option<String>,
+) -> (AppState, crate::layout::PaneId, TerminalId) {
     use crate::access::policy::{AccessDefaults, InputMode};
     let (mut state, pane, terminal) = state_with_pane();
     state.access_defaults = AccessDefaults {
@@ -1193,23 +1251,52 @@ fn restored_marked_pane(owner: &str) -> (AppState, crate::layout::PaneId, Termin
     t.set_agent_name("worker".into());
     t.input_mode_set_explicitly = true;
     t.input_mode_mark_owner = Some(owner.into());
+    t.input_mode_mark_session = session;
     (state, pane, terminal)
 }
 
 #[tokio::test]
 async fn a_restored_pane_keeps_its_mark_only_for_the_agent_it_was_set_for() {
     use crate::access::policy::InputMode;
-    let (mut state, pane, terminal) = restored_marked_pane("pi|worker");
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker", Some(process_key(4242)));
+    identify(&mut state, pane, 4242);
     detect(&mut state, pane, Some(Agent::Pi), false);
     assert!(state.terminals[&terminal].input_mode_set_explicitly);
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::Any);
 
     // Another agent came back in the pane: the mark goes and the default mode applies.
-    let (mut state, pane, terminal) = restored_marked_pane("pi|worker");
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker", Some(process_key(4242)));
+    identify(&mut state, pane, 4242);
     detect(&mut state, pane, Some(Agent::Claude), false);
     assert!(!state.terminals[&terminal].input_mode_set_explicitly);
     assert!(state.terminals[&terminal].input_mode_mark_owner.is_none());
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_restored_pane_with_another_session_or_an_unknown_one_loses_its_mark() {
+    use crate::access::policy::InputMode;
+    // Same kind and name, a different session.
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker", Some(process_key(4242)));
+    identify(&mut state, pane, 9999);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+
+    // A saved mark with no session (an older file) reads as unknown: fail closed.
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker", None);
+    identify(&mut state, pane, 4242);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+
+    // The restored agent's session cannot be read: also unknown.
+    let (mut state, pane, terminal) = restored_marked_pane("pi|worker", Some(process_key(4242)));
+    state.handle_app_event(AppEvent::AgentProcessIdentified {
+        pane_id: pane,
+        process: None,
+    });
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
 }
 
 #[tokio::test]
@@ -1247,6 +1334,7 @@ async fn a_detection_that_blinks_does_not_clear_the_mark() {
     };
     // The label drops for a moment while the process is still there, then comes back.
     detect(&mut state, pane, None, false);
+    identify(&mut state, pane, 4242);
     detect(&mut state, pane, Some(Agent::Pi), false);
     assert!(state.terminals[&terminal].input_mode_set_explicitly);
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::Any);

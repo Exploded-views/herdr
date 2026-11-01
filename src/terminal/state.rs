@@ -169,6 +169,12 @@ pub struct TerminalState {
     /// The agent the mark was set for (see `agent_identity`); `None` when the pane was empty.
     /// The mark holds only while the pane's agent is that one.
     pub(crate) input_mode_mark_owner: Option<String>,
+    /// The agent session the mark was set for (see `agent_session_key`). `None` is unknown,
+    /// and an unknown session never matches: the mark clears.
+    pub(crate) input_mode_mark_session: Option<String>,
+    /// The process of the detected agent (pid and start token), as read when detection saw it.
+    /// Not persisted: a restart gives the agent a new process.
+    pub(crate) agent_process: Option<crate::platform::ProcessIdentity>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
@@ -214,6 +220,8 @@ impl TerminalState {
             input_mode: crate::access::policy::InputMode::Any,
             input_mode_set_explicitly: false,
             input_mode_mark_owner: None,
+            input_mode_mark_session: None,
+            agent_process: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
@@ -476,6 +484,7 @@ impl TerminalState {
             self.recent_agent_process_exit = None;
         }
         if process_exited {
+            self.agent_process = None;
             let mut reset_sources = Vec::new();
             let mut stale_sessions = Vec::new();
             for (source, suppressed) in &mut self.suppressed_full_lifecycle_hook_reports {
@@ -2133,15 +2142,37 @@ impl TerminalState {
             .map(|label| format!("{label}|{}", self.agent_name.as_deref().unwrap_or("")))
     }
 
+    /// Which run of the agent is in the pane: its process (pid and start token) and the
+    /// session reference a hook or a saved session gave it. A new run of the same kind has a
+    /// different one. `None` when neither is known.
+    pub(crate) fn agent_session_key(&self) -> Option<String> {
+        let process = self
+            .agent_process
+            .map(|p| format!("proc:{}:{}", p.pid, p.start_token));
+        let session = self
+            .current_session_identity_for_persistence()
+            .map(|(source, agent, kind, value)| format!("ref:{source}:{agent}:{kind:?}:{value}"));
+        match (process, session) {
+            (None, None) => None,
+            (a, b) => Some(format!(
+                "{}|{}",
+                a.unwrap_or_default(),
+                b.unwrap_or_default()
+            )),
+        }
+    }
+
     /// An admin chose this pane's mode on purpose, for the agent that is here now.
     pub(crate) fn mark_input_mode_explicit(&mut self) {
         self.input_mode_set_explicitly = true;
         self.input_mode_mark_owner = self.agent_identity();
+        self.input_mode_mark_session = self.agent_session_key();
     }
 
     pub(crate) fn clear_input_mode_mark(&mut self) {
         self.input_mode_set_explicitly = false;
         self.input_mode_mark_owner = None;
+        self.input_mode_mark_session = None;
     }
 
     /// Drop the mark when a different agent is in the pane than the one it was set for. An
@@ -2151,9 +2182,15 @@ impl TerminalState {
         let Some(current) = self.agent_identity() else {
             return false;
         };
+        // The kind and name are not enough: a new agent of the same kind that started after
+        // the last one left unseen has the same ones. Its session differs, and an unknown
+        // session (on either side) counts as different.
+        let session = self.agent_session_key();
         if self.input_mode_set_explicitly
             && (self.input_mode_mark_owner.is_none()
-                || self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
+                || self.input_mode_mark_owner.as_deref() != Some(current.as_str())
+                || self.input_mode_mark_session.is_none()
+                || self.input_mode_mark_session != session)
         {
             self.clear_input_mode_mark();
             return true;

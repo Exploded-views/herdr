@@ -260,6 +260,7 @@ impl App {
                 terminal.input_mode,
                 terminal.input_mode_set_explicitly,
                 terminal.input_mode_mark_owner.clone(),
+                terminal.input_mode_mark_session.clone(),
             )
         });
         // A new agent is a new occupant: a mode chosen for the last one does not carry over.
@@ -279,12 +280,13 @@ impl App {
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
-            if let Some((access, opened, mode, explicit, owner)) = previous_access {
+            if let Some((access, opened, mode, explicit, owner, session)) = previous_access {
                 terminal.access = access;
                 terminal.access_opened_explicitly = opened;
                 terminal.input_mode = mode;
                 terminal.input_mode_set_explicitly = explicit;
                 terminal.input_mode_mark_owner = owner;
+                terminal.input_mode_mark_session = session;
             }
             return Err(AgentStartError::InputFailed(err.to_string()));
         }

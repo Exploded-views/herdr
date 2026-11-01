@@ -99,7 +99,7 @@ a plan to send it upstream, and nothing has been proposed upstream.
   purpose: `access pane get` shows `explicit`, the sticky default leaves it alone, and the mark
   belongs to the agent it was set for: it is dropped when that agent exits, is renamed or is
   replaced by another, and when a new `agent start` takes the pane. A pane marked while empty
-  drops it when the first agent arrives; a restored pane keeps it only for the same agent. The `[access.default]` mode applies to every agent pane
+  drops it when the first agent arrives; a restored pane keeps it only for the same agent session (a new run of the same kind, or an unknown session, drops it). The `[access.default]` mode applies to every agent pane
   whatever its policy; an `[access.<name>]` section with its own `input_mode` (even `any`)
   overrides it, and is applied when the pane is started, renamed or detected under that name.
   A mode in the config that cannot be read counts as `human-only`, with a diagnostic that names

@@ -1,4 +1,4 @@
-// herdr-fork: test-only child pid setter for access classification tests; panes do not inherit HERDR_CALLER_TOKEN_FILE; a pane runtime caches its shell identity and counts the bytes users send. Unofficial stopgap; see FORK.md.
+// herdr-fork: test-only child pid setter for access classification tests; panes do not inherit HERDR_CALLER_TOKEN_FILE; a pane runtime caches its shell identity and counts the bytes users send; detection reports the agent process behind a new agent (`AgentProcessIdentified`). Unofficial stopgap; see FORK.md.
 use std::cell::Cell;
 use std::io;
 use std::path::Path;
@@ -286,6 +286,27 @@ async fn publish_state_changed_event(
             pane = pane_id.raw(),
             err = %e,
             "failed to deliver StateChanged event"
+        );
+    }
+}
+
+async fn publish_agent_process_identified_event(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent_pid: Option<u32>,
+) {
+    let process = agent_pid.and_then(|pid| {
+        crate::platform::process_start_token(pid)
+            .map(|start_token| crate::platform::ProcessIdentity { pid, start_token })
+    });
+    if let Err(e) = state_events
+        .send(AppEvent::AgentProcessIdentified { pane_id, process })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver AgentProcessIdentified event"
         );
     }
 }
@@ -1117,6 +1138,12 @@ fn spawn_basic_detection_task(
                             last_visible_blocker = false;
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
+                            publish_agent_process_identified_event(
+                                state_events.clone(),
+                                pane_id,
+                                probe.agent_pid,
+                            )
+                            .await;
                             publish_agent_process_detected_event(
                                 state_events.clone(),
                                 pane_id,
@@ -3132,6 +3159,12 @@ impl PaneRuntime {
                                         last_visible_blocker = false;
                                         last_visible_working = false;
                                         last_visible_signal_refresh = None;
+                                        publish_agent_process_identified_event(
+                                            state_events.clone(),
+                                            pane_id,
+                                            probe.agent_pid,
+                                        )
+                                        .await;
                                         publish_agent_process_detected_event(
                                             state_events.clone(),
                                             pane_id,

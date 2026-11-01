@@ -138,7 +138,8 @@ impl App {
                 // Chosen on purpose, even when it is `any`: the sticky default leaves it be.
                 let changed = state.input_mode != mode
                     || !state.input_mode_set_explicitly
-                    || state.input_mode_mark_owner != state.agent_identity();
+                    || state.input_mode_mark_owner != state.agent_identity()
+                    || state.input_mode_mark_session != state.agent_session_key();
                 state.input_mode = mode;
                 state.mark_input_mode_explicit();
                 if changed {

@@ -131,3 +131,5 @@ T10c-M21	T10c-M21.patch	test(a_mark_set_on_an_empty_pane_clears_when_the_first_a
 T10c-M22	T10c-M22.patch	test(a_name_change_on_the_detection_path_clears_the_mark)
 T10c-M23	T10c-M23.patch	test(a_detection_that_blinks_does_not_clear_the_mark)
 T10c-M24	T10c-M24.patch	test(the_explicit_mark_clears_when_the_agent_exits_and_another_arrives)
+T10c-M25	T10c-M25.patch	test(the_explicit_mark_clears_when_the_agent_exits_unseen_and_another_of_its_kind_starts)
+T10c-M26	T10c-M26.patch	test(a_detection_that_blinks_does_not_clear_the_mark)

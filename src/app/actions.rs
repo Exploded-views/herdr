@@ -1461,6 +1461,13 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::AgentProcessIdentified { pane_id, process } => self
+                .update_terminal_state(pane_id, |terminal| {
+                    terminal.agent_process = process;
+                    None
+                })
+                .into_iter()
+                .collect(),
             AppEvent::CodexPromptObserved { pane_id, ready } => self
                 .update_terminal_state(pane_id, |terminal| {
                     terminal.observe_codex_prompt_ready(ready)

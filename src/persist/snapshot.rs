@@ -130,6 +130,9 @@ pub struct PaneSnapshot {
     pub(crate) input_mode_set_explicitly: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) input_mode_mark_owner: Option<String>,
+    /// The agent session the mark was set for. Missing reads as unknown, which clears the mark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_mode_mark_session: Option<String>,
 }
 
 /// An unreadable `input_mode` must not cost the session, and must not loosen the pane: it
@@ -419,6 +422,8 @@ fn capture_tab(
             terminal.is_some_and(|terminal| terminal.input_mode_set_explicitly);
         let input_mode_mark_owner =
             terminal.and_then(|terminal| terminal.input_mode_mark_owner.clone());
+        let input_mode_mark_session =
+            terminal.and_then(|terminal| terminal.input_mode_mark_session.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -462,6 +467,7 @@ fn capture_tab(
                 input_mode,
                 input_mode_set_explicitly,
                 input_mode_mark_owner,
+                input_mode_mark_session,
             },
         );
     }
@@ -786,6 +792,7 @@ mod tests {
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
                 input_mode_mark_owner: None,
+                input_mode_mark_session: None,
             },
         );
         panes.insert(
@@ -803,6 +810,7 @@ mod tests {
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
                 input_mode_mark_owner: None,
+                input_mode_mark_session: None,
             },
         );
 
@@ -1494,6 +1502,7 @@ mod tests {
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
                 input_mode_mark_owner: None,
+                input_mode_mark_session: None,
             },
         );
         panes.insert(
@@ -1513,6 +1522,7 @@ mod tests {
                 input_mode: Default::default(),
                 input_mode_set_explicitly: false,
                 input_mode_mark_owner: None,
+                input_mode_mark_session: None,
             },
         );
 

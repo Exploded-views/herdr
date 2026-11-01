@@ -1,3 +1,4 @@
+// herdr-fork: `AgentProcessIdentified` carries the detected agent's process so the input mode mark can tell one run of an agent from the next. Unofficial stopgap; see FORK.md.
 //! Internal app events delivered via channel.
 //!
 //! Background tasks (PTY child watchers, future hook listeners, etc.) send
@@ -88,6 +89,12 @@ pub enum AppEvent {
         pane_id: PaneId,
         agent: Agent,
         observed_at: Instant,
+    },
+    /// The process behind a detected agent, read when detection saw it. `None` when its
+    /// identity could not be read. Sent just before `AgentProcessDetected`.
+    AgentProcessIdentified {
+        pane_id: PaneId,
+        process: Option<crate::platform::ProcessIdentity>,
     },
     /// The current Codex input screen is visible during managed startup.
     CodexPromptObserved { pane_id: PaneId, ready: bool },
