@@ -74,7 +74,7 @@ The label describes the change; it is not a plan to send it upstream.
 
 ## Getting started
 
-This section describes the fork after the human-only input mode and the release workflow have landed. Until a release is published, there is nothing to download.
+Until a release is published, there is nothing to download.
 
 ### What changes on day one
 
@@ -110,21 +110,24 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
 
    ```sh
    V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
-   mkdir -p ~/.local/opt/herdr-fork/$V
-   tar -xzf herdr-<tag>-<target>.tar.gz -C ~/.local/opt/herdr-fork/$V
+   mkdir -p ~/.local/opt/herdr-fork
+   D=~/.local/opt/herdr-fork/$V
+   mkdir "$D" && tar -xzf herdr-<tag>-<target>.tar.gz -C "$D"   # no -p: refuses if $D exists
    cd ~/.local/opt/herdr-fork
-   ln -s $V current.new
+   ln -sfn $V current.new
    mv -h current.new current   # macOS; on Linux: mv -T current.new current
    ```
+
+   `mkdir` fails if that version is already installed, and then nothing is extracted. Install each version once, and never extract over a version a server is running.
 
    On macOS, if you downloaded with a browser, clear the quarantine flag: `xattr -d com.apple.quarantine ~/.local/opt/herdr-fork/$V/herdr`. A `curl` download doesn't carry the flag, and `xattr` then reports "No such xattr", which is harmless.
 3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
 4. Check that you're running the fork, before any restart:
 
    ```sh
-   command -v herdr     # should resolve under ~/.local/opt/herdr-fork
-   herdr status client  # the binary: line shows the same path
-   herdr access --help  # exists only in the fork; upstream rejects it
+   command -v herdr             # a path under ~/.local/opt/herdr-fork
+   herdr status client          # the binary: line is also under ~/.local/opt/herdr-fork (Linux shows the resolved version directory)
+   herdr access pane get <pane> # fork only; upstream says unknown command
    ```
 
    Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
@@ -142,11 +145,11 @@ So drain first, then stop every session, not just the default one:
 
 1. `herdr server stop` stops the default session. List the others with `herdr session list` and stop each with `herdr session stop <name>`.
 2. Start herdr again with plain `herdr`. (`herdr server` runs a headless server in the foreground, for supervised setups.)
-3. Check the server: `herdr status server` shows `status: running`, and `herdr access log --limit 1` or `herdr access pane get <pane>` works, because an upstream server rejects those calls. If you can't tell, stop every session again before starting.
+3. Check the server: `herdr status server` shows `status: running`, and `herdr access pane get <pane>` works, because an upstream server rejects it. (`herdr access log` also needs the fork server, but it is refused from inside a pane; run it from outside every pane.) If you can't tell, stop every session again before starting.
 
 A saved SSH machine runs its own herdr server. Install and switch the fork on that machine separately; this install doesn't change it.
 
-Don't use `herdr update` (self-update is disabled in fork builds). Don't use live handoff for the switch: a handoff between different builds is untested, and the adopted panes' policies and identities aren't carried over.
+Don't use `herdr update` (self-update is disabled in fork builds). Don't use live handoff for the switch: handoff between this upstream and fork pair is untested, and `herdr server live-handoff --import-exe` can swap in a build without the allow-list (see the known bypasses).
 
 ### Roll back
 
@@ -154,7 +157,7 @@ Upstream is untouched, so rolling back only changes which `herdr` runs:
 
 1. Drain, then stop every session as above.
 2. Remove `~/.local/opt/herdr-fork/current` from `PATH` (or repoint the symlink at another fork version, as above), then open a new shell.
-3. Check with `command -v herdr` and `herdr --version`, then start herdr again.
+3. Check that `command -v herdr` no longer resolves under `~/.local/opt/herdr-fork` and that `herdr access pane get <pane>` now says unknown command, then start herdr again.
 
 Rollback ends every pane again, like the switch did. Upstream ignores the fork's `[access]` keys, with a warning. The fork's `access-input.log` and `access-callers.json` stay in the data directory. Once upstream saves the session, the per-pane policies are gone, so switching back to the fork starts with no pane policies, except the defaults from the config.
 
