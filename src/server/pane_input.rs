@@ -1,3 +1,4 @@
+// herdr-fork: `attach_scroll_reaches_pty` says whether an attached client's scroll writes into the pane, so the input mode gates only that. Unofficial stopgap; see FORK.md.
 use bytes::Bytes;
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 
@@ -182,6 +183,25 @@ fn apply_scroll(
         },
     }
     Ok(())
+}
+
+/// Would this scroll write bytes into the pane's PTY? A wheel the child asked for, and a page
+/// key it owns, do; scrolling herdr's own history does not.
+pub(super) fn attach_scroll_reaches_pty(
+    runtime: &crate::terminal::TerminalRuntime,
+    source: &AttachScrollSource,
+) -> bool {
+    match source {
+        AttachScrollSource::PageKey { .. } => !runtime
+            .plain_page_keys_use_host_scrollback()
+            .unwrap_or(false),
+        AttachScrollSource::Wheel => matches!(
+            runtime.wheel_routing(),
+            Some(
+                crate::pane::WheelRouting::MouseReport | crate::pane::WheelRouting::AlternateScroll
+            )
+        ),
+    }
 }
 
 pub(super) fn apply_terminal_attach_input(

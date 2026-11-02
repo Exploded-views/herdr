@@ -1,4 +1,4 @@
-// herdr-fork: tests for the per-pane access gate in the api request path and for shell-client input; tests the input-origin log (api, shell client, attach, popup, flush) and a policy bound in the harvest phase. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for the per-pane input mode (`human-only`) on the api, shell-client and attach paths; tests for the per-pane access gate in the api request path and for shell-client input; tests the input-origin log (api, shell client, attach, popup, flush) and a policy bound in the harvest phase. Unofficial stopgap; see FORK.md.
 // access gate
 use super::*;
 use crate::access::caller::Caller;
@@ -1031,7 +1031,8 @@ fn token_peer(token: &str) -> Caller {
 fn pane_set(pane_id: &str, accept_from: &[&str]) -> Method {
     Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
         pane_id: pane_id.into(),
-        accept_from: accept_from.iter().map(|s| s.to_string()).collect(),
+        accept_from: Some(accept_from.iter().map(|s| s.to_string()).collect()),
+        input_mode: None,
     })
 }
 
@@ -2659,5 +2660,589 @@ async fn a_guard_taken_before_a_writer_restart_still_wakes_the_new_writer() {
     });
     drop(guard);
     wait_for_file(&dir, "t-restart");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// Per-pane input mode (`human-only`).
+
+const HUMAN_ONLY_TAIL: &str = "This is deliberate policy. Do not retry with another herdr command, attach, tmux, or any other route. Use your own messaging channel (e.g. SendMessage) or report to your operator.";
+
+fn human_only_denial(pane: &str) -> String {
+    format!(
+        "access_denied: pane {pane} accepts only typed input; input sent through the herdr API is refused. {HUMAN_ONLY_TAIL}"
+    )
+}
+
+fn pane_set_mode(pane_id: &str, input_mode: &str) -> Method {
+    Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+        pane_id: pane_id.into(),
+        accept_from: None,
+        input_mode: Some(input_mode.into()),
+    })
+}
+
+impl Fixture {
+    /// Set a pane's input mode through the API, as an outside admin.
+    fn set_mode(&mut self, index: usize, mode: &str) -> serde_json::Value {
+        let pane = self.public(index);
+        let response = json(&self.call(outside(), pane_set_mode(&pane, mode)));
+        assert_eq!(response["result"]["type"], "access_policy", "{response}");
+        response
+    }
+}
+
+/// Give an attached or shell client a pane caller: an agent running `herdr agent attach`.
+fn client_from_pane(f: &mut Fixture, client_id: u64, sender: usize) {
+    let class = CallerClass::Pane(f.terminals[sender].clone());
+    f.server.clients.get_mut(&client_id).unwrap().caller = Caller::Classified(class);
+}
+
+#[tokio::test]
+async fn human_only_refuses_api_input_with_message() {
+    let mut f = gate_fixture(2);
+    // A mode with no policy at all: the gate must not treat the node as idle.
+    assert!(!f.server.app.any_access_protected());
+    let response = f.set_mode(0, "human-only");
+    assert_eq!(response["result"]["input_mode"], "human-only");
+    let target = f.public(0);
+    let other = f.public(1);
+
+    let methods = [
+        send_text(&target),
+        send_keys(&target),
+        send_input(&target),
+        agent_start(&target),
+    ];
+    for method in methods {
+        let name = method.operation().name;
+        // Outside, a pane, and an unknown caller are all refused: it is the path, not the sender.
+        for caller in [
+            outside(),
+            f.pane_caller(1),
+            Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+        ] {
+            let response = f.call(caller, method.clone());
+            assert_eq!(
+                error_code(&response).as_deref(),
+                Some("access_denied"),
+                "{name}"
+            );
+            assert_eq!(
+                error_message(&response),
+                human_only_denial(&target),
+                "{name}"
+            );
+        }
+    }
+    f.assert_no_bytes(0);
+
+    // The agent routes go through the same gate.
+    f.make_agent(0, "worker");
+    for method in [agent_prompt("worker"), agent_send_keys("worker")] {
+        let name = method.operation().name;
+        let response = f.call(outside(), method);
+        assert_eq!(
+            error_message(&response),
+            human_only_denial(&target),
+            "{name}"
+        );
+    }
+    f.assert_no_bytes(0);
+
+    // A pane with the default mode is unaffected, and so are control requests.
+    let response = f.call(outside(), send_text(&other));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[1].try_recv().unwrap().as_ref(), b"x");
+    let response = f.call(outside(), pane_set_mode(&target, "any"));
+    assert!(error_code(&response).is_none(), "{response}");
+    let response = f.call(outside(), send_text(&target));
+    assert!(error_code(&response).is_none(), "{response}");
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn human_only_allows_outside_client_typing() {
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+
+    // A shell client classified outside types into the pane.
+    let notices = connect_shell_client(&mut f.server, 90, lineage_for(false, true));
+    type_into(&mut f.server, 90, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    assert!(shell_errors(&notices).is_empty());
+
+    // So does an attached outside client, and so does the owner's remote TUI under `allow`.
+    attach_client(&mut f, 91, 0, lineage_for(false, true));
+    assert!(f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 91,
+        data: b"ls\r".to_vec(),
+    }));
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"ls\r");
+    let _remote = connect_shell_client(&mut f.server, 92, lineage_for(true, true));
+    type_into(&mut f.server, 92, &target);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"typed");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn human_only_refuses_pane_client_attach_input() {
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+
+    // An agent running a TUI inside pane 1 is a pane client: refused with the same text.
+    let notices = connect_shell_client(&mut f.server, 93, lineage_for(false, true));
+    client_from_pane(&mut f, 93, 1);
+    type_into(&mut f.server, 93, &target);
+    f.assert_no_bytes(0);
+    assert_eq!(shell_errors(&notices), vec![human_only_denial(&target)]);
+
+    // An attached pane client is refused too, and the refusal is a logged deny.
+    attach_client(&mut f, 94, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 94, 1);
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 94,
+        data: b"rm\r".to_vec(),
+    });
+    f.assert_no_bytes(0);
+
+    // So is a client that is not shown to be outside.
+    attach_client(&mut f, 95, 0, PeerLineage::default());
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 95,
+        data: b"rm\r".to_vec(),
+    });
+    f.assert_no_bytes(0);
+
+    // The pasted image into the attached terminal is input too.
+    f.server.paste_client_clipboard_image_path(
+        94,
+        crate::protocol::ClientClipboardImageTarget::DirectTerminal,
+        "/x/y.png".into(),
+    );
+    f.assert_no_bytes(0);
+
+    let events = logged(&f);
+    let denied: Vec<_> = events
+        .iter()
+        .filter(|event| event.decision == "deny" && event.route == "attach.input")
+        .collect();
+    assert_eq!(denied.len(), 3, "{events:?}");
+    assert!(denied.iter().any(|event| event.client == "attach:94"
+        && event.class == crate::access::input_log::LoggedClass::Pane
+        && event.bytes == 3));
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn human_only_refuses_attach_mouse_from_pane_client() {
+    let mut f = gate_fixture(2);
+    let mut input = mouse_tracking_runtime(&mut f);
+    f.set_mode(0, "human-only");
+    let click = |client_id| ServerEvent::ClientAttachMouse {
+        client_id,
+        kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
+        position: crate::protocol::ClientMousePosition::Cell { column: 10, row: 5 },
+        geometry: None,
+        modifiers: 0,
+        lines: 1,
+    };
+
+    attach_client(&mut f, 96, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 96, 1);
+    f.server.handle_server_event(click(96));
+    assert!(
+        input.try_recv().is_err(),
+        "a pane client's mouse report was written"
+    );
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].route, "attach.mouse");
+    assert_eq!(events[0].decision, "deny");
+
+    // A wheel report is a mouse report too.
+    f.server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 96,
+            source: crate::protocol::AttachScrollSource::Wheel,
+            direction: crate::protocol::AttachScrollDirection::Up,
+            lines: 1,
+            column: Some(1),
+            row: Some(1),
+            modifiers: 0,
+        });
+    assert!(
+        input.try_recv().is_err(),
+        "a pane client's wheel report was written"
+    );
+
+    // The outside client's click is typed input.
+    attach_client(&mut f, 97, 0, lineage_for(false, true));
+    f.server.handle_server_event(click(97));
+    assert_eq!(input.try_recv().unwrap().as_ref(), b"\x1b[<0;11;6M");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn mode_runs_after_allow_list() {
+    let mut f = gate_fixture(3);
+    f.protect(0, vec![Principal::None]);
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+
+    // The allow-list refusal keeps its own text, for every caller it refuses.
+    let response = f.call(outside(), send_text(&target));
+    assert_eq!(error_message(&response), input_denial(&target, "outside"));
+    let sender = f.public(1);
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, send_text(&target));
+    assert_eq!(
+        error_message(&response),
+        input_denial(&target, &format!("pane:{sender}"))
+    );
+
+    // A caller the allow-list admits meets the mode.
+    f.set_policy(0, &["outside"]);
+    let response = f.call(outside(), send_text(&target));
+    assert_eq!(error_message(&response), human_only_denial(&target));
+    let caller = f.pane_caller(1);
+    let response = f.call(caller, send_text(&target));
+    assert_eq!(
+        error_message(&response),
+        input_denial(&target, &format!("pane:{sender}"))
+    );
+
+    // The client path: the allow-list answers first for a pane client too.
+    let notices = connect_shell_client(&mut f.server, 98, lineage_for(false, true));
+    client_from_pane(&mut f, 98, 2);
+    type_into(&mut f.server, 98, &target);
+    let third = f.public(2);
+    assert_eq!(
+        shell_errors(&notices),
+        vec![input_denial(&target, &format!("pane:{third}"))]
+    );
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn human_only_refusal_is_logged_as_deny_on_the_api_path() {
+    use crate::access::input_log::{InputPath, LoggedClass};
+    let mut f = gate_fixture(1);
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+
+    let response = f.call(outside(), send_text(&target));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+
+    let events = logged(&f);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].path, InputPath::Api);
+    assert_eq!(events[0].route, "pane.send_text");
+    assert_eq!(events[0].class, LoggedClass::Outside);
+    assert_eq!(events[0].decision, "deny");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn access_pane_set_input_mode_edits_only_what_it_names() {
+    let mut f = gate_fixture(2);
+    f.set_policy(0, &["outside", "caller:ops"]);
+    let before = f.set_mode(0, "human-only");
+    assert_eq!(before["result"]["input_mode"], "human-only");
+    assert_eq!(
+        before["result"]["accept_from"],
+        serde_json::json!(["outside", "caller:ops"])
+    );
+    let binding = before["result"]["binding"].clone();
+    assert!(binding.is_string(), "{before}");
+
+    // `get` reports the mode, and the policy is as it was.
+    let pane = f.public(0);
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert_eq!(got["result"]["input_mode"], "human-only");
+    assert_eq!(got["result"]["binding"], binding);
+
+    // Changing the list leaves the mode, and `any` for the list is not `any` for the mode.
+    let after = f.set_policy(0, &["none"]);
+    assert_eq!(after["result"]["input_mode"], "human-only");
+    let open = f.set_policy(0, &["any"]);
+    assert_eq!(open["result"]["input_mode"], "human-only");
+    assert_eq!(open["result"]["accept_from"], serde_json::json!(["any"]));
+    let back = f.set_mode(0, "any");
+    assert_eq!(back["result"]["input_mode"], "any");
+
+    // Setting nothing is an error, and so is an unknown mode.
+    let response = f.call(
+        outside(),
+        Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
+            pane_id: pane.clone(),
+            accept_from: None,
+            input_mode: None,
+        }),
+    );
+    assert_eq!(
+        error_code(&response).as_deref(),
+        Some("access_pane_set_empty")
+    );
+    let response = f.call(outside(), pane_set_mode(&pane, "sometimes"));
+    assert_eq!(error_code(&response).as_deref(), Some("invalid_input_mode"));
+
+    // Only a caller outside every pane sets a mode.
+    let sender = f.pane_caller(1);
+    let response = f.call(sender, pane_set_mode(&pane, "human-only"));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert_eq!(got["result"]["input_mode"], "any");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn flag_mode_is_refused_as_not_in_v1() {
+    let mut f = gate_fixture(1);
+    let pane = f.public(0);
+    let response = f.call(outside(), pane_set_mode(&pane, "flag"));
+    assert_eq!(error_code(&response).as_deref(), Some("invalid_input_mode"));
+    assert!(
+        error_message(&response).contains("not available in v1"),
+        "{response}"
+    );
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert_eq!(got["result"]["input_mode"], "any");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn setting_a_mode_marks_the_session_dirty() {
+    let mut f = gate_fixture(1);
+    f.set_mode(0, "any");
+    f.server.app.state.session_dirty = false;
+    f.set_mode(0, "any");
+    assert!(
+        !f.server.app.state.session_dirty,
+        "a repeated set must not dirty the session"
+    );
+    f.set_mode(0, "human-only");
+    assert!(f.server.app.state.session_dirty);
+    f.server.app.state.session_dirty = false;
+    f.set_mode(0, "any");
+    assert!(
+        f.server.app.state.session_dirty,
+        "lowering the mode must persist too"
+    );
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn no_input_class_row_is_left_unmoded() {
+    // Every Input-class method is gated through `gate_target`, whose match has no `_` arm;
+    // here, each of them is refused on a human-only pane.
+    let mut f = gate_fixture(1);
+    f.make_agent(0, "worker");
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+    let mut seen = 0;
+    for operation in Method::OPERATIONS
+        .iter()
+        .filter(|operation| operation.access == crate::api::schema::AccessClass::Input)
+    {
+        let method = match operation.name {
+            "agent.prompt" => agent_prompt("worker"),
+            "agent.send_keys" => agent_send_keys("worker"),
+            "agent.start" => agent_start(&target),
+            "pane.send_text" => send_text(&target),
+            "pane.send_keys" => send_keys(&target),
+            "pane.send_input" => send_input(&target),
+            other => panic!("{other} is Input class: add it here"),
+        };
+        let response = f.call(outside(), method);
+        assert_eq!(
+            error_message(&response),
+            human_only_denial(&target),
+            "{}",
+            operation.name
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 6);
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+// Fix round 1: remote attach, explicit lowering, the bridge text, scroll and the toast.
+
+fn set_remote(f: &mut Fixture, owner_tui: crate::access::policy::RemoteOwnerTui) {
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_owner_tui = owner_tui;
+}
+
+#[tokio::test]
+async fn human_only_refuses_via_ssh_attach_under_deny_and_allows_it_under_allow() {
+    use crate::access::policy::RemoteOwnerTui;
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    set_remote(&mut f, RemoteOwnerTui::Deny);
+    attach_client(&mut f, 110, 0, lineage_for(true, true));
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 110,
+        data: b"ls\r".to_vec(),
+    });
+    f.assert_no_bytes(0);
+    let events = logged(&f);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.decision == "deny" && event.client == "attach:110"),
+        "{events:?}"
+    );
+
+    // Under `allow` the owner's remote TUI types like a local one.
+    set_remote(&mut f, RemoteOwnerTui::Allow);
+    f.server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 110,
+        data: b"ls\r".to_vec(),
+    });
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"ls\r");
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn explicit_mode_is_shown_by_get_and_set_only_by_an_admin() {
+    let mut f = gate_fixture(2);
+    let pane = f.public(0);
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert!(got["result"].get("input_mode_explicit").is_none(), "{got}");
+
+    // A pane caller can't set it, so nothing is marked.
+    let sender = f.pane_caller(1);
+    let response = f.call(sender, pane_set_mode(&pane, "any"));
+    assert_eq!(error_code(&response).as_deref(), Some("access_denied"));
+    assert!(!f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+
+    // An admin setting it, even to `any`, marks it, and `get` shows that.
+    let set = f.set_mode(0, "any");
+    assert_eq!(set["result"]["input_mode_explicit"], true, "{set}");
+    let got = json(&f.call(outside(), pane_get(&pane)));
+    assert_eq!(got["result"]["input_mode_explicit"], true, "{got}");
+    assert!(f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+    // Changing only the list leaves the flag alone.
+    f.set_policy(0, &["outside"]);
+    assert!(f.server.app.state.terminals[&f.terminals[0]].input_mode_set_explicitly);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn agent_start_into_a_moded_pane_under_the_bridge_name_gets_the_bridge_text() {
+    let mut f = gate_fixture(2);
+    f.server.app.state.remote_settings.input = RemoteInput::BridgeOnly;
+    f.server.app.state.remote_settings.bridge_agent = Some("relay".into());
+    f.set_mode(0, "human-only");
+    let target = f.public(0);
+    let start = |name: &str| {
+        Method::AgentStart(AgentStartParams {
+            name: name.into(),
+            kind: "pi".into(),
+            pane_id: target.clone(),
+            args: Vec::new(),
+            timeout_ms: None,
+            accept_from: None,
+        })
+    };
+    // The bridge guard answers first; the pane is refused either way and nothing is typed.
+    let response = f.call(outside(), start("relay"));
+    assert_eq!(
+        error_code(&response).as_deref(),
+        Some("access_bridge_input_mode")
+    );
+    assert_eq!(
+        error_message(&response),
+        "input mode must stay \"any\" on the bridge (relay), which receives by API by design"
+    );
+    let response = f.call(outside(), start("worker"));
+    assert_eq!(error_message(&response), human_only_denial(&target));
+    f.assert_no_bytes(0);
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn attach_scroll_that_only_moves_herdr_scrollback_is_not_refused() {
+    use crate::protocol::{AttachScrollDirection, AttachScrollSource};
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    attach_client(&mut f, 111, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 111, 1);
+    // The default runtime has no mouse tracking: a wheel only scrolls herdr's own history.
+    f.server
+        .handle_server_event(ServerEvent::ClientAttachScroll {
+            client_id: 111,
+            source: AttachScrollSource::Wheel,
+            direction: AttachScrollDirection::Up,
+            lines: 1,
+            column: Some(1),
+            row: Some(1),
+            modifiers: 0,
+        });
+    f.assert_no_bytes(0);
+    assert!(f.server.clients[&111].refused_pane.is_none());
+    assert!(logged(&f).is_empty(), "{:?}", logged(&f));
+    shutdown_test_runtimes(&mut f.server);
+}
+
+#[tokio::test]
+async fn the_attach_refusal_notice_is_rearmed_by_an_allowed_input() {
+    let mut f = gate_fixture(2);
+    f.set_mode(0, "human-only");
+    attach_client(&mut f, 112, 0, lineage_for(false, true));
+    client_from_pane(&mut f, 112, 1);
+    let key = |f: &mut Fixture| {
+        f.server.handle_server_event(ServerEvent::ClientInput {
+            client_id: 112,
+            data: b"x".to_vec(),
+        });
+    };
+    key(&mut f);
+    assert!(f.server.clients[&112].refused_pane.is_some());
+    f.set_mode(0, "any");
+    key(&mut f);
+    assert_eq!(f.inputs[0].try_recv().unwrap().as_ref(), b"x");
+    assert!(f.server.clients[&112].refused_pane.is_none());
+    shutdown_test_runtimes(&mut f.server);
+}
+
+/// Budget: an attached client's keystroke on a pane with mode `any` (the client lookup, the
+/// terminal lookup and the mode check) is p95 <= 1 us, with 16 panes and no mode set anywhere.
+/// Run by `just bench-access`.
+#[tokio::test]
+#[ignore = "timing: run by just bench-access"]
+async fn input_mode_attach_any() {
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+    let mut f = gate_fixture(16);
+    attach_client(&mut f, 120, 0, lineage_for(false, true));
+    let mut samples = Vec::with_capacity(10_000);
+    for turn in 0..10_256 {
+        let start = Instant::now();
+        let allowed = black_box(
+            f.server
+                .attach_input_permitted(black_box(120), "attach.input", 1),
+        );
+        let took = start.elapsed();
+        assert!(allowed);
+        if turn >= 256 {
+            samples.push(took);
+        }
+    }
+    samples.sort_unstable();
+    let p95 = samples[samples.len() * 95 / 100];
+    println!(
+        "access_gate input_mode_attach_any_p95_ns={}",
+        p95.as_nanos()
+    );
+    assert!(
+        p95 <= Duration::from_micros(1),
+        "input_mode_attach_any p95 {p95:?} is over 1us"
+    );
     shutdown_test_runtimes(&mut f.server);
 }

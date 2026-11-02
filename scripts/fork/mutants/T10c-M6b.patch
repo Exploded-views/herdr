@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M6b: the bridge guard is not re-checked at agent rename. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index 3bcb6b56..db3cb0c6 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -142,7 +142,7 @@ impl App {
+             }));
+         };
+         // The bridge receives by API by design, so a pane with an input mode can't become it.
+-        if is_bridge && !terminal.input_mode.is_any() {
++        if false && is_bridge && !terminal.input_mode.is_any() {
+             return Err(AgentRenameError::BridgeInputMode(
+                 normalized_name.unwrap_or_default(),
+             ));

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M5: the bridge guard is skipped in access.pane.set. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/api/access_panes.rs b/src/app/api/access_panes.rs
+index b62d88da..219ab28b 100644
+--- a/src/app/api/access_panes.rs
++++ b/src/app/api/access_panes.rs
+@@ -97,7 +97,7 @@ impl App {
+                 .terminals
+                 .get(&terminal)
+                 .and_then(|state| state.agent_name.as_deref())
+-                .filter(|name| self.state.is_bridge_name(name));
++                .filter(|_| false);
+             if let Some(bridge) = bridge {
+                 return responses::encode_error(
+                     id,

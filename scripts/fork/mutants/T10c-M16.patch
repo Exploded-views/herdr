@@ -1,0 +1,15 @@
+# herdr-fork: mutant T10c-M16: a scroll that only moves herdr history is refused (M2). Unofficial stopgap; see FORK.md.
+diff --git a/src/server/pane_input.rs b/src/server/pane_input.rs
+index f7f7ca1e..715e8f01 100644
+--- a/src/server/pane_input.rs
++++ b/src/server/pane_input.rs
+@@ -191,6 +191,9 @@ pub(super) fn attach_scroll_reaches_pty(
+     runtime: &crate::terminal::TerminalRuntime,
+     source: &AttachScrollSource,
+ ) -> bool {
++    if true {
++        return true;
++    }
+     match source {
+         AttachScrollSource::PageKey { .. } => !runtime
+             .plain_page_keys_use_host_scrollback()

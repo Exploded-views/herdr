@@ -1,0 +1,18 @@
+# herdr-fork: mutant T10c-M7: attach input skips the input mode. Unofficial stopgap; see FORK.md.
+diff --git a/src/server/headless/input_origin.rs b/src/server/headless/input_origin.rs
+index c156da88..94ae5411 100644
+--- a/src/server/headless/input_origin.rs
++++ b/src/server/headless/input_origin.rs
+@@ -143,7 +143,11 @@ impl HeadlessServer {
+             else {
+                 return true;
+             };
+-            match self.app.check_attach_input(&client.caller, terminal) {
++            match self
++                .app
++                .check_attach_input(&client.caller, terminal)
++                .or(Ok::<(), crate::access::policy::AccessDenied>(()))
++            {
+                 Ok(()) => None,
+                 Err(denied) => Some((terminal_id.clone(), denied)),
+             }

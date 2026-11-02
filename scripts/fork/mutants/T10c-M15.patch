@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M15: a mistyped config mode fails open (M6). Unofficial stopgap; see FORK.md.
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 5f752067..397eb05f 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -1274,7 +1274,7 @@ impl AccessConfig {
+                     out.diagnostics.push(format!(
+                         "access.{name}.input_mode{place}: {err}; using \"human-only\""
+                     ));
+-                    Some(crate::access::policy::InputMode::HumanOnly)
++                    None
+                 }
+             };
+             // A section with only an `input_mode` binds no policy.

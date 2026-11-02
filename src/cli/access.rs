@@ -1,4 +1,4 @@
-// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove), `herdr access pane` (set, get) and `herdr access log`; tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
+// herdr-fork: `herdr access caller` (add, list, rotate, retarget, remove), `herdr access pane` (set with `--accept-from` and `--input-mode`, get) and `herdr access log`; tokens go to a 0600 file and are never printed. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,7 @@ const HELP: &str = "Usage:
   herdr access caller rotate <name> --token-file <path>
   herdr access caller retarget <name> --target-pane <pane>
   herdr access caller remove <name>
-  herdr access pane set <pane> --accept-from <list>
+  herdr access pane set <pane> [--accept-from <list>] [--input-mode <mode>]
   herdr access pane get <pane>
   herdr access log [--limit N] [--json] [--file]
 
@@ -23,6 +23,11 @@ the old token stops working.
 <list> is `any`, or a comma-separated or repeated list of `none`, `outside` and
 `caller:<name>`. `pane set` is for a caller outside every pane only; `any` removes
 the policy and opens the pane on purpose.
+<mode> is `any` (the default) or `human-only`. `human-only` refuses input sent through the
+herdr API, and client input unless the client is a person at an outside terminal. It is
+independent of the policy: `pane set <pane> --input-mode human-only` leaves who the pane
+accepts from as it is. `pane get` prints the pane, its binding, the list, the mode and
+`explicit` (an admin chose the mode on purpose) or `default`.
 `log` prints the input-origin log, newest first: who sent each pane input (path, sender
 class, client, host kind, byte count; never the content). It is for a caller outside
 every pane only. An entry is written within 50 ms after its request handler returns; the first entry after idle is written within 100 ms of the input unless the handler itself runs longer. No entry is skipped in either case.
@@ -67,6 +72,7 @@ struct Parsed {
     target_pane: Option<String>,
     token_file: Option<PathBuf>,
     accept_from: Vec<String>,
+    input_mode: Option<String>,
 }
 
 /// `--accept-from` takes a comma-separated list, and may repeat.
@@ -94,6 +100,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--accept-from" => {
                 let value = iter.next().ok_or("--accept-from needs a value")?;
                 parsed.accept_from.extend(split_list(value)?);
+            }
+            "--input-mode" => {
+                let value = iter.next().ok_or("--input-mode needs a value")?;
+                parsed.input_mode = Some(value.clone());
+            }
+            flag if flag.starts_with("--input-mode=") => {
+                parsed.input_mode = Some(flag["--input-mode=".len()..].to_string());
             }
             flag if flag.starts_with("--accept-from=") => {
                 parsed
@@ -255,23 +268,38 @@ fn run_pane(
         Err(message) => return usage(err, &message),
     };
     if parsed.target_pane.is_some() || parsed.token_file.is_some() {
-        return usage(err, "access pane takes only <pane> and --accept-from");
+        return usage(
+            err,
+            "access pane takes only <pane>, --accept-from and --input-mode",
+        );
     }
     let method = match action {
-        "set" => match (parsed.name, parsed.accept_from.is_empty()) {
+        "set" => match (
+            parsed.name,
+            parsed.accept_from.is_empty() && parsed.input_mode.is_none(),
+        ) {
             (Some(pane_id), false) => {
                 Method::AccessPaneSet(crate::api::schema::AccessPaneSetParams {
                     pane_id,
-                    accept_from: parsed.accept_from,
+                    accept_from: (!parsed.accept_from.is_empty()).then_some(parsed.accept_from),
+                    input_mode: parsed.input_mode,
                 })
             }
-            _ => return usage(err, "set needs <pane> and --accept-from"),
+            _ => return usage(err, "set needs <pane> and --accept-from or --input-mode"),
         },
-        "get" => match (parsed.name, parsed.accept_from.is_empty()) {
+        "get" => match (
+            parsed.name,
+            parsed.accept_from.is_empty() && parsed.input_mode.is_none(),
+        ) {
             (Some(pane_id), true) => {
                 Method::AccessPaneGet(crate::api::schema::AccessPaneGetParams { pane_id })
             }
-            _ => return usage(err, "get needs <pane> and takes no --accept-from"),
+            _ => {
+                return usage(
+                    err,
+                    "get needs <pane> and takes no --accept-from or --input-mode",
+                )
+            }
         },
         _ => return usage(err, &format!("unknown access pane command {action}")),
     };
@@ -281,12 +309,19 @@ fn run_pane(
             pane_id,
             binding,
             accept_from,
+            input_mode,
+            input_mode_explicit,
         }) => {
             writeln!(
                 out,
-                "{pane_id}\t{}\t{}",
+                "{pane_id}\t{}\t{}\t{input_mode}\t{}",
                 binding.as_deref().unwrap_or("-"),
-                accept_from.join(",")
+                accept_from.join(","),
+                if input_mode_explicit {
+                    "explicit"
+                } else {
+                    "default"
+                }
             )?;
             Ok(0)
         }
@@ -634,14 +669,15 @@ mod tests {
         assert_eq!(code, 0, "{err}");
         assert_eq!(
             out,
-            "w1:p1\tacc_00000000000000000000000000000001\toutside,caller:ops\n"
+            "w1:p1\tacc_00000000000000000000000000000001\toutside,caller:ops\tany\tdefault\n"
         );
         assert_eq!(
             seen,
             vec![Method::AccessPaneSet(
                 crate::api::schema::AccessPaneSetParams {
                     pane_id: "w1:p1".into(),
-                    accept_from: vec!["outside".into(), "caller:ops".into()],
+                    accept_from: Some(vec!["outside".into(), "caller:ops".into()]),
+                    input_mode: None,
                 }
             )]
         );
@@ -672,7 +708,11 @@ mod tests {
             let Method::AccessPaneSet(params) = &seen[0] else {
                 panic!("{seen:?}")
             };
-            assert_eq!(params.accept_from, expected, "{argv:?}");
+            assert_eq!(
+                params.accept_from,
+                Some(expected.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+                "{argv:?}"
+            );
         }
     }
 
@@ -684,7 +724,7 @@ mod tests {
             Ok(policy_response(None, &["any"]))
         });
         assert_eq!(code, 0);
-        assert_eq!(out, "w1:p1\t-\tany\n");
+        assert_eq!(out, "w1:p1\t-\tany\tany\tdefault\n");
         assert_eq!(
             seen,
             vec![Method::AccessPaneGet(
@@ -707,6 +747,79 @@ mod tests {
             err.contains("pane_not_found: pane w9:p9 not found"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn pane_set_input_mode_sends_the_mode_and_leaves_the_list_alone() {
+        let (code, out, err, seen) =
+            sent_pane_set(&["pane", "set", "w1:p1", "--input-mode", "human-only"]);
+        assert_eq!(code, 0, "{err}");
+        // The server's answer is printed, so the fake's mode shows here.
+        assert!(out.starts_with("w1:p1\tacc_"), "{out}");
+        assert_eq!(
+            seen,
+            vec![Method::AccessPaneSet(
+                crate::api::schema::AccessPaneSetParams {
+                    pane_id: "w1:p1".into(),
+                    accept_from: None,
+                    input_mode: Some("human-only".into()),
+                }
+            )]
+        );
+        // Both options together, and `=`.
+        let (code, _, err, seen) = sent_pane_set(&[
+            "pane",
+            "set",
+            "--input-mode=any",
+            "w1:p1",
+            "--accept-from",
+            "outside",
+        ]);
+        assert_eq!(code, 0, "{err}");
+        let Method::AccessPaneSet(params) = &seen[0] else {
+            panic!("{seen:?}")
+        };
+        assert_eq!(params.input_mode.as_deref(), Some("any"));
+        assert_eq!(params.accept_from, Some(vec!["outside".to_string()]));
+    }
+
+    #[test]
+    fn pane_get_prints_the_input_mode() {
+        let (code, out, _) = run(&["pane", "get", "w1:p1"], |_| {
+            let mut response = policy_response(None, &["any"]);
+            response["result"]["input_mode"] = "human-only".into();
+            Ok(response)
+        });
+        assert_eq!(code, 0);
+        assert_eq!(out, "w1:p1\t-\tany\thuman-only\tdefault\n");
+    }
+
+    #[test]
+    fn the_help_names_the_explicit_column() {
+        assert!(HELP.contains("explicit"), "{HELP}");
+    }
+
+    #[test]
+    fn pane_get_shows_an_explicit_mode() {
+        let (code, out, _) = run(&["pane", "get", "w1:p1"], |_| {
+            let mut response = policy_response(None, &["any"]);
+            response["result"]["input_mode_explicit"] = true.into();
+            Ok(response)
+        });
+        assert_eq!(code, 0);
+        assert_eq!(out, "w1:p1\t-\tany\tany\texplicit\n");
+    }
+
+    #[test]
+    fn pane_input_mode_usage_errors_never_connect() {
+        for argv in [
+            &["pane", "set", "w1:p1", "--input-mode"][..],
+            &["pane", "set", "--input-mode", "human-only"],
+            &["pane", "get", "w1:p1", "--input-mode", "any"],
+        ] {
+            let (code, _, _) = run(argv, |_| panic!("usage errors must not connect: {argv:?}"));
+            assert_eq!(code, 2, "{argv:?}");
+        }
     }
 
     #[test]

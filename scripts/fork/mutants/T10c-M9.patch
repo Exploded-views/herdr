@@ -1,0 +1,15 @@
+# herdr-fork: mutant T10c-M9: the named mode is skipped for a pane that settled its policy (I1). Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access.rs b/src/app/access.rs
+index 513e2d6e..adcbdea3 100644
+--- a/src/app/access.rs
++++ b/src/app/access.rs
+@@ -93,6 +93,9 @@ impl AppState {
+                 let Some(state) = self.terminals.get(terminal) else {
+                     return Ok(());
+                 };
++                if state.access.is_some() || state.access_opened_explicitly {
++                    return Ok(());
++                }
+                 // Only the policy step is skipped for a pane that has settled its policy;
+                 // the named input mode below is independent of it.
+                 if state.access.is_none() && !state.access_opened_explicitly {

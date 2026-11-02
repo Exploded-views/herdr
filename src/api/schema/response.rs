@@ -1,4 +1,4 @@
-// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy), and the access.log result (AccessInputLog). Unofficial stopgap; see FORK.md.
+// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy, with the pane's input mode), and the access.log result (AccessInputLog). Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 use super::access::{AccessCallerInfo, AccessInputEvent, CallerToken};
@@ -69,6 +69,12 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binding: Option<String>,
         accept_from: Vec<String>,
+        /// `any` or `human-only`.
+        #[serde(default = "default_input_mode")]
+        input_mode: String,
+        /// True when an admin set the mode on purpose, so the default mode leaves it alone.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        input_mode_explicit: bool,
     },
     /// The input-origin log, newest first. `dropped` counts entries that never reached the file.
     AccessInputLog {
@@ -323,4 +329,8 @@ pub struct AgentManifestInfo {
     pub remote_last_checked_unix: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+}
+
+fn default_input_mode() -> String {
+    "any".to_string()
 }

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M13: a new agent keeps the explicit mode mark (I4b). Unofficial stopgap; see FORK.md.
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index c374f3a3..396fbb68 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -264,7 +264,7 @@ impl App {
+         });
+         // A new agent is a new occupant: a mode chosen for the last one does not carry over.
+         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+-            terminal.clear_input_mode_mark();
++            let _ = terminal;
+         }
+         self.state
+             .bind_access_for_start(&terminal_id, &name, explicit_access)

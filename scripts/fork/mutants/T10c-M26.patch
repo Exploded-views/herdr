@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M26: detection's agent process is never stored, so the session is always unknown. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/actions.rs b/src/app/actions.rs
+index a818540e..4441fc38 100644
+--- a/src/app/actions.rs
++++ b/src/app/actions.rs
+@@ -1463,7 +1463,7 @@ impl AppState {
+                 .collect(),
+             AppEvent::AgentProcessIdentified { pane_id, process } => self
+                 .update_terminal_state(pane_id, |terminal| {
+-                    terminal.agent_process = process;
++                    let _ = process;
+                     None
+                 })
+                 .into_iter()

@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M18: a rename keeps the explicit mark. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/agents.rs b/src/app/agents.rs
+index c374f3a3..9d9d30ba 100644
+--- a/src/app/agents.rs
++++ b/src/app/agents.rs
+@@ -158,7 +158,7 @@ impl App {
+             None => terminal.clear_agent_name(),
+         }
+         // A mode an admin chose was for the agent under its old name.
+-        terminal.drop_stale_input_mode_mark();
++        let _ = &terminal;
+         self.state.mark_session_dirty();
+         self.schedule_session_save();
+         self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);

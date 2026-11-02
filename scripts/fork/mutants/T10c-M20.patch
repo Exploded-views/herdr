@@ -1,0 +1,14 @@
+# herdr-fork: mutant T10c-M20: the config diagnostic has no line. Unofficial stopgap; see FORK.md.
+diff --git a/src/config/model.rs b/src/config/model.rs
+index 5f752067..adbc5d9f 100644
+--- a/src/config/model.rs
++++ b/src/config/model.rs
+@@ -1270,7 +1270,7 @@ impl AccessConfig {
+                     let place = self
+                         .input_mode_lines
+                         .get(name)
+-                        .map_or(String::new(), |line| format!(" (line {line})"));
++                        .map_or(String::new(), |_| String::new());
+                     out.diagnostics.push(format!(
+                         "access.{name}.input_mode{place}: {err}; using \"human-only\""
+                     ));
