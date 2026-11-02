@@ -94,6 +94,105 @@ upstream sync. Fork changes therefore live in [../FORK-CHANGELOG.md](../FORK-CHA
 labelled *upstream candidate* or *fork-only*, and upstream's `CHANGELOG.md` is untouched.
 The label describes the change; it is not a plan to send it upstream.
 
+## Getting started
+
+Until a release is published, there is nothing to download.
+
+### What changes on day one
+
+With no `[access]` section in the config, the fork behaves like upstream, with three differences:
+
+- No pane has a policy, so nothing is gated. `remote_input = "any"` and `remote_owner_tui = "allow"`.
+- **Update checks and `herdr update` are off.** Fork builds make no background update check and show no in-app update notice. `herdr update` prints that self-update is disabled.
+- **The input-origin log is on.** It records who sent each pane input, never the input itself. It goes to `access-input.log` (and `access-input.log.1`) in the herdr data directory, mode 0600, capped at about 2.5 MiB. `herdr access log` prints it. `[access] input_log = false` turns it off.
+
+Access policies are opt-in. Nothing is gated until you set one, either on a pane or in the config:
+
+- `herdr access pane set <pane> --accept-from outside` protects one pane. `herdr access pane get <pane>` shows its policy.
+- `herdr access pane set <pane> --input-mode human-only` lets only a person at a TUI outside every pane type into that pane.
+- `[access.default]` and `[access.<name>]` tables with `accept_from` bind a default policy when an agent is first detected, so they cover more than one pane at a time.
+- `herdr access caller add <name> --target-pane ID --token-file PATH` gives a named sender a token bound to one pane. The pane must already have a policy that lists `caller:<name>`, and only a caller outside every pane may run it. See "Access callers" in the [CLI reference](next/website/src/content/docs/cli-reference.mdx).
+
+Changes to `[access]` are read when the server starts. `herdr server reload-config` does not apply them, so restart the server after any `[access]` edit (and drain first, as below).
+
+Don't set `remote_input = "bridge-only"` until `bridge_agent` names this node's bridge. If it's unset, all API input from another host is refused, and the message names "this node's bridge". Even then, an SSH TUI client still types like an outside client unless you also set `remote_owner_tui = "deny"` (see the Limits).
+
+### Install
+
+Fork releases are GitHub release tarballs on the repository's release page, built for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (see [releases.md](releases.md#what-gets-published)). There is no Windows build. Each tarball comes with a `.sha256` file.
+
+The fork installs beside upstream and never replaces it. Your upstream `herdr` (`~/.local/bin/herdr`, Homebrew, mise or Nix) is not touched, and a running upstream server keeps running from its own file. Don't copy over a binary a server is running from: on macOS that can kill the server.
+
+1. Download the tarball and its `.sha256` from the release page, over HTTPS, into one directory. Check the tarball:
+   - Linux: `sha256sum -c herdr-<tag>-<target>.tar.gz.sha256`
+   - macOS: `shasum -a 256 -c herdr-<tag>-<target>.tar.gz.sha256`
+
+   The checksum proves the download is intact. It doesn't prove who built it, because both files come from the same page and the builds are unsigned. Authenticity comes from downloading from this repository's own release page.
+2. Install it in its own versioned directory, and point `current` at it:
+
+   ```sh
+   (
+     set -e   # a failed step stops here and leaves `current` alone
+     V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
+     mkdir -p ~/.local/opt/herdr-fork
+     D=~/.local/opt/herdr-fork/$V
+     mkdir "$D"   # no -p: refuses if $D exists
+     tar -xzf herdr-<tag>-<target>.tar.gz -C "$D"
+     # macOS only, and only if a browser download set the flag
+     if [ "$(uname)" = Darwin ] && xattr "$D/herdr" 2>/dev/null | grep -q com.apple.quarantine; then
+       xattr -d com.apple.quarantine "$D/herdr"
+     fi
+     cd ~/.local/opt/herdr-fork
+     ln -sfn $V current.new
+     if [ "$(uname)" = Darwin ]; then mv -h current.new current; else mv -T current.new current; fi
+   )
+   ```
+
+   If your `mv` lacks `-T`, as with some BusyBox builds, use GNU coreutils. `mkdir` fails if that version is already installed, and the subshell then stops before extracting or repointing `current`. Install each version once, and never extract over a version a server is running.
+
+   On macOS, the block clears the quarantine flag when a browser download set it. A `curl` download doesn't carry the flag, so the block skips that step.
+3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
+4. Check that you're running the fork, before any restart:
+
+   ```sh
+   command -v herdr             # a path under ~/.local/opt/herdr-fork
+   herdr status client          # the binary: line is also under ~/.local/opt/herdr-fork (Linux shows the resolved version directory)
+   herdr access                 # runs locally; see below
+   ```
+
+   `herdr access` with no arguments never reaches the server. On the fork it prints the access usage to stderr and exits 2, which is the expected result. On upstream it prints `unknown command: access`, which means `herdr` is still upstream.
+
+   Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
+
+To move to a later fork version, install it into its own `~/.local/opt/herdr-fork/<version>` and repoint `current` the same way (the `ln -sfn` and `mv` lines of the block above): write the new symlink under a new name, then `mv` it into place. Never write over a binary in place.
+
+### Switch the running server
+
+A running server keeps the build it started with. The fork's checks apply only after the server restarts, and restarting ends every pane's process:
+
+- Herdr resumes detected agent sessions on restore, unless `[session] resume_agents_on_restore = false`.
+- Shells and running commands are lost.
+
+So drain first, then stop every session, not just the default one:
+
+1. `herdr server stop` stops the default session. List the others with `herdr session list` and stop each with `herdr session stop <name>`.
+2. Start herdr again with plain `herdr`. (`herdr server` runs a headless server in the foreground, for supervised setups.)
+3. Check the server: `herdr status server` shows `status: running`, and `herdr access pane get <pane>` works, because an upstream server rejects it. (`herdr access log` also needs the fork server, but it is refused from inside a pane; run it from outside every pane.) If you can't tell, stop every session again before starting.
+
+A saved SSH machine runs its own herdr server. Install and switch the fork on that machine separately; this install doesn't change it.
+
+Don't use `herdr update` (self-update is disabled in fork builds). Don't use live handoff for the switch: handoff between this upstream and fork pair is untested, and `herdr server live-handoff --import-exe` can swap in a build without the allow-list (see the known bypasses).
+
+### Roll back
+
+Upstream is untouched, so rolling back only changes which `herdr` runs:
+
+1. Drain, then stop every session as above.
+2. Remove `~/.local/opt/herdr-fork/current` from `PATH` (or repoint the symlink at another fork version, as above), then open a new shell.
+3. Check that `command -v herdr` no longer resolves under `~/.local/opt/herdr-fork` and that `herdr access pane get <pane>` now says unknown command, then start herdr again.
+
+Rollback ends every pane again, like the switch did. Upstream ignores the fork's `[access]` keys, with a warning. The fork's `access-input.log` and `access-callers.json` stay in the data directory. Once upstream saves the session, the per-pane policies are gone, so switching back to the fork starts with no pane policies, except the defaults from the config.
+
 ## Limits
 
 At one uid, this is a guardrail against **misrouted input from cooperative agents**, not a
