@@ -72,6 +72,48 @@ upstream sync. Fork changes therefore live in [../FORK-CHANGELOG.md](../FORK-CHA
 labelled *upstream candidate* or *fork-only*, and upstream's `CHANGELOG.md` is untouched.
 The label describes the change; it is not a plan to send it upstream.
 
+## Getting started
+
+### What changes on day one
+
+With no `[access]` section in the config, the fork behaves like upstream:
+
+- No pane has a policy, so nothing is gated.
+- `remote_input = "any"` and `remote_owner_tui = "allow"`.
+
+The one addition is the **input-origin log**:
+
+- It's on by default, mode 0600, capped at about 2.5 MiB in the data directory.
+- It records who sent each pane input, never the input itself.
+- `[access] input_log = false` turns it off.
+
+Access policies are opt-in, one pane at a time:
+
+- `herdr access pane set <pane> --accept-from outside` protects a pane. `herdr access pane get <pane>` shows its policy.
+- `herdr access caller add` gives a named sender a token bound to one pane.
+- `--input-mode human-only` lets only a person at a TUI outside every pane type into it.
+
+Don't set `remote_input = "bridge-only"` until this node's bridge is named in `bridge_agent`. Under `bridge-only`, input from another host is refused unless it comes through the bridge.
+
+### Install
+
+Fork releases are GitHub release tarballs, one per target. Each comes with a `.sha256` file. To install:
+
+1. Download the tarball for your target and its `.sha256`, then check it: `shasum -a 256 -c herdr-<tag>-<target>.tar.gz.sha256`.
+2. Unpack it. On macOS, clear the quarantine flag: `xattr -d com.apple.quarantine herdr`.
+3. Install the binary as `~/.local/bin/herdr`, and keep the upstream install for rollback. If upstream came from Homebrew, run `brew unlink herdr` so `herdr` on `PATH` is the fork.
+4. Check it: `herdr status` should show protocol 22 for both the client and the server.
+
+Replacing the binary leaves the running server and its panes alive; the server keeps running the old build until it restarts. When you restart it:
+
+- every pane's process ends;
+- agent sessions resume (for example with `claude --resume`);
+- running commands don't survive.
+
+So drain first, then run `herdr server stop` and `herdr server`. Don't use `herdr update`, because self-update is disabled in fork builds. Don't use live handoff for the switch either.
+
+To roll back, stop the server, remove `~/.local/bin/herdr` (or run `brew link herdr`), and start the server again. Upstream ignores the fork's `[access]` keys, with a warning.
+
 ## Limits
 
 At one uid, this is a guardrail against **misrouted input from cooperative agents**, not a
