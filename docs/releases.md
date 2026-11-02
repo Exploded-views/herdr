@@ -33,12 +33,15 @@ upstream's `release.yml`, `preview.yml` and `distribution/` stay untouched.
    [ci.md](ci.md#repository-settings)), so it waits there for approval once the admin has set a
    required reviewer. It re-checks the admin, re-verifies every `.sha256`, confirms the tag
    still points at the built commit, stops if a release or draft already exists for the tag,
-   creates the release as a **draft** (`--target` set to the built commit) with `gh` and the
-   automatic `GITHUB_TOKEN`, uploads everything, confirms the tag again, and only then
-   publishes that draft by its release id. A failed run leaves at most a draft.
+   creates the release as a **draft** with one API call (`target_commitish` set to the built
+   commit) and takes the draft's id from that response, uploads everything to that id,
+   confirms the tag again, and only then publishes that draft by its id. A failed run leaves at most a draft.
 
-To re-run a release, use *Run workflow* on `fork-release` with the existing tag as the `tag`
-input. Delete the leftover release or draft first if there is one: the run refuses to start
+To re-run a release, use *Run workflow* on `fork-release`, choose the **tag itself** under
+*Use workflow from* (not `integ/next`), and enter the same tag as the `tag` input. `prepare`
+fails at once when the run's ref is not `refs/tags/<tag>`, and the `release` environment's
+deployment-ref policy (tags `v*-ev.*` only) would reject any other ref after the full build
+anyway. Delete the leftover release or draft first if there is one: the run refuses to start
 the release while any release or draft exists for the tag.
 
 ### Upstream's workflows

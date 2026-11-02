@@ -211,7 +211,7 @@ def walk_uses(node):
 
 def logical_lines(run):
     """Script lines with backslash continuations joined, blanks and comments dropped."""
-    joined = re.sub(r"\\\n\s*", " ", run)
+    joined = re.sub(r"\s*\\\n\s*", " ", run)
     return [l.strip() for l in joined.splitlines() if l.strip() and not l.strip().startswith("#")]
 
 
@@ -265,11 +265,28 @@ EXISTING_QUERY = (
     "--jq '.[] | select(.tag_name == env.TAG) | .id')\""
 )
 EXISTING_HEADER = 'if [ -n "$existing" ]; then'
-ID_QUERY = (
-    'release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate '
-    "--jq '.[] | select(.tag_name == env.TAG and .draft) | .id')\""
+CREATE = (
+    'release_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" '
+    '-f target_commitish="$SHA" -f name="$TAG" -F body=@"$RUNNER_TEMP/notes.md" -F draft=true '
+    '-F prerelease="$PRERELEASE" --jq .id)"'
 )
 ID_HEADER = 'if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then'
+UPLOAD_LOOP = 'for f in dist/*.tar.gz dist/*.sha256; do'
+UPLOAD = (
+    'curl --fail-with-body -sS -X POST -H "Authorization: Bearer $GH_TOKEN" '
+    '-H "Content-Type: application/octet-stream" --data-binary "@$f" '
+    '"https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")" > /dev/null'
+)
+REF_HEADER = 'if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then'
+GUARD_STEPS = {
+    "prepare": ["Require repository admins", "Validate the tag", "Resolve the tag to a commit on integ/next"],
+    "build": ["Verify the tag's base version matches Cargo.toml", "Check the binary's architecture and that it runs"],
+    "release": [
+        "Require repository admins",
+        "Verify the artifacts",
+        "Create the release as a draft, then publish it",
+    ],
+}
 PUBLISH = 'gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false'
 
 
@@ -338,9 +355,7 @@ class ForkReleaseWorkflow(unittest.TestCase):
     def test_every_job_has_repo_guard(self):
         for name, job in self.jobs.items():
             cond = str(job.get("if", "")).strip()
-            ok = cond == REPO_GUARD or cond.startswith(REPO_GUARD + " && ")
-            self.assertTrue(ok, "job %s: guard missing or weakened: %r" % (name, cond))
-            self.assertNotIn("||", cond, "job %s: guard must not be OR-ed" % name)
+            self.assertEqual(cond, REPO_GUARD, "job %s: guard must be exactly the repo guard" % name)
 
     def test_release_job_needs_every_other_job(self):
         needs = self.jobs["release"].get("needs")
@@ -377,10 +392,12 @@ class ForkReleaseWorkflow(unittest.TestCase):
         lines = logical_lines(step["run"])
         strict_shell(lines, "Validate the tag")
         block_after(lines, TAG_HEADER)
+        block_after(lines, REF_HEADER)
+        self.assertLess(lines.index(TAG_HEADER), lines.index(REF_HEADER))
+        self.assertLess(lines.index(REF_HEADER), lines.index('echo "tag=$tag" >> "$GITHUB_OUTPUT"'))
         self.assertLess(lines.index(TAG_HEADER), lines.index('echo "tag=$tag" >> "$GITHUB_OUTPUT"'))
         env = step.get("env") or {}
         self.assertEqual(env.get("INPUT_TAG"), "${{ github.event.inputs.tag }}")
-        self.assertIn("--verify-tag", "\n".join(step_runs(self.jobs["release"])))
 
     def _check_admin(self, job_name, step):
         lines = logical_lines(step["run"])
@@ -472,38 +489,58 @@ class ForkReleaseWorkflow(unittest.TestCase):
         # No release or draft may exist for the tag already.
         self.assertEqual(top.count(EXISTING_QUERY), 1)
         block_after(top, EXISTING_HEADER)
-        # create: the command, as tokens.
-        creates = [i for i, l in enumerate(top) if l.startswith("gh release create ")]
-        self.assertEqual(len(creates), 1)
-        ci = creates[0]
-        tokens = shlex.split(top[ci])
-        self.assertEqual(tokens[:4], ["gh", "release", "create", "$TAG"])
-        self.assertEqual(tokens.count("--draft"), 1, "--draft must be a standalone flag")
-        self.assertEqual([t for t in tokens if t.startswith("--draft") and t != "--draft"], [])
-        self.assertEqual(tokens.count("--verify-tag"), 1)
-        self.assertEqual(tokens[tokens.index("--target") + 1], "$SHA")
-        self.assertEqual(tokens.count("--target"), 1)
-        self.assertEqual(tokens[tokens.index("--repo") + 1], "Exploded-views/herdr")
+        # create: one API call whose response carries the id.
+        self.assertEqual(top.count(CREATE), 1)
+        ci = top.index(CREATE)
+        self.assertFalse([l for l in top if l.startswith("gh release")], "no gh release subcommands")
+        self.assertEqual([l for l in top if "draft=" in l and l not in (CREATE, PUBLISH)], [])
+        self.assertNotIn("--draft", "\n".join(top))
         self.assertNotIn("||", top[ci])
+        block_after(top, ID_HEADER)
+        self.assertEqual(top.index(ID_HEADER), ci + 1)
         # the first re-check sits after the existence guard and right before create.
         calls = [i for i, l in enumerate(top) if l == "tag_still_at_sha"]
         self.assertEqual(len(calls), 2, "tag_still_at_sha must be called twice")
         first, second = calls
-        ex_end = top.index(EXISTING_HEADER)
-        self.assertLess(ex_end, first)
+        self.assertLess(top.index(EXISTING_HEADER), first)
         self.assertLess(first, ci)
         self.assertEqual([l for l in top[first:ci] if l.startswith("gh ")], [])
-        # draft id captured, validated, then re-check, then publish by id.
-        self.assertEqual(top.count(ID_QUERY), 1)
-        block_after(top, ID_HEADER)
-        self.assertLess(ci, top.index(ID_QUERY))
-        self.assertLess(top.index(ID_QUERY), top.index(ID_HEADER))
-        self.assertLess(top.index(ID_HEADER), second)
+        # uploads go by the captured id, then the re-check, then publish by id.
+        self.assertEqual(top.count(UPLOAD_LOOP), 1)
+        self.assertEqual(top.count(UPLOAD), 1)
+        ul = top.index(UPLOAD_LOOP)
+        self.assertEqual(top[ul + 1], UPLOAD)
+        self.assertEqual(top[ul + 2], "done")
+        self.assertLess(top.index(ID_HEADER), ul)
+        self.assertEqual(second, ul + 3, "re-check must directly follow the uploads")
         self.assertEqual(top.count(PUBLISH), 1)
         self.assertEqual(top.index(PUBLISH), second + 1, "publish must follow the re-check directly")
         self.assertEqual(top[-1], PUBLISH)
         self.assertNotIn("release edit", "\n".join(top))
         self.assertNotIn("--draft=false", "\n".join(top))
+
+    def test_guard_steps_cannot_be_switched_off(self):
+        def walk(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    yield k
+                    yield from walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    yield from walk(v)
+
+        self.assertNotIn("continue-on-error", list(walk(self.jobs)), "continue-on-error is not allowed")
+        for job_name, names in GUARD_STEPS.items():
+            for name in names:
+                step = step_named(self.jobs[job_name], name)
+                self.assertNotIn("if", step, "guard step %r must not have an `if:`" % name)
+        for name, job in self.jobs.items():
+            for run in step_runs(job):
+                for line in logical_lines(run):
+                    self.assertNotRegex(line, r"^set\s+\+|^set\s+-o\b|\|\|\s*(true|:)\s*$|\|\|\s*(true|:)\s*[;)]",
+                                        "job %s: errexit dropped or masked: %r" % (name, line))
+                    if line.startswith("set "):
+                        self.assertEqual(line, "set -euo pipefail", name)
 
     def test_build_has_no_publish_rights(self):
         for name in ("prepare", "build"):
@@ -571,8 +608,6 @@ MUTATIONS = [
     ("expression interpolated into run", _nth('BASE="${TAG#v}"', 'BASE="${{ github.event.inputs.tag }}"', 1)),
     ("rust-cache step added", _all("      - name: Install Zig\n", "      - name: Cache\n        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2\n\n      - name: Install Zig\n", 1)),
     # r2 review list.
-    ("--draft removed from create", _all("            --draft \\\n", "", 1)),
-    ("--draft=false on create", _all("            --draft \\\n", "            --draft=false \\\n", 1)),
     ("both tag re-check calls deleted", _all("          tag_still_at_sha\n", "")),
     ("pre-create re-check deleted", _nth("          tag_still_at_sha\n", "", 1)),
     ("pre-publish re-check deleted", _nth("          tag_still_at_sha\n", "", 2)),
@@ -603,14 +638,41 @@ MUTATIONS = [
     ("secret in build env", _all("      TAG: ${{ needs.prepare.outputs.tag }}\n      TARGET:", "      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      TAG: ${{ needs.prepare.outputs.tag }}\n      TARGET:", 1)),
     ("persist-credentials true", _nth("persist-credentials: false", "persist-credentials: true", 2)),
     # N3 and the nit.
-    ("--target removed", _all('            --target "$SHA" \\\n', "", 1)),
-    ("--target points at the tag", _all('--target "$SHA"', '--target "$TAG"')),
     ("publish by tag name", _all(PUBLISH, 'gh release edit "$TAG" --repo Exploded-views/herdr --draft=false')),
-    ("publish by tag name via api", _all('releases/$release_id" -F', 'releases/tags/$TAG" -F')),
     ("existing-release guard removed", _all('          if [ -n "$existing" ]; then\n            echo "error: a release or draft already exists for $TAG; delete it first" >&2\n            exit 1\n          fi\n', "")),
     ("existing-release guard without exit 1", _all('delete it first" >&2\n            exit 1', 'delete it first" >&2')),
     ("existing-release query removed", _all("select(.tag_name == env.TAG) | .id", "select(.tag_name == \"none\") | .id")),
-    ("draft id not validated", _all("expected exactly one draft for $TAG, got '$release_id'\" >&2\n            exit 1", "expected exactly one draft for $TAG, got '$release_id'\" >&2")),
+    ("draft not created as a draft", _all("-F draft=true", "-F draft=false", 1)),
+    ("draft flag removed from create", _all("            -F draft=true \\\n", "", 1)),
+    ("create without target_commitish", _all('            -f target_commitish="$SHA" \\\n', "", 1)),
+    ("target_commitish points at the tag", _all('target_commitish="$SHA"', 'target_commitish="$TAG"')),
+    ("create response id not read", _all("--jq .id)\"\n          if [[ ! \"$release_id\"", "--jq .name)\"\n          if [[ ! \"$release_id\"")),
+    ("release id not validated", _all("the create call returned no release id for $TAG: '$release_id'\" >&2\n            exit 1", "the create call returned no release id for $TAG: '$release_id'\" >&2")),
+    ("release id lookup back to the list", _all('release_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \\', 'release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" \\')),
+    ("create by gh release create", _all('release_id="$(gh api -X POST', 'gh release create "$TAG" --draft; release_id="$(gh api -X POST')),
+    ("uploads removed", _all("          for f in dist/*.tar.gz dist/*.sha256; do\n", "          for f in; do\n")),
+    ("upload failures ignored", _all('> /dev/null\n          done', '> /dev/null || true\n          done')),
+    ("uploads go to the tag name", _all("releases/$release_id/assets", "releases/tags/$TAG/assets")),
+    ("tag/ref early check removed", _all('          if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then\n            echo "error: run from the tag itself (\'Use workflow from: $tag\'), not from $GITHUB_REF" >&2\n            exit 1\n          fi\n', "")),
+    ("tag/ref early check without exit 1", _all("not from $GITHUB_REF\" >&2\n            exit 1", "not from $GITHUB_REF\" >&2")),
+    ("tag/ref early check weakened", _all('if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then', 'if [ "$GITHUB_REF" = "refs/heads/none" ]; then')),
+    # N7: guard steps switched off by YAML keys or shell options.
+    ("continue-on-error on Verify the artifacts", _all("      - name: Verify the artifacts\n", "      - name: Verify the artifacts\n        continue-on-error: true\n", 1)),
+    ("if: false on Verify the artifacts", _all("      - name: Verify the artifacts\n", "      - name: Verify the artifacts\n        if: false\n", 1)),
+    ("continue-on-error on release admin step", _nth("      - name: Require repository admins\n", "      - name: Require repository admins\n        continue-on-error: true\n", 2)),
+    ("if: false on release admin step", _nth("      - name: Require repository admins\n", "      - name: Require repository admins\n        if: false\n", 2)),
+    ("continue-on-error on prepare admin step", _nth("      - name: Require repository admins\n", "      - name: Require repository admins\n        continue-on-error: true\n", 1)),
+    ("if: false on prepare admin step", _nth("      - name: Require repository admins\n", "      - name: Require repository admins\n        if: false\n", 1)),
+    ("if: false on Validate the tag", _all("      - name: Validate the tag\n", "      - name: Validate the tag\n        if: false\n", 1)),
+    ("if: false on the publish step", _all("      - name: Create the release as a draft, then publish it\n", "      - name: Create the release as a draft, then publish it\n        if: false\n", 1)),
+    ("continue-on-error on the release job", _all("    environment: release\n", "    environment: release\n    continue-on-error: true\n", 1)),
+    ("continue-on-error on the build job", _all("    timeout-minutes: 90\n", "    timeout-minutes: 90\n    continue-on-error: true\n", 1)),
+    ("release job if: guard && always()", _nth("    if: " + REPO_GUARD + "\n", "    if: " + REPO_GUARD + " && always()\n", 3)),
+    ("build job if: guard && always()", _nth("    if: " + REPO_GUARD + "\n", "    if: " + REPO_GUARD + " && always()\n", 2)),
+    ("set +e before sha256sum -c", _all("          (cd dist && sha256sum -c", "          set +e\n          (cd dist && sha256sum -c")),
+    ("set +o errexit in the publish step", _all("          tag_still_at_sha() {\n", "          set +o errexit\n          tag_still_at_sha() {\n")),
+    ("errexit dropped from Verify the artifacts", _nth("          set -euo pipefail\n          find dist", "          set -o pipefail\n          find dist", 1)),
+    ("|| true on the admin query", _all('--jq .permission)"', '--jq .permission)" || true', 2)),
     ("ls-remote tail-matches the tag", _all('git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}"', 'git ls-remote origin "${TAG}" "${TAG}^{}"')),
     ("ls-remote takes the last line, not the exact ref", _all("awk -v ref=\"refs/tags/${TAG}\" '$2 == (ref \"^{}\") { peeled = $1 } $2 == ref { plain = $1 } END { print (peeled != \"\" ? peeled : plain) }'", "awk 'END { print $1 }'")),
 ]

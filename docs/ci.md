@@ -129,13 +129,13 @@ needs the owner's go; never widen the denylist's patterns to make a scan pass.
 
 | Job | Runner | What it runs |
 |---|---|---|
-| `prepare` | `ubuntu-latest` | Admin check; rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; resolves it to a commit that must be on `integ/next`; `contents: read` |
+| `prepare` | `ubuntu-latest` | Admin check; requires the run's ref to be the tag itself; rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; resolves it to a commit that must be on `integ/next`; `contents: read` |
 | `build` (4 targets) | `macos-latest` (`aarch64-apple-darwin`, `x86_64-apple-darwin`), `ubuntu-latest` (`x86_64`/`aarch64-unknown-linux-musl`) | `cargo build --locked --release --target <t>` at the tag, `herdr --version` where it can run, then a tarball and `.sha256` as an artifact; `contents: read` |
-| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, refuses to run if a release or draft already exists for the tag, `gh release create <tag> --verify-tag --target <sha> --draft` with every tarball and checksum, then publishes that draft by its release id; the only job with `contents: write` |
+| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, refuses to run if a release or draft already exists for the tag, creates a draft with `gh api -X POST` (`target_commitish` = the built sha) and reads its id from the response, uploads every tarball and checksum to that id, then publishes it by id; the only job with `contents: write` |
 
 It runs on a push of a `v*-ev.*` tag, or by hand with a `tag` input. Every job skips outside
 Exploded-views/herdr, actions are pinned by full SHA, and the only secret is the automatic
-`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, pinning each guard to its exact command, and its self-test applies a list of mutations to the workflow text and fails if any is accepted. fork-ci's `release-policy` job runs it.
+`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, pinning each guard to its exact command, and refuses `continue-on-error`, an `if:` on a guard step, a job `if:` other than the repo guard, and `set +e` style changes. Its self-test applies a list of mutations to the workflow text and fails if any is accepted. fork-ci's `release-policy` job runs it.
 
 ## Repository settings
 

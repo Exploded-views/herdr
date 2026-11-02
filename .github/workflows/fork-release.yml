@@ -78,6 +78,10 @@ jobs:
             echo "error: '$tag' is not a fork tag (vX.Y.Z-ev.N or vX.Y.Z-ev.N-rcM)" >&2
             exit 1
           fi
+          if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then
+            echo "error: run from the tag itself ('Use workflow from: $tag'), not from $GITHUB_REF" >&2
+            exit 1
+          fi
           prerelease=false
           case "$tag" in *-rc*) prerelease=true ;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -322,21 +326,21 @@ jobs:
             exit 1
           fi
           tag_still_at_sha
-          flags=()
-          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "$TAG" \
-            --repo Exploded-views/herdr \
-            --title "$TAG" \
-            --notes-file "$RUNNER_TEMP/notes.md" \
-            --verify-tag \
-            --target "$SHA" \
-            --draft \
-            "${flags[@]}" \
-            dist/*.tar.gz dist/*.sha256
-          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.tag_name == env.TAG and .draft) | .id')"
+          release_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$SHA" \
+            -f name="$TAG" \
+            -F body=@"$RUNNER_TEMP/notes.md" \
+            -F draft=true \
+            -F prerelease="$PRERELEASE" \
+            --jq .id)"
           if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
-            echo "error: expected exactly one draft for $TAG, got '$release_id'" >&2
+            echo "error: the create call returned no release id for $TAG: '$release_id'" >&2
             exit 1
           fi
+          echo "draft release $release_id created for $TAG; delete it if this run fails"
+          for f in dist/*.tar.gz dist/*.sha256; do
+            curl --fail-with-body -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" --data-binary "@$f" "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")" > /dev/null
+          done
           tag_still_at_sha
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false
