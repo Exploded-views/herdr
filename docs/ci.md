@@ -60,10 +60,13 @@ real CLI processes started from those panes, a shell-client socket and a simulat
 - Every test has its own base directory under `/tmp`. The server, the CLI and the panes run with a cleared
   environment, and the panes' `PATH` is one directory holding only a `herdr` symlink to the binary under test.
   Each test first proves a pane sees its own socket, so it cannot reach a developer's live session.
-- Two helpers run as other processes: a stand-in `sshd` and a client that runs inside a pane. Both are `#[ignore]`d
-  tests in the same file, and the suite runs them by executing its own test binary (once copied to a temporary
-  directory under the name `sshd`). The suite adds no `[[bin]]` or example target, so nothing here can reach a
-  release build.
+- Three helpers run as other processes: a stand-in `sshd`, a shell-client protocol client that runs inside a pane
+  (a raw client of the client socket, not the real TUI) and `agent_stub`, a stand-in agent that holds a pane's
+  foreground. All are `#[ignore]`d tests in the same file, and the suite runs them by executing its own test
+  binary (the `sshd` one copied to a temporary directory under that name). The suite adds no `[[bin]]` or example
+  target, so nothing here can reach a release build.
+- The two ssh tests assume the harness is not itself running under ssh; they skip with a message when
+  `SSH_CONNECTION` or `SSH_TTY` is set.
 - No assertion depends on timing: waits poll for an outcome with a 30 second hang guard, and a refusal is proven by
   a later control input that does arrive while the refused one never does.
 - `live_handoff_carries_access_policy` is Linux only, as upstream leaves its live_handoff binary out of the macOS

@@ -9,10 +9,11 @@
 //   to the built binary. Commands typed into panes call `"$HERDR_BIN_PATH"`.
 // - "From a pane" means a command typed into that pane, so the server sees a real process
 //   lineage. "From outside" means a process the test starts itself.
-// - The two helpers below (`sshd_helper`, `shell_client_helper`) are tests marked `#[ignore]`.
-//   The suite re-executes its own test binary to run them, once copied to a temporary
-//   directory under the name `sshd` (the simulated ssh server), once from a pane (a client
-//   running inside a pane). The suite adds no `[[bin]]` or example target, so nothing here
+// - The three helpers below (`sshd_helper`, `shell_client_helper`, `agent_stub`) are tests
+//   marked `#[ignore]`. The suite re-executes its own test binary to run them: once copied to
+//   a temporary directory under the name `sshd` (the simulated ssh server), once from a pane
+//   (a shell-client protocol client running inside a pane), once from a pane as a stand-in
+//   agent. The suite adds no `[[bin]]` or example target, so nothing here
 //   can end up in a release build.
 // - No assertion depends on how long something takes: every wait polls for an outcome with a
 //   generous hang guard, and a denial is proven by a later control input that does arrive.
@@ -71,14 +72,46 @@ fn sh_quote(text: &str) -> String {
 
 /// Polls `check` until it returns a value, or panics with `what` after the hang guard.
 fn poll<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
+    poll_observing(what, || check().ok_or_else(String::new))
+}
+
+/// Like `poll`, and the failure message shows what the last attempt saw.
+fn poll_observing<T>(what: &str, mut check: impl FnMut() -> Result<T, String>) -> T {
     let deadline = Instant::now() + HANG;
     loop {
-        if let Some(value) = check() {
-            return value;
+        match check() {
+            Ok(value) => return value,
+            Err(seen) => assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; last seen:\n{seen}"
+            ),
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
         thread::sleep(POLL);
     }
+}
+
+/// A shell client connected to the client socket at `path`, past its handshake and bootstrap.
+fn connect_shell_client(path: &Path) -> UnixStream {
+    let mut stream = UnixStream::connect(path).expect("the client socket");
+    let (generation, error) =
+        client_shell_handshake(&mut stream, CURRENT_ENDPOINT_PROTOCOL_GENERATION, 54, 23)
+            .expect("client shell handshake");
+    assert_eq!(generation, CURRENT_ENDPOINT_PROTOCOL_GENERATION);
+    assert!(error.is_none(), "client shell handshake: {error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, HANG).expect("client shell bootstrap");
+    stream
+}
+
+/// The ssh-based tests need a harness that is not itself reached through an ssh server, or
+/// its own commands would count as another host.
+fn harness_under_ssh() -> bool {
+    let under = ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
+    if under {
+        eprintln!("skipping: SSH_CONNECTION or SSH_TTY is set, so this harness runs under ssh");
+    }
+    under
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +161,12 @@ impl Out {
 
 /// Runs `cmd` to the end and returns what it printed. A process that outlives the hang guard
 /// is killed and the test fails.
-fn run_command(mut cmd: Command, what: &str) -> Out {
+fn run_command(cmd: Command, what: &str) -> Out {
+    run_command_within(cmd, what, HANG * 2)
+}
+
+/// `run_command` with its own limit.
+fn run_command_within(mut cmd: Command, what: &str, limit: Duration) -> Out {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -147,7 +185,7 @@ fn run_command(mut cmd: Command, what: &str) -> Out {
         let _ = stderr.read_to_end(&mut bytes);
         bytes
     });
-    let deadline = Instant::now() + HANG * 2;
+    let deadline = Instant::now() + limit;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -185,6 +223,8 @@ struct Node {
 
 impl Drop for Node {
     fn drop(&mut self) {
+        // Lets a stand-in agent still running in a pane exit promptly.
+        let _ = fs::write(self.base.join("agent-done"), b"done");
         self.stop_server();
         cleanup_test_base(&self.base);
     }
@@ -448,18 +488,14 @@ impl Node {
     }
 
     fn wait_text(&self, pane: &str, needle: &str) {
-        let deadline = Instant::now() + HANG;
-        loop {
+        poll_observing(&format!("{needle:?} to show in pane {pane}"), || {
             let text = self.pane_text(pane);
             if text.contains(needle) {
-                return;
+                Ok(())
+            } else {
+                Err(text)
             }
-            assert!(
-                Instant::now() < deadline,
-                "{needle:?} never showed in pane {pane}; it shows:\n{text}"
-            );
-            thread::sleep(POLL);
-        }
+        });
     }
 
     /// The proof of a denial: the pane shows a later control input, and does not show the
@@ -627,8 +663,7 @@ impl Node {
 
     /// The events `herdr access log --json` shows, once `done` accepts them.
     fn wait_log(&self, what: &str, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
-        let deadline = Instant::now() + HANG;
-        loop {
+        poll_observing(&format!("the input log to show {what}"), || {
             let out = self.cli(&["access", "log", "--json"]);
             out.assert_ok("access log");
             let document: Value = serde_json::from_str(&out.stdout).unwrap_or_else(|err| {
@@ -636,28 +671,18 @@ impl Node {
             });
             let events = document["events"].as_array().cloned().unwrap_or_default();
             if done(&events) {
-                return events;
+                Ok(events)
+            } else {
+                Err(format!("{events:?}"))
             }
-            assert!(
-                Instant::now() < deadline,
-                "the input log never showed {what}; it shows {events:?}"
-            );
-            thread::sleep(POLL);
-        }
+        })
     }
 
     // -- Shell clients --------------------------------------------------------
 
     /// A shell client started by the test (outside every pane), past its bootstrap.
     fn outside_shell_client(&self) -> UnixStream {
-        let mut stream = UnixStream::connect(&self.client_socket).expect("the client socket");
-        let (generation, error) =
-            client_shell_handshake(&mut stream, CURRENT_ENDPOINT_PROTOCOL_GENERATION, 54, 23)
-                .expect("client shell handshake");
-        assert_eq!(generation, CURRENT_ENDPOINT_PROTOCOL_GENERATION);
-        assert!(error.is_none(), "client shell handshake: {error:?}");
-        wait_for_client_shell_bootstrap(&mut stream, HANG).expect("client shell bootstrap");
-        stream
+        connect_shell_client(&self.client_socket)
     }
 
     /// Starts a shell client inside `pane` (the test binary again, see `shell_client_helper`)
@@ -766,20 +791,15 @@ fn sshd_helper() {
     ) else {
         return;
     };
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(args.split('\u{1f}'))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.args(args.split('\u{1f}'))
         .env_remove("HERDR_E2E_ARGS")
-        .env_remove("HERDR_E2E_FILES")
-        .stdin(Stdio::null())
-        .output()
-        .expect("start the CLI");
+        .env_remove("HERDR_E2E_FILES");
+    // The CLI child gets no longer than the test's hang guard, and is killed (it alone) after.
+    let output = run_command_within(cmd, "the CLI", HANG);
     fs::write(format!("{files}.out"), &output.stdout).unwrap();
     fs::write(format!("{files}.err"), &output.stderr).unwrap();
-    fs::write(
-        format!("{files}.rc"),
-        output.status.code().unwrap_or(-1).to_string(),
-    )
-    .unwrap();
+    fs::write(format!("{files}.rc"), output.code.to_string()).unwrap();
     std::process::exit(0);
 }
 
@@ -817,13 +837,7 @@ fn shell_client_helper() {
         return;
     };
     let base = PathBuf::from(base);
-    let mut stream = UnixStream::connect(base.join("runtime/herdr-client.sock")).unwrap();
-    let (generation, error) =
-        client_shell_handshake(&mut stream, CURRENT_ENDPOINT_PROTOCOL_GENERATION, 54, 23)
-            .expect("client shell handshake");
-    assert_eq!(generation, CURRENT_ENDPOINT_PROTOCOL_GENERATION);
-    assert!(error.is_none(), "client shell handshake: {error:?}");
-    wait_for_client_shell_bootstrap(&mut stream, HANG).expect("client shell bootstrap");
+    let mut stream = connect_shell_client(&base.join("runtime/herdr-client.sock"));
     send_client_shell_text(&mut stream, &pane, &text).unwrap();
     fs::write(base.join("helper-sent"), b"sent").unwrap();
     // Stay connected until the test has seen the outcome.
@@ -966,12 +980,11 @@ fn watch_token_works_from_outside_ignored_from_pane() {
 
 #[test]
 fn token_works_on_first_request_after_restart() {
-    let (mut node, a, b) = setup("");
+    let (mut node, _a, b) = setup("");
     node.api_ok("pane.rename", json!({"pane_id": b, "label": "protected-b"}));
     let binding = node.protect(&b, "caller:watch");
     let (token_file, token_binding) = node.add_caller("watch", &b);
     assert_eq!(binding, token_binding);
-    let _ = a;
 
     // The session must be on disk before the server stops, or there is nothing to restore.
     let session = node.config_home.join(app_dir_name()).join("session.json");
@@ -1314,6 +1327,9 @@ fn bridge_pane_refuses_human_only() {
 
 #[test]
 fn ssh_server_lineage_denied_on_open_pane_when_bridge_only() {
+    if harness_under_ssh() {
+        return;
+    }
     let (node, a, _b) = setup(BRIDGE_CONFIG);
     // `a` holds no policy: it is open.
     let open = node.cli(&["access", "pane", "get", &a]);
@@ -1341,6 +1357,9 @@ fn ssh_server_lineage_denied_on_open_pane_when_bridge_only() {
 
 #[test]
 fn forced_command_token_reaches_bridge_only() {
+    if harness_under_ssh() {
+        return;
+    }
     let (node, a, b) = setup(BRIDGE_CONFIG);
     // `b` is the bridge; it accepts its token holder and nobody else.
     node.cli(&["agent", "rename", &b, "relay"])
@@ -1370,7 +1389,9 @@ fn forced_command_token_reaches_bridge_only() {
     .assert_ok("agent prompt through an ssh server with the token");
     node.wait_text(&b, "FORCED_TOKEN_2");
 
-    // Without the token it is another host, and the token reaches nothing but its own pane.
+    // Without the token it is another host. A token for another pane does not help either: the
+    // open pane `a` has no policy that could admit it, so only the own-binding check of the
+    // remote rule refuses it (the token confinement rule itself is checked by the watch test).
     let no_token = node.cli_via_sshd(&["pane", "send-text", &b, "FORCED_NOTOKEN_1"], &[]);
     no_token.assert_denied("pane send-text through an ssh server without the token");
     assert!(
