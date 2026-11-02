@@ -131,11 +131,11 @@ needs the owner's go; never widen the denylist's patterns to make a scan pass.
 |---|---|---|
 | `prepare` | `ubuntu-latest` | Admin check; rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; resolves it to a commit that must be on `integ/next`; `contents: read` |
 | `build` (4 targets) | `macos-latest` (`aarch64-apple-darwin`, `x86_64-apple-darwin`), `ubuntu-latest` (`x86_64`/`aarch64-unknown-linux-musl`) | `cargo build --locked --release --target <t>` at the tag, `herdr --version` where it can run, then a tarball and `.sha256` as an artifact; `contents: read` |
-| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, `gh release create <tag> --verify-tag --draft` with every tarball and checksum, then publishes; the only job with `contents: write` |
+| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, refuses to run if a release or draft already exists for the tag, `gh release create <tag> --verify-tag --target <sha> --draft` with every tarball and checksum, then publishes that draft by its release id; the only job with `contents: write` |
 
 It runs on a push of a `v*-ev.*` tag, or by hand with a `tag` input. Every job skips outside
 Exploded-views/herdr, actions are pinned by full SHA, and the only secret is the automatic
-`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, and fork-ci's `release-policy` job runs it.
+`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, pinning each guard to its exact command, and its self-test applies a list of mutations to the workflow text and fails if any is accepted. fork-ci's `release-policy` job runs it.
 
 ## Repository settings
 
@@ -153,12 +153,25 @@ sitting as enabling Actions, and before any push to `master`:
   skip; `preview` fires only on `preview-*` tags. Disable both once they appear in
   `gh workflow list --all` (after the first trigger at the latest), and re-check after each
   upstream merge (see [releases.md](releases.md)).
+- **What the workflow's own guards do not stop.** The admin check, the ancestor check and
+  `environment: release` all live in `fork-release.yml`, and GitHub runs the copy of the
+  workflow at the triggering ref (the tagged commit for a tag push, the chosen branch for a
+  dispatch). Anyone with write access can push a branch or tag whose copy of the file drops
+  those guards, or add a new workflow with `contents: write`. The guards protect against
+  mistakes and indirect dispatch, not against a writer. The controls that hold are the owner
+  steps below, and not granting write access.
 - **Fork release tags (owner step).** Add a tag ruleset that restricts creating, updating and
-  deleting tags matching `v*-ev.*` to the admin. `fork-release.yml` checks admin permission
-  itself, but the ruleset stops anyone else from moving a tag.
+  deleting tags matching `v*-ev.*` to the admin. The workflow's admin check is not a substitute:
+  the ruleset is what stops anyone else from creating or moving a tag.
 - **`release` environment (owner step).** The `release` job of `fork-release.yml` uses
   `environment: release`. GitHub creates it on first use with no protection. Set the admin as a
-  required reviewer on it, so publishing waits for approval.
+  required reviewer on it, so publishing waits for approval. Also add a deployment-ref policy
+  to the environment (selected branches and tags) that allows only the protected tags
+  `v*-ev.*`. GitHub enforces that policy from the run's ref, so a run from a feature branch
+  cannot use the environment, even with an approval.
+- **Required check (owner step).** Once rulesets exist, add a branch ruleset on `integ/next`
+  that makes `release-policy` (and any other fork-ci job wanted) a required status check.
+  Until then a red `release-policy` blocks nothing.
 - Keep or disable `ci.yml` (Windows coverage against minutes), and `nix` and `distribution`
   (path-filtered, read-only). That is the owner's call; record the choice
   here.

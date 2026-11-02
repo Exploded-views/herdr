@@ -32,12 +32,14 @@ upstream's `release.yml`, `preview.yml` and `distribution/` stay untouched.
 5. The `release` job, the only one with write access, runs in the `release` environment (see
    [ci.md](ci.md#repository-settings)), so it waits there for approval once the admin has set a
    required reviewer. It re-checks the admin, re-verifies every `.sha256`, confirms the tag
-   still points at the built commit, creates the release as a **draft** with `gh` and the
+   still points at the built commit, stops if a release or draft already exists for the tag,
+   creates the release as a **draft** (`--target` set to the built commit) with `gh` and the
    automatic `GITHUB_TOKEN`, uploads everything, confirms the tag again, and only then
-   publishes it. A failed run leaves at most a draft.
+   publishes that draft by its release id. A failed run leaves at most a draft.
 
 To re-run a release, use *Run workflow* on `fork-release` with the existing tag as the `tag`
-input. Delete the leftover draft first if there is one.
+input. Delete the leftover release or draft first if there is one: the run refuses to start
+the release while any release or draft exists for the tag.
 
 ### Upstream's workflows
 

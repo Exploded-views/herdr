@@ -310,12 +310,17 @@ jobs:
         run: |
           set -euo pipefail
           tag_still_at_sha() {
-            current="$(git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" | awk 'END { print $1 }')"
+            current="$(git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" | awk -v ref="refs/tags/${TAG}" '$2 == (ref "^{}") { peeled = $1 } $2 == ref { plain = $1 } END { print (peeled != "" ? peeled : plain) }')"
             if [ "$current" != "$SHA" ]; then
               echo "error: $TAG moved from $SHA to ${current:-nothing} during the run" >&2
               exit 1
             fi
           }
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.tag_name == env.TAG) | .id')"
+          if [ -n "$existing" ]; then
+            echo "error: a release or draft already exists for $TAG; delete it first" >&2
+            exit 1
+          fi
           tag_still_at_sha
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
@@ -324,8 +329,14 @@ jobs:
             --title "$TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --verify-tag \
+            --target "$SHA" \
             --draft \
             "${flags[@]}" \
             dist/*.tar.gz dist/*.sha256
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.tag_name == env.TAG and .draft) | .id')"
+          if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "error: expected exactly one draft for $TAG, got '$release_id'" >&2
+            exit 1
+          fi
           tag_still_at_sha
-          gh release edit "$TAG" --repo Exploded-views/herdr --draft=false
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false

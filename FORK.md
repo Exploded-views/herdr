@@ -59,7 +59,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `docs/next/website/src/data/config-reference.json` | changed | Documents the fork-only `[access]` keys (Access section) |
 | `scripts/config_reference_check.py` | changed | Skips the user-defined `[access.<name>]` map, as it skips `[[keys.command]]` |
 | `scripts/fork/test-denylist-scan.sh` | new | Tests the scanner: pinned exemptions lapse on any change, and every error fails rather than passing clean |
-| `scripts/fork/test-fork-release-workflow.py` | new | Asserts the release workflow's triggers, permissions, pinned actions, secrets and repo guard from its YAML |
+| `scripts/fork/test-fork-release-workflow.py` | new | Asserts the release workflow's triggers, permissions, pinned actions, secrets, repo guard and each publish guard's exact command from its YAML, and self-tests with in-memory mutations |
 | `justfile` | changed | `fork-release-workflow-test` recipe |
 | `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 | `src/api/schema/operations.rs` | changed | `AccessClass` enum and `Operation.access`; the operation macro requires a class on every row |
