@@ -109,16 +109,20 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
 2. Install it in its own versioned directory, and point `current` at it:
 
    ```sh
-   V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
-   mkdir -p ~/.local/opt/herdr-fork
-   D=~/.local/opt/herdr-fork/$V
-   mkdir "$D" && tar -xzf herdr-<tag>-<target>.tar.gz -C "$D"   # no -p: refuses if $D exists
-   cd ~/.local/opt/herdr-fork
-   ln -sfn $V current.new
-   mv -h current.new current   # macOS; on Linux: mv -T current.new current
+   (
+     set -e   # a failed step stops here and leaves `current` alone
+     V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
+     mkdir -p ~/.local/opt/herdr-fork
+     D=~/.local/opt/herdr-fork/$V
+     mkdir "$D"   # no -p: refuses if $D exists
+     tar -xzf herdr-<tag>-<target>.tar.gz -C "$D"
+     cd ~/.local/opt/herdr-fork
+     ln -sfn $V current.new
+     mv -h current.new current   # macOS; on Linux: mv -T current.new current
+   )
    ```
 
-   `mkdir` fails if that version is already installed, and then nothing is extracted. Install each version once, and never extract over a version a server is running.
+   `mkdir` fails if that version is already installed, and the subshell then stops before extracting or repointing `current`. Install each version once, and never extract over a version a server is running.
 
    On macOS, if you downloaded with a browser, clear the quarantine flag: `xattr -d com.apple.quarantine ~/.local/opt/herdr-fork/$V/herdr`. A `curl` download doesn't carry the flag, and `xattr` then reports "No such xattr", which is harmless.
 3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
@@ -127,8 +131,10 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
    ```sh
    command -v herdr             # a path under ~/.local/opt/herdr-fork
    herdr status client          # the binary: line is also under ~/.local/opt/herdr-fork (Linux shows the resolved version directory)
-   herdr access pane get <pane> # fork only; upstream says unknown command
+   herdr access                 # runs locally; see below
    ```
+
+   `herdr access` with no arguments never reaches the server. On the fork it prints the access usage to stderr and exits 2, which is the expected result. On upstream it prints `unknown command: access`, which means `herdr` is still upstream.
 
    Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
 
