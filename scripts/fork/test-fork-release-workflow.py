@@ -254,6 +254,7 @@ ADMIN_LOOP = 'for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do'
 ADMIN_QUERY = 'permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .permission)"'
 TAG_REGEX = r"^v[0-9]+\.[0-9]+\.[0-9]+-ev\.[0-9]+(-rc[0-9]+)?$"
 TAG_HEADER = "if ! printf '%s' \"$tag\" | grep -Eq '" + TAG_REGEX + "'; then"
+SHA_EQ_HEADER = 'if [ "$sha" != "$GITHUB_SHA" ]; then'
 ANCESTOR_HEADER = 'if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/integ/next; then'
 LS_REMOTE = (
     'current="$(git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" | awk -v ref="refs/tags/${TAG}" '
@@ -430,6 +431,7 @@ class ForkReleaseWorkflow(unittest.TestCase):
         co = [st for st in all_steps(prep) if str(st.get("uses", "")).startswith("actions/checkout@")]
         self.assertEqual(len(co), 1)
         self.assertEqual((co[0].get("with") or {}).get("fetch-depth"), "0")
+        self.assertEqual((co[0].get("with") or {}).get("ref"), "${{ github.sha }}")
         step = step_named(prep, "Resolve the tag to a commit on integ/next")
         self.assertEqual(step.get("id"), "resolve")
         self.assertEqual((step.get("env") or {}).get("TAG"), "${{ steps.tag.outputs.tag }}")
@@ -439,6 +441,9 @@ class ForkReleaseWorkflow(unittest.TestCase):
         self.assertEqual(lines.count(rev), 1)
         block_after(lines, ANCESTOR_HEADER)
         self.assertLess(lines.index(rev), lines.index(ANCESTOR_HEADER))
+        block_after(lines, SHA_EQ_HEADER)
+        self.assertLess(lines.index(rev), lines.index(SHA_EQ_HEADER))
+        self.assertLess(lines.index(SHA_EQ_HEADER), lines.index('echo "sha=$sha" >> "$GITHUB_OUTPUT"'))
         out = [l for l in lines if "GITHUB_OUTPUT" in l]
         self.assertEqual(out, ['echo "sha=$sha" >> "$GITHUB_OUTPUT"'])
         self.assertLess(lines.index(ANCESTOR_HEADER), lines.index(out[0]))
@@ -451,7 +456,11 @@ class ForkReleaseWorkflow(unittest.TestCase):
         for name in ("build", "release"):
             cos = [st for st in all_steps(self.jobs[name]) if str(st.get("uses", "")).startswith("actions/checkout@")]
             self.assertEqual(len(cos), 1, name)
-            self.assertEqual((cos[0].get("with") or {}).get("ref"), "${{ needs.prepare.outputs.sha }}", name)
+        # Every checkout builds the triggering commit; no checkout may use a computed ref.
+        for name, job in self.jobs.items():
+            for st in all_steps(job):
+                if str(st.get("uses", "")).startswith("actions/checkout@"):
+                    self.assertEqual((st.get("with") or {}).get("ref"), "${{ github.sha }}", name)
 
     def test_build_checks_binary(self):
         lines = logical_lines(step_named(self.jobs["build"], "Check the binary's architecture and that it runs")["run"])
@@ -656,8 +665,13 @@ MUTATIONS = [
     ("sha output points at the tag", _all('echo "sha=$sha" >> "$GITHUB_OUTPUT"', 'echo "sha=$TAG" >> "$GITHUB_OUTPUT"')),
     ("prepare sha output wired to the tag", _all("sha: ${{ steps.resolve.outputs.sha }}", "sha: ${{ steps.tag.outputs.tag }}")),
     ("sha resolved from the tag object, not the commit", _all('"refs/tags/${TAG}^{commit}"', '"refs/tags/${TAG}"')),
-    ("build checks out the tag name", _nth("ref: ${{ needs.prepare.outputs.sha }}", "ref: ${{ needs.prepare.outputs.tag }}", 1)),
-    ("release checks out the tag name", _nth("ref: ${{ needs.prepare.outputs.sha }}", "ref: ${{ needs.prepare.outputs.tag }}", 2)),
+    ("build checks out the computed sha output", _nth("ref: ${{ github.sha }}", "ref: ${{ needs.prepare.outputs.sha }}", 2)),
+    ("release checks out the computed sha output", _nth("ref: ${{ github.sha }}", "ref: ${{ needs.prepare.outputs.sha }}", 3)),
+    ("build checks out the tag name", _nth("ref: ${{ github.sha }}", "ref: ${{ needs.prepare.outputs.tag }}", 2)),
+    ("release checks out the tag name", _nth("ref: ${{ github.sha }}", "ref: ${{ needs.prepare.outputs.tag }}", 3)),
+    ("prepare checkout ref removed", _all("          ref: ${{ github.sha }}\n          fetch-depth: 0\n", "          fetch-depth: 0\n", 1)),
+    ("triggering-commit equality check removed", _all('          if [ "$sha" != "$GITHUB_SHA" ]; then\n            echo "error: $TAG ($sha) is not the triggering commit $GITHUB_SHA" >&2\n            exit 1\n          fi\n', "", 1)),
+    ("triggering-commit equality without exit 1", _all('triggering commit $GITHUB_SHA" >&2\n            exit 1', 'triggering commit $GITHUB_SHA" >&2', 1)),
     ("architecture check removed", _all('          file "$bin" | grep -Eq "$FILE_EXPECT"\n', "")),
     ("tarball count check removed", _all("          test \"$(find dist -name '*.tar.gz' | wc -l)\" -eq 4\n", "")),
     ("checksum count check removed", _all("          test \"$(find dist -name '*.sha256' | wc -l)\" -eq 4\n", "")),

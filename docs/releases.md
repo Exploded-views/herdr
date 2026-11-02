@@ -25,6 +25,7 @@ upstream's `release.yml`, `preview.yml` and `distribution/` stay untouched.
 3. `prepare` checks that the actor (and the triggering actor) have admin permission, rejects any
    tag that is not `vX.Y.Z-ev.N` or `vX.Y.Z-ev.N-rcM`, and resolves the tag to one commit that
    must be an ancestor of `origin/integ/next`. Every later job builds exactly that commit.
+   The build checks out the triggering commit (`github.sha`), which `prepare` requires to equal the tag's commit.
 4. Each build job checks that the tag's base version matches `Cargo.toml`, runs
    `cargo build --locked --release` from a clean tree (no shared build cache), checks the
    binary's architecture, and runs `herdr --version` (natively, under Rosetta, or under qemu)

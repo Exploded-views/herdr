@@ -94,6 +94,7 @@ jobs:
       - name: Fetch history and tags
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -108,6 +109,10 @@ jobs:
           sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
           if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/integ/next; then
             echo "error: $TAG ($sha) is not on origin/integ/next" >&2
+            exit 1
+          fi
+          if [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "error: $TAG ($sha) is not the triggering commit $GITHUB_SHA" >&2
             exit 1
           fi
           echo "tag $TAG -> $sha"
@@ -151,7 +156,7 @@ jobs:
       - name: Checkout the tag's commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify the tag's base version matches Cargo.toml
@@ -276,7 +281,7 @@ jobs:
       - name: Checkout the tag's commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download all artifacts
