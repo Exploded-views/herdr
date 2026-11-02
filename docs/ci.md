@@ -23,6 +23,7 @@ on manual dispatch. It uses GitHub-hosted runners only, pinned actions (full com
 | `linux` | `ubuntu-latest` | `scripts/fork/linux-test.sh --fetch`, then `scripts/fork/linux-test.sh just ci`, inside `fork-ci.Dockerfile` |
 | `mutants` | `ubuntu-latest`, 4 shards | `scripts/fork/linux-test.sh scripts/fork/run-mutants.sh <shard>/4` in the same image (see "Mutants in CI") |
 | `bench` | `ubuntu-latest` | `scripts/fork/linux-test.sh just bench-access`: the input log's per-input budgets, asserted on GitHub ubuntu-latest (Azure KVM guest), plus the input log's wall-clock visibility tests (`#[ignore = "timing: ..."]`, kept out of the regular suite so a loaded runner cannot flake it) |
+| `release-policy` | `ubuntu-latest` | `python3 scripts/fork/test-fork-release-workflow.py`: the release workflow's policy test |
 | `macos` | `macos-latest` | `just ci 'not binary(live_handoff)'` natively, with upstream's macOS filter |
 | `windows` | `windows-latest` | `cargo nextest run --locked --no-fail-fast` (tests only), set up as upstream's Windows leg is |
 
@@ -122,6 +123,20 @@ vendored upstream files by sha256: an entry applies only while the file is a reg
 exactly the pinned bytes, so an upstream sync that changes one is scanned again. Adding an entry
 needs the owner's go; never widen the denylist's patterns to make a scan pass.
 
+## Fork release workflow
+
+`.github/workflows/fork-release.yml` is the fork's release channel; see [releases.md](releases.md).
+
+| Job | Runner | What it runs |
+|---|---|---|
+| `prepare` | `ubuntu-latest` | Admin check; requires the run's ref to be the tag itself; rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; resolves it to a commit that must be on `integ/next`; `contents: read` |
+| `build` (4 targets) | `macos-latest` (`aarch64-apple-darwin`, `x86_64-apple-darwin`), `ubuntu-latest` (`x86_64`/`aarch64-unknown-linux-musl`) | `cargo build --locked --release --target <t>` at the tag, `herdr --version` where it can run, then a tarball and `.sha256` as an artifact; `contents: read` |
+| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, refuses to run if a release or draft already exists for the tag, creates a draft with `gh api -X POST` (`target_commitish` = the built sha) and reads its id from the response, uploads every tarball and checksum to that id, then publishes it by id; the only job with `contents: write` |
+
+It runs on a push of a `v*-ev.*` tag, or by hand with a `tag` input. Every job skips outside
+Exploded-views/herdr, actions are pinned by full SHA, and the only secret is the automatic
+`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, pinning each guard to its exact command, and refuses `continue-on-error`, an `if:` on a guard step, a job `if:` other than the repo guard, and `set +e` style changes. Its self-test applies a list of mutations to the workflow text and fails if any is accepted. fork-ci's `release-policy` job runs it.
+
 ## Repository settings
 
 These are settings, not file edits: upstream's workflow files stay untouched. In the same
@@ -134,7 +149,29 @@ sitting as enabling Actions, and before any push to `master`:
   - `build-artifacts-manual` (`actions: write`)
   - `windows-arm64` (fires on pushes to `master`)
 - Also disable the guarded set, as defence in depth: `pr-gate`, `preview`, `release` and
-  `stale-close`.
+  `stale-close`. `release` fires on a fork tag but its jobs are guarded to herdrdev/herdr and
+  skip; `preview` fires only on `preview-*` tags. Disable both once they appear in
+  `gh workflow list --all` (after the first trigger at the latest), and re-check after each
+  upstream merge (see [releases.md](releases.md)).
+- **What the workflow's own guards do not stop.** The admin check, the ancestor check and
+  `environment: release` all live in `fork-release.yml`, and GitHub runs the copy of the
+  workflow at the triggering ref (the tagged commit for a tag push, the chosen branch for a
+  dispatch). Anyone with write access can push a branch or tag whose copy of the file drops
+  those guards, or add a new workflow with `contents: write`. The guards protect against
+  mistakes and indirect dispatch, not against a writer. The controls that hold are the owner
+  steps below, and not granting write access.
+- **Fork release tags (owner step).** Add a tag ruleset that restricts creating, updating and
+  deleting tags matching `v*-ev.*` to the admin. The workflow's admin check is not a substitute:
+  the ruleset is what stops anyone else from creating or moving a tag.
+- **`release` environment (owner step).** The `release` job of `fork-release.yml` uses
+  `environment: release`. GitHub creates it on first use with no protection. Set the admin as a
+  required reviewer on it, so publishing waits for approval. Also add a deployment-ref policy
+  to the environment (selected branches and tags) that allows only the protected tags
+  `v*-ev.*`. GitHub enforces that policy from the run's ref, so a run from a feature branch
+  cannot use the environment, even with an approval.
+- **Required check (owner step).** Once rulesets exist, add a branch ruleset on `integ/next`
+  that makes `release-policy` (and any other fork-ci job wanted) a required status check.
+  Until then a red `release-policy` blocks nothing.
 - Keep or disable `ci.yml` (Windows coverage against minutes), and `nix` and `distribution`
   (path-filtered, read-only). That is the owner's call; record the choice
   here.

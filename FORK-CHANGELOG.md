@@ -15,6 +15,8 @@ a plan to send it upstream, and nothing has been proposed upstream.
 - Fork documentation, fork CI, and a Linux build and test image shared by CI and local
   runs. *fork-only*
 - Self-update is disabled. *fork-only*
+- A release workflow builds and publishes fork binaries (macOS and Linux, with checksums,
+  unsigned) when the admin pushes a `vX.Y.Z-ev.N` tag. *fork-only*
 - Every API request now carries who sent it (the socket peer's process lineage, an optional
   caller token, and a remote-origin flag) through to the app. Nothing is gated on it yet. The
   remote API bridge marks its requests as remote, and refuses a first line that is not a JSON
