@@ -1,16 +1,15 @@
 # herdr-fork: mutant T10c-M21: the mark ignores whom it was set for (an empty-pane mark survives the first agent). Unofficial stopgap; see FORK.md.
 diff --git a/src/terminal/state.rs b/src/terminal/state.rs
-index 208e4782..671d9db9 100644
+index f0572fa8..e50d5a07 100644
 --- a/src/terminal/state.rs
 +++ b/src/terminal/state.rs
-@@ -2152,8 +2152,8 @@ impl TerminalState {
-             return false;
-         };
+@@ -2187,7 +2187,8 @@ impl TerminalState {
+         // session (on either side) counts as different.
+         let session = self.agent_session_key();
          if self.input_mode_set_explicitly
 -            && (self.input_mode_mark_owner.is_none()
--                || self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
-+            && (self.input_mode_mark_owner.is_some()
-+                && self.input_mode_mark_owner.as_deref() != Some(current.as_str()))
-         {
-             self.clear_input_mode_mark();
-             return true;
++            && self.input_mode_mark_owner.is_some()
++            && (false
+                 || self.input_mode_mark_owner.as_deref() != Some(current.as_str())
+                 || self.input_mode_mark_session.is_none()
+                 || self.input_mode_mark_session != session)
