@@ -23,6 +23,7 @@ on manual dispatch. It uses GitHub-hosted runners only, pinned actions (full com
 | `linux` | `ubuntu-latest` | `scripts/fork/linux-test.sh --fetch`, then `scripts/fork/linux-test.sh just ci`, inside `fork-ci.Dockerfile` |
 | `mutants` | `ubuntu-latest`, 4 shards | `scripts/fork/linux-test.sh scripts/fork/run-mutants.sh <shard>/4` in the same image (see "Mutants in CI") |
 | `bench` | `ubuntu-latest` | `scripts/fork/linux-test.sh just bench-access`: the input log's per-input budgets, asserted on GitHub ubuntu-latest (Azure KVM guest), plus the input log's wall-clock visibility tests (`#[ignore = "timing: ..."]`, kept out of the regular suite so a loaded runner cannot flake it) |
+| `release-policy` | `ubuntu-latest` | `python3 scripts/fork/test-fork-release-workflow.py`: the release workflow's policy test |
 | `macos` | `macos-latest` | `just ci 'not binary(live_handoff)'` natively, with upstream's macOS filter |
 | `windows` | `windows-latest` | `cargo nextest run --locked --no-fail-fast` (tests only), set up as upstream's Windows leg is |
 
@@ -128,13 +129,13 @@ needs the owner's go; never widen the denylist's patterns to make a scan pass.
 
 | Job | Runner | What it runs |
 |---|---|---|
-| `prepare` | `ubuntu-latest` | Rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; no permissions |
+| `prepare` | `ubuntu-latest` | Admin check; rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; resolves it to a commit that must be on `integ/next`; `contents: read` |
 | `build` (4 targets) | `macos-latest` (`aarch64-apple-darwin`, `x86_64-apple-darwin`), `ubuntu-latest` (`x86_64`/`aarch64-unknown-linux-musl`) | `cargo build --locked --release --target <t>` at the tag, `herdr --version` where it can run, then a tarball and `.sha256` as an artifact; `contents: read` |
-| `release` | `ubuntu-latest` | `gh release create <tag> --verify-tag` with every tarball and checksum; the only job with `contents: write` |
+| `release` | `ubuntu-latest` | In the `release` environment: re-checks the admin, `sha256sum -c`, confirms the tag is unmoved, `gh release create <tag> --verify-tag --draft` with every tarball and checksum, then publishes; the only job with `contents: write` |
 
 It runs on a push of a `v*-ev.*` tag, or by hand with a `tag` input. Every job skips outside
 Exploded-views/herdr, actions are pinned by full SHA, and the only secret is the automatic
-`GITHUB_TOKEN`. `just fork-release-workflow-test` asserts these conditions from the YAML.
+`GITHUB_TOKEN`. Builds use no shared cache. `just fork-release-workflow-test` asserts these conditions from the YAML, and fork-ci's `release-policy` job runs it.
 
 ## Repository settings
 
@@ -148,8 +149,16 @@ sitting as enabling Actions, and before any push to `master`:
   - `build-artifacts-manual` (`actions: write`)
   - `windows-arm64` (fires on pushes to `master`)
 - Also disable the guarded set, as defence in depth: `pr-gate`, `preview`, `release` and
-  `stale-close`. `preview` and `release` must be disabled before the first fork tag, because a
-  tag push also triggers them (see [releases.md](releases.md)).
+  `stale-close`. `release` fires on a fork tag but its jobs are guarded to herdrdev/herdr and
+  skip; `preview` fires only on `preview-*` tags. Disable both once they appear in
+  `gh workflow list --all` (after the first trigger at the latest), and re-check after each
+  upstream merge (see [releases.md](releases.md)).
+- **Fork release tags (owner step).** Add a tag ruleset that restricts creating, updating and
+  deleting tags matching `v*-ev.*` to the admin. `fork-release.yml` checks admin permission
+  itself, but the ruleset stops anyone else from moving a tag.
+- **`release` environment (owner step).** The `release` job of `fork-release.yml` uses
+  `environment: release`. GitHub creates it on first use with no protection. Set the admin as a
+  required reviewer on it, so publishing waits for approval.
 - Keep or disable `ci.yml` (Windows coverage against minutes), and `nix` and `distribution`
   (path-filtered, read-only). That is the owner's call; record the choice
   here.

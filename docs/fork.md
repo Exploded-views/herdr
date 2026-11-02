@@ -41,9 +41,10 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   permissions, a schedule, a `pull_request_target` trigger, or secrets, unless its jobs are
   guarded to herdrdev/herdr. Record it in [ci.md](ci.md#repository-settings). Never edit the
   upstream workflow file.
-  Upstream's `release.yml` and `preview.yml` must stay disabled: a fork tag push (`v*-ev.*`)
-  also triggers them, so the admin disables them in an Actions-off window before the first fork
-  tag, and re-checks after each merge (see [releases.md](releases.md)).
+  Upstream's `release.yml` fires on a fork tag but all its jobs are guarded to herdrdev/herdr
+  and skip, and `preview.yml` fires only on `preview-*` tags. Disable both as defence in depth
+  once registered, and re-check after each merge that their guards still hold (see
+  [releases.md](releases.md#upstreams-workflows)).
 - **Pushing `master` (the upstream mirror merge).** Upstream workflows register with GitHub only
   on their first trigger, and some unguarded ones fire on pushes to `master`
   (`label-next-release-issues`, `website-deploy`, `windows-arm64`). So, before any push to

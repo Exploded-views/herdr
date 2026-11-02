@@ -1,9 +1,10 @@
 # herdr-fork: fork-only workflow. Builds fork binaries when the fork's admin pushes a fork tag
 # (vX.Y.Z-ev.N) and attaches them, with checksums, to a GitHub release. Runs only in
 # Exploded-views/herdr. No signing, no notarization, no secrets beyond the automatic
-# GITHUB_TOKEN. Upstream's release.yml and preview.yml also fire on a tag push and must be
-# disabled in the fork before the first fork tag (see docs/releases.md). Unofficial stopgap;
-# see FORK.md.
+# GITHUB_TOKEN. The tag is resolved once to a commit that must be on integ/next, and every job
+# builds that exact commit. No shared build cache: a release is a clean build. Upstream's
+# release.yml also fires on a fork tag, but its jobs are guarded to herdrdev/herdr and skip
+# (see docs/releases.md). Unofficial stopgap; see FORK.md.
 name: fork-release
 
 on:
@@ -24,19 +25,37 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RUST_TOOLCHAIN_VERSION: 1.96.1
 
 jobs:
-  # Rejects anything that is not a fork tag, for pushes and for manual runs alike.
+  # Rejects anything that is not a fork tag (pushes and manual runs alike), checks that the actor
+  # is an admin, and resolves the tag to one commit that must be on integ/next.
   prepare:
     if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
+      - name: Require repository admins
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .permission)"
+            if [ "$permission" != "admin" ]; then
+              echo "error: $actor must have repository admin permission to publish" >&2
+              exit 1
+            fi
+          done
+
       - name: Validate the tag
         id: tag
         shell: bash
@@ -64,6 +83,28 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
+      - name: Fetch history and tags
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the tag to a commit on integ/next
+        id: resolve
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/heads/integ/next:refs/remotes/origin/integ/next" "refs/tags/${TAG}:refs/tags/${TAG}"
+          sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/integ/next; then
+            echo "error: $TAG ($sha) is not on origin/integ/next" >&2
+            exit 1
+          fi
+          echo "tag $TAG -> $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   build:
     needs: prepare
     if: github.repository == 'Exploded-views/herdr'
@@ -75,16 +116,20 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            can_run: true
+            run_prefix: ''
+            file_expect: 'Mach-O 64-bit executable arm64'
           - target: x86_64-apple-darwin
             os: macos-latest
-            can_run: false
+            run_prefix: 'arch -x86_64'
+            file_expect: 'Mach-O 64-bit executable x86_64'
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            can_run: true
+            run_prefix: ''
+            file_expect: 'ELF 64-bit.*x86-64.*(statically|static-pie) linked'
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            can_run: false
+            run_prefix: 'qemu-aarch64-static'
+            file_expect: 'ELF 64-bit.*ARM aarch64.*(statically|static-pie) linked'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -92,11 +137,13 @@ jobs:
       LIBGHOSTTY_VT_SIMD: 'true'
       TAG: ${{ needs.prepare.outputs.tag }}
       TARGET: ${{ matrix.target }}
+      RUN_PREFIX: ${{ matrix.run_prefix }}
+      FILE_EXPECT: ${{ matrix.file_expect }}
     steps:
-      - name: Checkout the tag
+      - name: Checkout the tag's commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
 
       - name: Verify the tag's base version matches Cargo.toml
@@ -146,10 +193,13 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          key: fork-release-${{ matrix.target }}
+      - name: Install qemu to run the aarch64 Linux binary
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: sudo apt-get install -y qemu-user-static
+
+      - name: Install Rosetta to run the x86_64 macOS binary
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: softwareupdate --install-rosetta --agree-to-license
 
       - name: Remove Zig caches
         shell: bash
@@ -158,10 +208,19 @@ jobs:
       - name: Build
         run: cargo build --locked --release --target "$TARGET"
 
-      - name: Check the binary runs
-        if: matrix.can_run
+      - name: Check the binary's architecture and that it runs
+        shell: bash
         run: |
-          "target/${TARGET}/release/herdr" --version
+          set -euo pipefail
+          bin="target/${TARGET}/release/herdr"
+          file "$bin"
+          file "$bin" | grep -Eq "$FILE_EXPECT"
+          base="${TAG#v}"
+          base="${base%%-ev.*}"
+          read -r -a prefix <<< "$RUN_PREFIX"
+          out="$("${prefix[@]}" "$bin" --version)"
+          echo "$out"
+          printf '%s' "$out" | grep -qF "$base"
 
       - name: Package
         shell: bash
@@ -185,17 +244,31 @@ jobs:
     if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: release
     permissions:
       contents: write
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
+      SHA: ${{ needs.prepare.outputs.sha }}
       PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout the tag
+      - name: Require repository admins
+        shell: bash
+        run: |
+          set -euo pipefail
+          for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .permission)"
+            if [ "$permission" != "admin" ]; then
+              echo "error: $actor must have repository admin permission to publish" >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout the tag's commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
 
       - name: Download all artifacts
@@ -203,6 +276,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Verify the artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -type f
+          test "$(find dist -name '*.tar.gz' | wc -l)" -eq 4
+          test "$(find dist -name '*.sha256' | wc -l)" -eq 4
+          (cd dist && sha256sum -c ./*.sha256)
 
       - name: Extract release notes
         shell: bash
@@ -218,17 +300,23 @@ jobs:
           fi
           {
             echo
-            echo "Unsigned and not notarized. On macOS, clear quarantine after download:"
-            printf '%s\n' 'xattr -d com.apple.quarantine herdr, then check the download against its .sha256 file.'
+            echo "Unsigned and not notarized. Check the tarball with"
+            echo "shasum -a 256 -c herdr-${TAG}-<target>.tar.gz.sha256, extract it, then on macOS run"
+            echo "xattr -d com.apple.quarantine herdr."
           } >> "$RUNNER_TEMP/notes.md"
 
-      - name: Create the release
+      - name: Create the release as a draft, then publish it
         shell: bash
         run: |
           set -euo pipefail
-          find dist -type f
-          test "$(find dist -name '*.tar.gz' | wc -l)" -eq 4
-          test "$(find dist -name '*.sha256' | wc -l)" -eq 4
+          tag_still_at_sha() {
+            current="$(git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}" | awk 'END { print $1 }')"
+            if [ "$current" != "$SHA" ]; then
+              echo "error: $TAG moved from $SHA to ${current:-nothing} during the run" >&2
+              exit 1
+            fi
+          }
+          tag_still_at_sha
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
           gh release create "$TAG" \
@@ -236,5 +324,8 @@ jobs:
             --title "$TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --verify-tag \
+            --draft \
             "${flags[@]}" \
             dist/*.tar.gz dist/*.sha256
+          tag_still_at_sha
+          gh release edit "$TAG" --repo Exploded-views/herdr --draft=false

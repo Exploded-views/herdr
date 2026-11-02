@@ -149,6 +149,21 @@ def load_workflow(path):
     return text, data
 
 
+def strip_comment_lines(text):
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+
+def all_steps(job):
+    return job.get("steps") or []
+
+
+def step_runs(job):
+    return [str(st.get("run", "")) for st in all_steps(job)]
+
+
+FORK_CI_PATH = os.path.join(os.path.dirname(DEFAULT_PATH), "fork-ci.yml")
+
+
 def walk_uses(node):
     if isinstance(node, dict):
         for k, v in node.items():
@@ -217,19 +232,100 @@ class ForkReleaseWorkflow(unittest.TestCase):
         found = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", self.text))
         self.assertLessEqual(found, {"GITHUB_TOKEN"})
         self.assertNotRegex(self.text, r"secrets\s*\[|secrets:\s*inherit")
+        body = strip_comment_lines(self.text)
+        self.assertEqual(re.findall(r"\bsecrets\b(?!\.GITHUB_TOKEN\b)", body), [])
 
     def test_every_job_has_repo_guard(self):
         for name, job in self.jobs.items():
-            self.assertIn(REPO_GUARD, str(job.get("if", "")), "job %s lacks the repo guard" % name)
+            cond = str(job.get("if", "")).strip()
+            ok = cond == REPO_GUARD or cond.startswith(REPO_GUARD + " && ")
+            self.assertTrue(ok, "job %s: guard missing or weakened: %r" % (name, cond))
+            self.assertNotIn("||", cond, "job %s: guard must not be OR-ed" % name)
 
     def test_release_job_needs_every_other_job(self):
         needs = self.jobs["release"].get("needs")
         needs = [needs] if isinstance(needs, str) else list(needs or [])
         self.assertEqual(set(needs), set(self.jobs) - {"release"})
 
-    def test_tag_validated_with_fork_tag_regex(self):
-        self.assertIn(r"^v[0-9]+\.[0-9]+\.[0-9]+-ev\.[0-9]+(-rc[0-9]+)?$", self.text)
-        self.assertIn("--verify-tag", self.text)
+    def test_tag_validated_with_fork_tag_regex_in_prepare(self):
+        runs = "\n".join(step_runs(self.jobs["prepare"]))
+        self.assertIn(r"^v[0-9]+\.[0-9]+\.[0-9]+-ev\.[0-9]+(-rc[0-9]+)?$", runs)
+        self.assertIn("--verify-tag", "\n".join(step_runs(self.jobs["release"])))
+
+    def test_no_expression_interpolation_in_run_blocks(self):
+        for name, job in self.jobs.items():
+            for run in step_runs(job):
+                self.assertNotIn("${{", run, "job %s interpolates into a shell script" % name)
+
+    def test_no_shared_cache_in_release_builds(self):
+        for u in walk_uses(self.jobs):
+            self.assertFalse(u.startswith("Swatinem/rust-cache@"), u)
+            self.assertFalse(u.startswith("actions/cache"), u)
+
+    def test_no_anchors_or_aliases(self):
+        body = strip_comment_lines(self.text)
+        self.assertNotRegex(body, r"(?m)^\s*(-\s+)?[\w-]+:\s+[&*]\w|^\s*-\s+[&*]\w|<<:")
+
+    def _admin_check(self, job):
+        run = str(all_steps(job)[0].get("run", "")) if all_steps(job) else ""
+        if "collaborators" not in run:
+            first = [r for r in step_runs(job) if "collaborators" in r]
+            run = first[0] if first else ""
+        return run
+
+    def test_admin_check_in_prepare_and_first_in_release(self):
+        for name in ("prepare", "release"):
+            run = self._admin_check(self.jobs[name])
+            self.assertIn("/permission", run, name)
+            self.assertIn("GITHUB_ACTOR", run, name)
+            self.assertIn("GITHUB_TRIGGERING_ACTOR", run, name)
+            self.assertIn("admin", run, name)
+        self.assertIn("collaborators", str(all_steps(self.jobs["release"])[0].get("run", "")))
+
+    def test_tag_resolved_once_to_sha_on_integ_next(self):
+        prep = self.jobs["prepare"]
+        self.assertIn("sha", prep.get("outputs", {}))
+        co = [st for st in all_steps(prep) if str(st.get("uses", "")).startswith("actions/checkout@")]
+        self.assertTrue(co)
+        self.assertEqual(str((co[0].get("with") or {}).get("fetch-depth")), "0")
+        runs = "\n".join(step_runs(prep))
+        self.assertIn("merge-base --is-ancestor", runs)
+        self.assertIn("origin/integ/next", runs)
+        for name in ("build", "release"):
+            for st in all_steps(self.jobs[name]):
+                if str(st.get("uses", "")).startswith("actions/checkout@"):
+                    ref = str((st.get("with") or {}).get("ref"))
+                    self.assertEqual(ref, "${{ needs.prepare.outputs.sha }}", name)
+
+    def test_release_rechecks_tag_and_publishes_via_draft(self):
+        rel = self.jobs["release"]
+        runs = "\n".join(step_runs(rel))
+        self.assertIn("sha256sum -c", runs)
+        self.assertIn("ls-remote", runs)
+        self.assertIn("--draft", runs)
+        self.assertIn("--draft=false", runs)
+        self.assertLess(runs.index("sha256sum -c"), runs.index("gh release create"))
+        self.assertLess(runs.index("ls-remote"), runs.index("gh release create"))
+        self.assertLess(runs.index("gh release create"), runs.index("--draft=false"))
+
+    def test_only_release_job_uses_release_environment(self):
+        for name, job in self.jobs.items():
+            env = job.get("environment")
+            if name == "release":
+                self.assertEqual(env, "release", "release job must use environment: release")
+            else:
+                self.assertIsNone(env, "job %s must not use an environment" % name)
+
+    def test_fork_ci_runs_this_policy_test(self):
+        _, ci = load_workflow(FORK_CI_PATH)
+        hits = [
+            n for n, j in (ci.get("jobs") or {}).items()
+            if any("test-fork-release-workflow.py" in r for r in step_runs(j))
+        ]
+        self.assertTrue(hits, "fork-ci.yml does not run the release policy test")
+        for n in hits:
+            self.assertEqual(ci["jobs"][n].get("if"), REPO_GUARD)
+            self.assertEqual(ci["jobs"][n].get("permissions"), {"contents": "read"})
 
 
 if __name__ == "__main__":

@@ -20,6 +20,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # herdr-fork: asserts the release workflow's security conditions (triggers, permissions, pinned
+  # actions, secrets, repo guard) from its YAML, so they cannot regress silently.
+  release-policy:
+    if: github.repository == 'Exploded-views/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - name: Release workflow policy test
+        run: python3 scripts/fork/test-fork-release-workflow.py
+
   linux:
     if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest

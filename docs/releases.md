@@ -17,21 +17,37 @@
 `.github/workflows/fork-release.yml` builds and publishes. Nothing else publishes the fork:
 upstream's `release.yml`, `preview.yml` and `distribution/` stay untouched.
 
-1. **Disable upstream's `release` and `preview` workflows** (`gh workflow disable`), in the
-   admin's Actions-off window, before the first fork tag. A tag push also triggers both of
-   them, and they are written for upstream's repository. Leave them disabled; see
-   [ci.md](ci.md#repository-settings).
-2. The admin tags the commit on `integ/next` and pushes the tag. Only tags matching
+1. On `integ/next`, move the *Unreleased* entries of `FORK-CHANGELOG.md` under a
+   `## <tag>` heading (for example `## v0.9.5-ev.1`). That section becomes the release notes;
+   without it the notes say "See FORK-CHANGELOG.md".
+2. The admin tags that commit on `integ/next` and pushes the tag. Only tags matching
    `v*-ev.*` start the workflow; mirrored upstream tags (`v0.9.5`) never do.
-3. The `prepare` job rejects any tag that is not `vX.Y.Z-ev.N` or `vX.Y.Z-ev.N-rcM`. Each
-   build job then checks out the tag, checks that its base version matches `Cargo.toml`, runs
-   `cargo build --locked --release`, and runs `herdr --version` where the runner can run
-   the binary.
-4. The `release` job, the only one with write access, creates the GitHub release with `gh`
-   and the automatic `GITHUB_TOKEN`, with `--verify-tag`. It uses no other secret.
+3. `prepare` checks that the actor (and the triggering actor) have admin permission, rejects any
+   tag that is not `vX.Y.Z-ev.N` or `vX.Y.Z-ev.N-rcM`, and resolves the tag to one commit that
+   must be an ancestor of `origin/integ/next`. Every later job builds exactly that commit.
+4. Each build job checks that the tag's base version matches `Cargo.toml`, runs
+   `cargo build --locked --release` from a clean tree (no shared build cache), checks the
+   binary's architecture, and runs `herdr --version` (natively, under Rosetta, or under qemu)
+   expecting the base version.
+5. The `release` job, the only one with write access, runs in the `release` environment (see
+   [ci.md](ci.md#repository-settings)), so it waits there for approval once the admin has set a
+   required reviewer. It re-checks the admin, re-verifies every `.sha256`, confirms the tag
+   still points at the built commit, creates the release as a **draft** with `gh` and the
+   automatic `GITHUB_TOKEN`, uploads everything, confirms the tag again, and only then
+   publishes it. A failed run leaves at most a draft.
 
 To re-run a release, use *Run workflow* on `fork-release` with the existing tag as the `tag`
-input. Delete the failed release first if it was created.
+input. Delete the leftover draft first if there is one.
+
+### Upstream's workflows
+
+A fork tag also triggers upstream's `release.yml` (its `v*` trigger), but every one of its jobs
+is guarded to `herdrdev/herdr` and skips at fork commits. `preview.yml` triggers only on
+`preview-*` tags, which fork tags never match. Both are still disabled as defence in depth
+(`gh workflow disable`) once they show up in `gh workflow list --all`, which happens after the
+first trigger at the latest, and re-checked after each upstream merge in case upstream drops or
+changes a guard. Only mirrored old upstream tags (`v0.8.x`, whose `release.yml` is unguarded)
+need the Actions-off window; see [fork.md](fork.md).
 
 ## What gets published
 
@@ -53,5 +69,7 @@ Gatekeeper refuses to run it until it is cleared:
 xattr -d com.apple.quarantine herdr
 ```
 
-A brew formula or an install script that downloads with `curl` does not set the attribute, so
-it does not need this step.
+Check the tarball first (`shasum -a 256 -c herdr-<tag>-<target>.tar.gz.sha256`), extract it,
+then clear the attribute. A brew *formula* or an install script that downloads with `curl` does
+not set the attribute, so it does not need this step. A *cask* does apply quarantine, so the
+planned tap should be a formula.
