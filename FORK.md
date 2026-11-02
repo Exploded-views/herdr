@@ -131,6 +131,8 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/cli/access.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs` | changed | `herdr access pane set --input-mode`, and tests for the mode |
 | `docs/fork.md`, `docs/next/website/src/content/docs/cli-reference.mdx`, `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx`, `docs/next/website/src/data/config-reference.json`, `FORK-CHANGELOG.md` | changed | The `human-only` input mode, `access pane set --input-mode`, the config keys and the honest limits |
 | `scripts/fork/mutants/T10c-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10c-M1, M2, M3, M5, M5b, M6, M6b, M7, M8 and, from fix round 1, M9 to M24; re-derived T6-M1, T6-M3, T8-M3, T9b-M10 and T10b-M11 |
+| `tests/access_control.rs`, `tests/support/mod.rs`, `docs/ci.md` | new / changed / changed | End-to-end tests of the allow-list, caller tokens, the client path, the input log, `human-only`, the bridge guard and a login through an ssh server, against isolated test servers; `send_client_shell_text`; "End-to-end tests" in ci.md |
+| `scripts/fork/mutants/T11-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T11-M1 and T11-M2 (the saved session drops the pane's policy; the restore drops it) |
 
 ## Limits
 

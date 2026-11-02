@@ -50,6 +50,27 @@ CI and local runs build and use the same file, so a version bump touches one fil
 
 macOS builds and tests natively on the Mac.
 
+## End-to-end tests
+
+`tests/access_control.rs` drives the built `herdr` against isolated test servers: real panes running `/bin/sh`,
+real CLI processes started from those panes, a shell-client socket and a simulated ssh login. It runs in the
+`linux` and `macos` jobs with the rest of the suite (`just ci`), and in the Docker run of
+`scripts/fork/linux-test.sh cargo nextest run --locked --test access_control`.
+
+- Every test has its own base directory under `/tmp`. The server, the CLI and the panes run with a cleared
+  environment, and the panes' `PATH` is one directory holding only a `herdr` symlink to the binary under test.
+  Each test first proves a pane sees its own socket, so it cannot reach a developer's live session.
+- Two helpers run as other processes: a stand-in `sshd` and a client that runs inside a pane. Both are `#[ignore]`d
+  tests in the same file, and the suite runs them by executing its own test binary (once copied to a temporary
+  directory under the name `sshd`). The suite adds no `[[bin]]` or example target, so nothing here can reach a
+  release build.
+- No assertion depends on timing: waits poll for an outcome with a 30 second hang guard, and a refusal is proven by
+  a later control input that does arrive while the refused one never does.
+- `live_handoff_carries_access_policy` is Linux only, as upstream leaves its live_handoff binary out of the macOS
+  job.
+- The suite takes well under a minute on a developer machine, because the tests run in parallel and each is a few
+  seconds. The job timeouts above need no change for it.
+
 ## Mutants in CI
 
 A mutant is a small patch that breaks one security guard (the access gate, caller classification,

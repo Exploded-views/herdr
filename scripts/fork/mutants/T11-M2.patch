@@ -1,0 +1,14 @@
+# herdr-fork: mutant T11-M2: a restored or handed-off pane comes back without its access policy. Unofficial stopgap; see FORK.md.
+diff --git a/src/persist/restore.rs b/src/persist/restore.rs
+index 161e6bb8..61b15f0b 100644
+--- a/src/persist/restore.rs
++++ b/src/persist/restore.rs
+@@ -705,7 +705,7 @@ fn restore_tab(
+             Ok(runtime) => {
+                 let terminal_id = TerminalId::alloc();
+                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+-                terminal.access = saved_pane.and_then(|pane| pane.access.clone());
++                terminal.access = None;
+                 terminal.access_opened_explicitly =
+                     saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
+                 terminal.input_mode =
