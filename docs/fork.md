@@ -74,45 +74,89 @@ The label describes the change; it is not a plan to send it upstream.
 
 ## Getting started
 
+This section describes the fork after the human-only input mode and the release workflow have landed. Until a release is published, there is nothing to download.
+
 ### What changes on day one
 
-With no `[access]` section in the config, the fork behaves like upstream:
+With no `[access]` section in the config, the fork behaves like upstream, with three differences:
 
-- No pane has a policy, so nothing is gated.
-- `remote_input = "any"` and `remote_owner_tui = "allow"`.
+- No pane has a policy, so nothing is gated. `remote_input = "any"` and `remote_owner_tui = "allow"`.
+- **Update checks and `herdr update` are off.** Fork builds make no background update check and show no in-app update notice. `herdr update` prints that self-update is disabled.
+- **The input-origin log is on.** It records who sent each pane input, never the input itself. It goes to `access-input.log` (and `access-input.log.1`) in the herdr data directory, mode 0600, capped at about 2.5 MiB. `herdr access log` prints it. `[access] input_log = false` turns it off.
 
-The one addition is the **input-origin log**:
+Access policies are opt-in. Nothing is gated until you set one, either on a pane or in the config:
 
-- It's on by default, mode 0600, capped at about 2.5 MiB in the data directory.
-- It records who sent each pane input, never the input itself.
-- `[access] input_log = false` turns it off.
+- `herdr access pane set <pane> --accept-from outside` protects one pane. `herdr access pane get <pane>` shows its policy.
+- `herdr access pane set <pane> --input-mode human-only` lets only a person at a TUI outside every pane type into that pane.
+- `[access.default]` and `[access.<name>]` tables with `accept_from` bind a default policy when an agent is first detected, so they cover more than one pane at a time.
+- `herdr access caller add <name> --target-pane ID --token-file PATH` gives a named sender a token bound to one pane. The pane must already have a policy that lists `caller:<name>`, and only a caller outside every pane may run it. See "Access callers" in the [CLI reference](next/website/src/content/docs/cli-reference.mdx).
 
-Access policies are opt-in, one pane at a time:
+Changes to `[access]` are read when the server starts. `herdr server reload-config` does not apply them, so restart the server after any `[access]` edit (and drain first, as below).
 
-- `herdr access pane set <pane> --accept-from outside` protects a pane. `herdr access pane get <pane>` shows its policy.
-- `herdr access caller add` gives a named sender a token bound to one pane.
-- `--input-mode human-only` lets only a person at a TUI outside every pane type into it.
-
-Don't set `remote_input = "bridge-only"` until this node's bridge is named in `bridge_agent`. Under `bridge-only`, input from another host is refused unless it comes through the bridge.
+Don't set `remote_input = "bridge-only"` until `bridge_agent` names this node's bridge. If it's unset, all API input from another host is refused, and the message names "this node's bridge". Even then, an SSH TUI client still types like an outside client unless you also set `remote_owner_tui = "deny"` (see the Limits).
 
 ### Install
 
-Fork releases are GitHub release tarballs, one per target. Each comes with a `.sha256` file. To install:
+Fork releases are GitHub release tarballs on the repository's release page, built for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (see [releases.md](releases.md#what-gets-published)). There is no Windows build. Each tarball comes with a `.sha256` file.
 
-1. Download the tarball for your target and its `.sha256`, then check it: `shasum -a 256 -c herdr-<tag>-<target>.tar.gz.sha256`.
-2. Unpack it. On macOS, clear the quarantine flag: `xattr -d com.apple.quarantine herdr`.
-3. Install the binary as `~/.local/bin/herdr`, and keep the upstream install for rollback. If upstream came from Homebrew, run `brew unlink herdr` so `herdr` on `PATH` is the fork.
-4. Check it: `herdr status` should show protocol 22 for both the client and the server.
+The fork installs beside upstream and never replaces it. Your upstream `herdr` (`~/.local/bin/herdr`, Homebrew, mise or Nix) is not touched, and a running upstream server keeps running from its own file. Don't copy over a binary a server is running from: on macOS that can kill the server.
 
-Replacing the binary leaves the running server and its panes alive; the server keeps running the old build until it restarts. When you restart it:
+1. Download the tarball and its `.sha256` from the release page, over HTTPS, into one directory. Check the tarball:
+   - Linux: `sha256sum -c herdr-<tag>-<target>.tar.gz.sha256`
+   - macOS: `shasum -a 256 -c herdr-<tag>-<target>.tar.gz.sha256`
 
-- every pane's process ends;
-- agent sessions resume (for example with `claude --resume`);
-- running commands don't survive.
+   The checksum proves the download is intact. It doesn't prove who built it, because both files come from the same page and the builds are unsigned. Authenticity comes from downloading from this repository's own release page.
+2. Install it in its own versioned directory, and point `current` at it:
 
-So drain first, then run `herdr server stop` and `herdr server`. Don't use `herdr update`, because self-update is disabled in fork builds. Don't use live handoff for the switch either.
+   ```sh
+   V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
+   mkdir -p ~/.local/opt/herdr-fork/$V
+   tar -xzf herdr-<tag>-<target>.tar.gz -C ~/.local/opt/herdr-fork/$V
+   cd ~/.local/opt/herdr-fork
+   ln -s $V current.new
+   mv -h current.new current   # macOS; on Linux: mv -T current.new current
+   ```
 
-To roll back, stop the server, remove `~/.local/bin/herdr` (or run `brew link herdr`), and start the server again. Upstream ignores the fork's `[access]` keys, with a warning.
+   On macOS, if you downloaded with a browser, clear the quarantine flag: `xattr -d com.apple.quarantine ~/.local/opt/herdr-fork/$V/herdr`. A `curl` download doesn't carry the flag, and `xattr` then reports "No such xattr", which is harmless.
+3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
+4. Check that you're running the fork, before any restart:
+
+   ```sh
+   command -v herdr     # should resolve under ~/.local/opt/herdr-fork
+   herdr status client  # the binary: line shows the same path
+   herdr access --help  # exists only in the fork; upstream rejects it
+   ```
+
+   Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
+
+To move to a later fork version, install it into its own `~/.local/opt/herdr-fork/<version>` and repoint `current` the same way: write the new symlink under a new name, then `mv` it into place. Never write over a binary in place.
+
+### Switch the running server
+
+A running server keeps the build it started with. The fork's checks apply only after the server restarts, and restarting ends every pane's process:
+
+- Herdr resumes detected agent sessions on restore, unless `[session] resume_agents_on_restore = false`.
+- Shells and running commands are lost.
+
+So drain first, then stop every session, not just the default one:
+
+1. `herdr server stop` stops the default session. List the others with `herdr session list` and stop each with `herdr session stop <name>`.
+2. Start herdr again with plain `herdr`. (`herdr server` runs a headless server in the foreground, for supervised setups.)
+3. Check the server: `herdr status server` shows `status: running`, and `herdr access log --limit 1` or `herdr access pane get <pane>` works, because an upstream server rejects those calls. If you can't tell, stop every session again before starting.
+
+A saved SSH machine runs its own herdr server. Install and switch the fork on that machine separately; this install doesn't change it.
+
+Don't use `herdr update` (self-update is disabled in fork builds). Don't use live handoff for the switch: a handoff between different builds is untested, and the adopted panes' policies and identities aren't carried over.
+
+### Roll back
+
+Upstream is untouched, so rolling back only changes which `herdr` runs:
+
+1. Drain, then stop every session as above.
+2. Remove `~/.local/opt/herdr-fork/current` from `PATH` (or repoint the symlink at another fork version, as above), then open a new shell.
+3. Check with `command -v herdr` and `herdr --version`, then start herdr again.
+
+Rollback ends every pane again, like the switch did. Upstream ignores the fork's `[access]` keys, with a warning. The fork's `access-input.log` and `access-callers.json` stay in the data directory. Once upstream saves the session, the per-pane policies are gone, so switching back to the fork starts with no pane policies, except the defaults from the config.
 
 ## Limits
 
