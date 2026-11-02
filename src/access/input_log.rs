@@ -1166,8 +1166,10 @@ mod tests {
         log.record(ev("t2", DECISION_ALLOW, 3, 1));
         log.record(ev("t3", DECISION_DENY, 4, 1));
         assert_eq!(locks(&log), before, "the input path took the handle lock");
-        // The wake after the reply does take it, so the counter is live.
-        log.wake_writer();
+        // `wake_now` always takes it, so the counter is live. `wake_writer` is no probe:
+        // `flush_wake` owes no wake when the writer took the entry before `notify` ran, and
+        // then it takes no lock.
+        log.pacer().wake_now();
         assert_eq!(locks(&log), before + 1);
         log.flush_and_stop();
     }
