@@ -272,11 +272,12 @@ CREATE = (
 )
 ID_HEADER = 'if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then'
 UPLOAD_LOOP = 'for f in dist/*.tar.gz dist/*.sha256; do'
-UPLOAD = (
-    'curl --fail-with-body -sS -X POST -H "Authorization: Bearer $GH_TOKEN" '
+UPLOAD_IF = (
+    'if ! out="$(printf \'Authorization: Bearer %s\\n\' "$GH_TOKEN" | curl --fail-with-body -sS -X POST -H @- '
     '-H "Content-Type: application/octet-stream" --data-binary "@$f" '
-    '"https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")" > /dev/null'
+    '"https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")")"; then'
 )
+UPLOAD_ERR = 'echo "error: uploading $f failed: $out" >&2'
 REF_HEADER = 'if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then'
 GUARD_STEPS = {
     "prepare": ["Require repository admins", "Validate the tag", "Resolve the tag to a commit on integ/next"],
@@ -291,6 +292,12 @@ PUBLISH = 'gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F dr
 
 
 class ForkReleaseWorkflow(unittest.TestCase):
+    """Known limits: a keyword checker cannot stop deliberate sabotage by someone who can edit the
+    workflow, for example a dead `if false; then ... fi` around a guard, an override after a
+    guarded value (`permission=admin`, `current="$SHA"`, `existing=""`), or `tag_still_at_sha`
+    redefined as a no-op. The owner-side ruleset and environment policy (docs/ci.md) are the real
+    control; this test catches accidents and plausible edits."""
+
     @classmethod
     def setUpClass(cls):
         if TEXT_OVERRIDE is not None:
@@ -507,12 +514,11 @@ class ForkReleaseWorkflow(unittest.TestCase):
         self.assertEqual([l for l in top[first:ci] if l.startswith("gh ")], [])
         # uploads go by the captured id, then the re-check, then publish by id.
         self.assertEqual(top.count(UPLOAD_LOOP), 1)
-        self.assertEqual(top.count(UPLOAD), 1)
+        self.assertEqual(top.count(UPLOAD_IF), 1)
         ul = top.index(UPLOAD_LOOP)
-        self.assertEqual(top[ul + 1], UPLOAD)
-        self.assertEqual(top[ul + 2], "done")
+        self.assertEqual(top[ul + 1 : ul + 6], [UPLOAD_IF, UPLOAD_ERR, "exit 1", "fi", "done"])
         self.assertLess(top.index(ID_HEADER), ul)
-        self.assertEqual(second, ul + 3, "re-check must directly follow the uploads")
+        self.assertEqual(second, ul + 6, "re-check must directly follow the uploads")
         self.assertEqual(top.count(PUBLISH), 1)
         self.assertEqual(top.index(PUBLISH), second + 1, "publish must follow the re-check directly")
         self.assertEqual(top[-1], PUBLISH)
@@ -541,6 +547,28 @@ class ForkReleaseWorkflow(unittest.TestCase):
                                         "job %s: errexit dropped or masked: %r" % (name, line))
                     if line.startswith("set "):
                         self.assertEqual(line, "set -euo pipefail", name)
+
+    def test_token_never_in_command_arguments(self):
+        feed = re.compile(r"printf 'Authorization: Bearer %s\\n' \"\$GH_TOKEN\" \| curl [^|]* -H @- ")
+        for name, job in self.jobs.items():
+            for run in step_runs(job):
+                for line in logical_lines(run):
+                    refs = re.findall(r"GH_TOKEN|GITHUB_TOKEN|github\.token", line)
+                    if not refs:
+                        continue
+                    self.assertEqual(len(refs), 1, "job %s: %r" % (name, line))
+                    self.assertTrue(feed.search(line), "job %s: token outside `printf | curl -H @-`: %r" % (name, line))
+                    self.assertNotRegex(line, r'-H\s+"[^"]*(TOKEN|token)')
+
+    def test_run_shell_is_bash_and_no_trap(self):
+        default = ((self.wf.get("defaults") or {}).get("run") or {}).get("shell")
+        for name, job in self.jobs.items():
+            jdefault = (((job.get("defaults") or {}).get("run")) or {}).get("shell", default)
+            for st in all_steps(job):
+                if "run" in st:
+                    self.assertEqual(st.get("shell", jdefault), "bash", "job %s step %r" % (name, st.get("name")))
+                    for line in logical_lines(st["run"]):
+                        self.assertNotRegex(line, r"\btrap\b", "job %s: trap is not allowed" % name)
 
     def test_build_has_no_publish_rights(self):
         for name in ("prepare", "build"):
@@ -651,7 +679,15 @@ MUTATIONS = [
     ("release id lookup back to the list", _all('release_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \\', 'release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" \\')),
     ("create by gh release create", _all('release_id="$(gh api -X POST', 'gh release create "$TAG" --draft; release_id="$(gh api -X POST')),
     ("uploads removed", _all("          for f in dist/*.tar.gz dist/*.sha256; do\n", "          for f in; do\n")),
-    ("upload failures ignored", _all('> /dev/null\n          done', '> /dev/null || true\n          done')),
+    ("upload failures ignored", _all('              exit 1\n            fi\n          done', '              true\n            fi\n          done')),
+    ("token back in curl argv", _all('printf \'Authorization: Bearer %s\\n\' "$GH_TOKEN" | curl --fail-with-body -sS -X POST -H @-', 'curl --fail-with-body -sS -X POST -H "Authorization: Bearer $GH_TOKEN"')),
+    ("token passed in argv of another command", _all('echo "draft release $release_id created', 'echo "token $GH_TOKEN" >/dev/null; echo "draft release $release_id created')),
+    ("upload error body discarded", _all('echo "error: uploading $f failed: $out" >&2', 'echo "error: uploading $f failed" >&2')),
+    ("shell: sh on the publish step", _all("      - name: Create the release as a draft, then publish it\n        shell: bash\n", "      - name: Create the release as a draft, then publish it\n        shell: sh\n")),
+    ("default shell removed", _all("defaults:\n  run:\n    shell: bash\n\n", "")),
+    ("default shell sh", _all("    shell: bash\n\nconcurrency", "    shell: sh\n\nconcurrency")),
+    ("trap exit 0 in the publish step", _all("          tag_still_at_sha() {\n", "          trap 'exit 0' EXIT\n          tag_still_at_sha() {\n")),
+    ("trap exit 0 in Verify the artifacts", _nth("          set -euo pipefail\n          find dist", "          set -euo pipefail\n          trap 'exit 0' ERR EXIT\n          find dist", 1)),
     ("uploads go to the tag name", _all("releases/$release_id/assets", "releases/tags/$TAG/assets")),
     ("tag/ref early check removed", _all('          if [ "$GITHUB_REF" != "refs/tags/$tag" ]; then\n            echo "error: run from the tag itself (\'Use workflow from: $tag\'), not from $GITHUB_REF" >&2\n            exit 1\n          fi\n', "")),
     ("tag/ref early check without exit 1", _all("not from $GITHUB_REF\" >&2\n            exit 1", "not from $GITHUB_REF\" >&2")),

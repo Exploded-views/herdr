@@ -43,6 +43,7 @@ fails at once when the run's ref is not `refs/tags/<tag>`, and the `release` env
 deployment-ref policy (tags `v*-ev.*` only) would reject any other ref after the full build
 anyway. Delete the leftover release or draft first if there is one: the run refuses to start
 the release while any release or draft exists for the tag.
+A re-run uses the workflow file as it was at the tagged commit, so a fix to the workflow needs a new tag.
 
 ### Upstream's workflows
 

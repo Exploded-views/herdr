@@ -20,6 +20,10 @@ on:
 
 permissions: {}
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: fork-release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
@@ -340,7 +344,10 @@ jobs:
           fi
           echo "draft release $release_id created for $TAG; delete it if this run fails"
           for f in dist/*.tar.gz dist/*.sha256; do
-            curl --fail-with-body -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" --data-binary "@$f" "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")" > /dev/null
+            if ! out="$(printf 'Authorization: Bearer %s\n' "$GH_TOKEN" | curl --fail-with-body -sS -X POST -H @- -H "Content-Type: application/octet-stream" --data-binary "@$f" "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$f")")"; then
+              echo "error: uploading $f failed: $out" >&2
+              exit 1
+            fi
           done
           tag_still_at_sha
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false
