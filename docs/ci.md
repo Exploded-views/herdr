@@ -122,6 +122,20 @@ vendored upstream files by sha256: an entry applies only while the file is a reg
 exactly the pinned bytes, so an upstream sync that changes one is scanned again. Adding an entry
 needs the owner's go; never widen the denylist's patterns to make a scan pass.
 
+## Fork release workflow
+
+`.github/workflows/fork-release.yml` is the fork's release channel; see [releases.md](releases.md).
+
+| Job | Runner | What it runs |
+|---|---|---|
+| `prepare` | `ubuntu-latest` | Rejects any tag that is not `vX.Y.Z-ev.N[-rcM]`; no permissions |
+| `build` (4 targets) | `macos-latest` (`aarch64-apple-darwin`, `x86_64-apple-darwin`), `ubuntu-latest` (`x86_64`/`aarch64-unknown-linux-musl`) | `cargo build --locked --release --target <t>` at the tag, `herdr --version` where it can run, then a tarball and `.sha256` as an artifact; `contents: read` |
+| `release` | `ubuntu-latest` | `gh release create <tag> --verify-tag` with every tarball and checksum; the only job with `contents: write` |
+
+It runs on a push of a `v*-ev.*` tag, or by hand with a `tag` input. Every job skips outside
+Exploded-views/herdr, actions are pinned by full SHA, and the only secret is the automatic
+`GITHUB_TOKEN`. `just fork-release-workflow-test` asserts these conditions from the YAML.
+
 ## Repository settings
 
 These are settings, not file edits: upstream's workflow files stay untouched. In the same
@@ -134,7 +148,8 @@ sitting as enabling Actions, and before any push to `master`:
   - `build-artifacts-manual` (`actions: write`)
   - `windows-arm64` (fires on pushes to `master`)
 - Also disable the guarded set, as defence in depth: `pr-gate`, `preview`, `release` and
-  `stale-close`.
+  `stale-close`. `preview` and `release` must be disabled before the first fork tag, because a
+  tag push also triggers them (see [releases.md](releases.md)).
 - Keep or disable `ci.yml` (Windows coverage against minutes), and `nix` and `distribution`
   (path-filtered, read-only). That is the owner's call; record the choice
   here.

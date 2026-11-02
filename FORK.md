@@ -47,6 +47,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `FORK-CHANGELOG.md` | new | Fork changes, labelled *upstream candidate* or *fork-only* |
 | `docs/fork.md`, `docs/ci.md`, `docs/releases.md` | new | Relationship to upstream, fork CI, fork releases |
 | `.github/workflows/fork-ci.yml` | new | Fork CI (linux, mutants, bench, macos, windows); every job skips in upstream's repository |
+| `.github/workflows/fork-release.yml` | new | Fork release channel: builds and publishes binaries for a `v*-ev.*` tag; every job skips in upstream's repository |
 | `.github/workflows/fork-ci.Dockerfile` | new | Linux build and test image, shared by fork CI and local runs |
 | `scripts/fork/linux-test.sh` | new | Runs the Linux image locally: repo read-only, offline after `--fetch` |
 | `scripts/fork/run-mutants.sh` | new | Runs a shard of the security-guard mutants in a writable copy of the tree: each mutant's patch must apply, compile, and make its named test fail |
@@ -58,6 +59,8 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `docs/next/website/src/data/config-reference.json` | changed | Documents the fork-only `[access]` keys (Access section) |
 | `scripts/config_reference_check.py` | changed | Skips the user-defined `[access.<name>]` map, as it skips `[[keys.command]]` |
 | `scripts/fork/test-denylist-scan.sh` | new | Tests the scanner: pinned exemptions lapse on any change, and every error fails rather than passing clean |
+| `scripts/fork/test-fork-release-workflow.py` | new | Asserts the release workflow's triggers, permissions, pinned actions, secrets and repo guard from its YAML |
+| `justfile` | changed | `fork-release-workflow-test` recipe |
 | `src/update.rs` | changed | Self-update and background update checks disabled in fork builds (`FORK_BUILD`) |
 | `src/api/schema/operations.rs` | changed | `AccessClass` enum and `Operation.access`; the operation macro requires a class on every row |
 | `src/api/schema.rs` | changed | Access class on every row of the operation table; re-exports `AccessClass` |

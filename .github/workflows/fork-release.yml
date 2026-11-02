@@ -1,0 +1,240 @@
+# herdr-fork: fork-only workflow. Builds fork binaries when the fork's admin pushes a fork tag
+# (vX.Y.Z-ev.N) and attaches them, with checksums, to a GitHub release. Runs only in
+# Exploded-views/herdr. No signing, no notarization, no secrets beyond the automatic
+# GITHUB_TOKEN. Upstream's release.yml and preview.yml also fire on a tag push and must be
+# disabled in the fork before the first fork tag (see docs/releases.md). Unofficial stopgap;
+# see FORK.md.
+name: fork-release
+
+on:
+  push:
+    tags:
+      - "v*-ev.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing fork tag to (re)build and publish, e.g. v1.2.3-ev.1"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fork-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+jobs:
+  # Rejects anything that is not a fork tag, for pushes and for manual runs alike.
+  prepare:
+    if: github.repository == 'Exploded-views/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Validate the tag
+        id: tag
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+          else
+            echo "error: not a tag run" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-ev\.[0-9]+(-rc[0-9]+)?$'; then
+            echo "error: '$tag' is not a fork tag (vX.Y.Z-ev.N or vX.Y.Z-ev.N-rcM)" >&2
+            exit 1
+          fi
+          prerelease=false
+          case "$tag" in *-rc*) prerelease=true ;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: github.repository == 'Exploded-views/herdr'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            can_run: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            can_run: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            can_run: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            can_run: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: 'true'
+      TAG: ${{ needs.prepare.outputs.tag }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+
+      - name: Verify the tag's base version matches Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          BASE="${TAG#v}"
+          BASE="${BASE%%-ev.*}"
+          if [ "$CARGO_VERSION" != "$BASE" ]; then
+            echo "error: tag $TAG is based on $BASE but Cargo.toml version is $CARGO_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+
+      - name: Prefer official Ubuntu mirrors over Azure
+        if: runner.os == 'Linux'
+        run: |
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '/azure.archive.ubuntu.com/d' /etc/apt/apt-mirrors.txt
+            echo "Using apt mirrors:"
+            cat /etc/apt/apt-mirrors.txt
+          fi
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo find /etc/apt/sources.list.d -type f \( -iname '*microsoft*' -o -iname '*azure-cli*' \) -print -delete
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
+
+      - name: Set Linux aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: fork-release-${{ matrix.target }}
+
+      - name: Remove Zig caches
+        shell: bash
+        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
+
+      - name: Build
+        run: cargo build --locked --release --target "$TARGET"
+
+      - name: Check the binary runs
+        if: matrix.can_run
+        run: |
+          "target/${TARGET}/release/herdr" --version
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="herdr-${TAG}-${TARGET}"
+          mkdir -p dist
+          tar -czf "dist/${name}.tar.gz" -C "target/${TARGET}/release" herdr
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          cat "dist/${name}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: herdr-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: github.repository == 'Exploded-views/herdr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Extract release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The FORK-CHANGELOG.md section headed "## <tag>", if there is one.
+          awk -v tag="$TAG" '
+            /^## / { if (on) exit; on = ($2 == tag) ; next }
+            on { print }
+          ' FORK-CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "See FORK-CHANGELOG.md" > "$RUNNER_TEMP/notes.md"
+          fi
+          {
+            echo
+            echo "Unsigned and not notarized. On macOS, clear quarantine after download:"
+            printf '%s\n' 'xattr -d com.apple.quarantine herdr, then check the download against its .sha256 file.'
+          } >> "$RUNNER_TEMP/notes.md"
+
+      - name: Create the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -type f
+          test "$(find dist -name '*.tar.gz' | wc -l)" -eq 4
+          test "$(find dist -name '*.sha256' | wc -l)" -eq 4
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" \
+            --repo Exploded-views/herdr \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag \
+            "${flags[@]}" \
+            dist/*.tar.gz dist/*.sha256

@@ -101,6 +101,10 @@ bench-terminal-targets:
 bench-access:
     cargo test --release --locked --bin herdr -- --ignored --nocapture --test-threads=1 access_gate_profile access::input_log::tests:: server::headless::tests::access_gate::
 
+# herdr-fork: asserts the security conditions of .github/workflows/fork-release.yml (triggers, permissions, pinned actions, secrets, repo guard).
+fork-release-workflow-test:
+    {{python}} scripts/fork/test-fork-release-workflow.py
+
 # Profile Windows foreground inspection of isolated idle shells, without a server.
 [windows]
 bench-process-inspection:
