@@ -122,11 +122,11 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
      fi
      cd ~/.local/opt/herdr-fork
      ln -sfn $V current.new
-     mv -h current.new current   # macOS; on Linux: mv -T current.new current
+     if [ "$(uname)" = Darwin ]; then mv -h current.new current; else mv -T current.new current; fi
    )
    ```
 
-   `mkdir` fails if that version is already installed, and the subshell then stops before extracting or repointing `current`. Install each version once, and never extract over a version a server is running.
+   If your `mv` lacks `-T`, as with some BusyBox builds, use GNU coreutils. `mkdir` fails if that version is already installed, and the subshell then stops before extracting or repointing `current`. Install each version once, and never extract over a version a server is running.
 
    On macOS, the block clears the quarantine flag when a browser download set it. A `curl` download doesn't carry the flag, so the block skips that step.
 3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
@@ -142,7 +142,7 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
 
    Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
 
-To move to a later fork version, install it into its own `~/.local/opt/herdr-fork/<version>` and repoint `current` the same way: write the new symlink under a new name, then `mv` it into place. Never write over a binary in place.
+To move to a later fork version, install it into its own `~/.local/opt/herdr-fork/<version>` and repoint `current` the same way (the `ln -sfn` and `mv` lines of the block above): write the new symlink under a new name, then `mv` it into place. Never write over a binary in place.
 
 ### Switch the running server
 
