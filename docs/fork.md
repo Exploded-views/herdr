@@ -116,6 +116,10 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
      D=~/.local/opt/herdr-fork/$V
      mkdir "$D"   # no -p: refuses if $D exists
      tar -xzf herdr-<tag>-<target>.tar.gz -C "$D"
+     # macOS only, and only if a browser download set the flag
+     if [ "$(uname)" = Darwin ] && xattr "$D/herdr" 2>/dev/null | grep -q com.apple.quarantine; then
+       xattr -d com.apple.quarantine "$D/herdr"
+     fi
      cd ~/.local/opt/herdr-fork
      ln -sfn $V current.new
      mv -h current.new current   # macOS; on Linux: mv -T current.new current
@@ -124,7 +128,7 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
 
    `mkdir` fails if that version is already installed, and the subshell then stops before extracting or repointing `current`. Install each version once, and never extract over a version a server is running.
 
-   On macOS, if you downloaded with a browser, clear the quarantine flag: `xattr -d com.apple.quarantine ~/.local/opt/herdr-fork/$V/herdr`. A `curl` download doesn't carry the flag, and `xattr` then reports "No such xattr", which is harmless.
+   On macOS, the block clears the quarantine flag when a browser download set it. A `curl` download doesn't carry the flag, so the block skips that step.
 3. Put `~/.local/opt/herdr-fork/current` on `PATH` ahead of the upstream install, in your shell profile, then open a new shell (or run `hash -r`).
 4. Check that you're running the fork, before any restart:
 
