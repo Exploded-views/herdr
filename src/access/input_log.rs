@@ -1154,6 +1154,9 @@ mod tests {
         let mut log = InputLog::new();
         log.attach_writer(dir.path().to_path_buf(), "node-a".into())
             .unwrap();
+        // Let the writer start and settle into its idle park, or it would find the entry on
+        // its first pass.
+        std::thread::sleep(WRITER_BATCH_DELAY);
         fn locks(log: &InputLog) -> u64 {
             log.pacer()
                 .thread_locks
