@@ -1,0 +1,14 @@
+# herdr-fork: mutant T11-M1: the saved session leaves out the pane's access policy. Unofficial stopgap; see FORK.md.
+diff --git a/src/persist/snapshot.rs b/src/persist/snapshot.rs
+index a07214be..990d28f0 100644
+--- a/src/persist/snapshot.rs
++++ b/src/persist/snapshot.rs
+@@ -414,7 +414,7 @@ fn capture_tab(
+             })
+             .unwrap_or_default();
+         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+-        let access = terminal.and_then(|terminal| terminal.access.clone());
++        let access: Option<crate::access::policy::AccessPolicy> = None;
+         let access_opened_explicitly =
+             terminal.is_some_and(|terminal| terminal.access_opened_explicitly);
+         let input_mode = terminal.map_or_else(Default::default, |terminal| terminal.input_mode);

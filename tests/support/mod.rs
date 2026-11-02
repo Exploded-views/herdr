@@ -1,3 +1,4 @@
+// herdr-fork: adds `send_client_shell_text`, which types text into a pane as a shell client would (used by tests/access_control.rs). Unofficial stopgap; see FORK.md.
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -406,6 +407,26 @@ pub fn send_client_shell_shift_enter(stream: &mut UnixStream, pane_id: &str) -> 
     stream
         .flush()
         .map_err(|e| format!("flush client shell key: {e}"))
+}
+
+/// Types `text` into `pane_id` as one committed-text event, the way a shell client does.
+pub fn send_client_shell_text(
+    stream: &mut UnixStream,
+    pane_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    let mut payload = encode_varint_u32(CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT);
+    payload.extend_from_slice(&encode_string(pane_id));
+    payload.extend_from_slice(&encode_varint_u32(1)); // one pane input event
+    payload.extend_from_slice(&encode_varint_u32(1)); // TextCommit
+    payload.extend_from_slice(&encode_string(text));
+
+    stream
+        .write_all(&frame_message(&payload))
+        .map_err(|e| format!("write client shell text: {e}"))?;
+    stream
+        .flush()
+        .map_err(|e| format!("flush client shell text: {e}"))
 }
 
 pub fn send_client_shell_focus(stream: &mut UnixStream, focused: bool) -> Result<(), String> {
