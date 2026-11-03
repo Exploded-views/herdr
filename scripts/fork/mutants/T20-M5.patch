@@ -2,8 +2,8 @@
 diff --git a/src/terminal/state.rs b/src/terminal/state.rs
 --- a/src/terminal/state.rs
 +++ b/src/terminal/state.rs
-@@ -2220,10 +2220,6 @@
-     /// the mark was dropped.
+@@ -2228,10 +2228,6 @@
+     /// (never kept pending). Returns true when the mark was dropped.
      pub(crate) fn drop_stale_input_mode_mark(&mut self) -> bool {
          let Some(current) = self.agent_identity() else {
 -            if self.input_mode_set_explicitly && self.input_mode_mark_is_pending() {
