@@ -2171,13 +2171,20 @@ impl TerminalState {
     /// stricter default then reaches that agent). If an agent is identified but its session is
     /// not known yet (no process read, no hook session), the mark's session is
     /// `PENDING_MARK_SESSION`: that same agent's session, once known, completes the mark (see
-    /// `drop_stale_input_mode_mark`). Nothing else writes that value, and a saved one is never
+    /// `drop_stale_input_mode_mark`). Only a mode other than `any` is kept pending: a mark only
+    /// shields an `any` mode from a stricter default, so a non-`any` mark completed by the
+    /// wrong process (a same-kind swap) can loosen nothing, while an explicit `any` set with
+    /// no session known keeps no session and is dropped at the next identification, so the
+    /// default applies. Nothing else writes that value, and a saved one is never
     /// restored (see `restore_input_mode_mark`).
     pub(crate) fn mark_input_mode_explicit(&mut self) {
         self.input_mode_set_explicitly = true;
         self.input_mode_mark_owner = self.agent_identity();
         self.input_mode_mark_session = self.agent_session_key();
-        if self.input_mode_mark_owner.is_some() && self.input_mode_mark_session.is_none() {
+        if self.input_mode_mark_owner.is_some()
+            && self.input_mode_mark_session.is_none()
+            && self.input_mode != crate::access::policy::InputMode::Any
+        {
             self.input_mode_mark_session = Some(PENDING_MARK_SESSION.to_string());
         }
     }

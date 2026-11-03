@@ -1,0 +1,12 @@
+# herdr-fork: mutant T20-M7: an explicit any set while the session is unknown is kept pending. Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2183,7 +2183,6 @@
+         self.input_mode_mark_session = self.agent_session_key();
+         if self.input_mode_mark_owner.is_some()
+             && self.input_mode_mark_session.is_none()
+-            && self.input_mode != crate::access::policy::InputMode::Any
+         {
+             self.input_mode_mark_session = Some(PENDING_MARK_SESSION.to_string());
+         }

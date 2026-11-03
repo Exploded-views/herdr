@@ -1419,12 +1419,12 @@ fn pending_mark_pane() -> (AppState, crate::layout::PaneId, TerminalId) {
     use crate::access::policy::{AccessDefaults, InputMode};
     let (mut state, pane, terminal) = state_with_pane();
     state.access_defaults = AccessDefaults {
-        default_mode: InputMode::HumanOnly,
+        default_mode: InputMode::Any,
         ..Default::default()
     };
     detect(&mut state, pane, Some(Agent::Pi), false);
     let t = state.terminals.get_mut(&terminal).unwrap();
-    t.input_mode = InputMode::Any;
+    t.input_mode = InputMode::HumanOnly;
     t.mark_input_mode_explicit();
     assert!(t.input_mode_set_explicitly);
     assert!(t.agent_identity().is_some() && t.agent_session_key().is_none());
@@ -1440,7 +1440,7 @@ async fn a_mode_set_while_the_agent_is_present_keeps_its_mark_when_the_session_b
     identify(&mut state, pane, 4242);
     detect(&mut state, pane, Some(Agent::Pi), false);
     let t = &state.terminals[&terminal];
-    assert_eq!(t.input_mode, InputMode::Any);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
     assert!(
         t.input_mode_set_explicitly,
         "the mark was dropped: owner {:?}, session {:?}",
@@ -1536,12 +1536,53 @@ async fn a_restored_pending_mark_is_dropped_and_the_mode_kept() {
         t.input_mode_mark_session.clone(),
     );
     t.restore_input_mode_mark(explicit, owner, session);
-    assert_eq!(t.input_mode, InputMode::Any);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
     assert!(!t.input_mode_set_explicitly);
     assert!(t.input_mode_mark_owner.is_none() && t.input_mode_mark_session.is_none());
     // A completed mark does round-trip.
     t.input_mode_set_explicitly = true;
     t.restore_input_mode_mark(true, Some("pi|".into()), Some(process_key(4242)));
     assert!(t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode_mark_session, Some(process_key(4242)));
+}
+
+#[tokio::test]
+async fn an_explicit_any_set_before_the_session_is_known_is_raised_by_the_default() {
+    use crate::access::policy::AccessDefaults;
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.input_mode = InputMode::Any;
+    t.mark_input_mode_explicit();
+    assert!(t.agent_session_key().is_none());
+    identify(&mut state, pane, 4242);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_pending_human_only_mark_completes_for_the_same_agent() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::Any,
+        ..Default::default()
+    };
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.input_mode = InputMode::HumanOnly;
+    t.mark_input_mode_explicit();
+    identify(&mut state, pane, 4242);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = &state.terminals[&terminal];
+    assert!(t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
     assert_eq!(t.input_mode_mark_session, Some(process_key(4242)));
 }
