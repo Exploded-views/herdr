@@ -30,7 +30,11 @@ def die(msg):
 
 
 def git(repo, *args):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    try:
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    except (OSError, UnicodeDecodeError) as exc:
+        # No git binary, or a path that is not valid UTF-8: a setup error, never "paths missing".
+        die(f"cannot run git: {exc}")
 
 
 def table_entries(text):

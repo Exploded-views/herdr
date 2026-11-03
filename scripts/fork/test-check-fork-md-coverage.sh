@@ -6,7 +6,9 @@
 # cross a slash, a rename's old path, a missing base file and a base that is not an ancestor.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-check=$here/check-fork-md-coverage.py
+# CHECK_SCRIPT points the test at another copy of the check (used to prove mutants fail).
+check=${CHECK_SCRIPT:-$here/check-fork-md-coverage.py}
+py=$(command -v python3)
 tmp=$(mktemp -d)
 trap 'rm -r "$tmp"' EXIT
 fail=0
@@ -33,10 +35,13 @@ table() {
     printf '\n## Limits\n\n| `zzz.rs` | x |\n'; } > "$repo/FORK.md"
 }
 
+# rawtable: write FORK.md from stdin.
+rawtable() { cat > "$repo/FORK.md"; }
+
 # expect <name> <want-exit> <want-text-or-empty>
 expect() {
   local name=$1 want=$2 text=$3 out rc=0
-  out=$(python3 -I "$check" "$repo" 2>&1) || rc=$?
+  out=$("$py" -I "$check" "$repo" 2>&1) || rc=$?
   if [ "$rc" != "$want" ] || { [ -n "$text" ] && ! grep -qF -- "$text" <<<"$out"; }; then
     echo "FAIL: $name (exit $rc, want $want, text '$text')"; echo "$out"; fail=1
   else
@@ -97,5 +102,83 @@ table '`a.rs`'
 git -C "$repo" checkout -q --orphan other
 g commit -q --allow-empty -m other
 expect "a base that is not an ancestor exits 2" 2 "not an ancestor"
+
+new_repo whycol
+modify a.rs
+rawtable <<'EOT'
+## Changed files
+
+| Path | Kind | Why |
+|---|---|---|
+| `other.rs` | changed | mentions `a.rs` in the why column |
+
+## Limits
+EOT
+expect "a path in the Why column does not count" 1 "a.rs"
+
+new_repo afterheading
+modify a.rs d/b.rs
+rawtable <<'EOT'
+## Changed files
+
+| Path | Kind | Why |
+|---|---|---|
+| `a.rs` | changed | x |
+
+## Limits
+
+| `d/b.rs` | changed | below the next heading |
+EOT
+expect "a path after the next heading does not count" 1 "d/b.rs"
+
+new_repo deleted
+g rm -q d/b.rs; g commit -q -m delete
+table '`a.rs`'
+expect "a deleted upstream file is required" 1 "d/b.rs"
+table '`d/b.rs`'
+expect "a deleted file named in the table passes" 0 ""
+
+new_repo typechange
+rm "$repo/a.rs"; ln -s old.rs "$repo/a.rs"; g add -A; g commit -q -m symlink
+if g diff --name-status "$base" HEAD | grep -q '^T'; then
+  table '`old.rs`'
+  expect "a type-changed file is required" 1 "a.rs"
+  table '`a.rs`'
+  expect "a type-changed file named in the table passes" 0 ""
+else
+  echo "FAIL: could not make a type change in the throwaway repo"; fail=1
+fi
+
+new_repo renameold
+g mv old.rs new.rs; g commit -q -m rename
+table '`old.rs`'
+expect "a rename needs its new path" 1 "new.rs"
+
+new_repo renamenew
+g mv old.rs new.rs; g commit -q -m rename
+table '`new.rs`'
+expect "a rename needs its old path (new only listed)" 1 "old.rs"
+
+new_repo renamereport
+g mv old.rs new.rs; g commit -q -m rename
+table '`a.rs`'
+out=$("$py" -I "$check" "$repo" 2>&1) || true
+if grep -qF "old.rs" <<<"$out" && grep -qF "new.rs" <<<"$out"; then
+  echo "ok: a rename is reported under both names"
+else
+  echo "FAIL: a rename is reported under both names"; echo "$out"; fail=1
+fi
+
+new_repo nogit
+modify a.rs
+table '`a.rs`'
+mkdir "$tmp/nobin"
+rc=0
+out=$(PATH=$tmp/nobin "$py" -I "$check" "$repo" 2>&1) || rc=$?
+if [ "$rc" = 2 ] && grep -qF "cannot run git" <<<"$out"; then
+  echo "ok: a missing git binary exits 2"
+else
+  echo "FAIL: a missing git binary exits 2 (exit $rc)"; echo "$out"; fail=1
+fi
 
 exit "$fail"
