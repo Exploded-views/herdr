@@ -22,7 +22,7 @@ This is an unofficial fork of [herdr](https://github.com/herdrdev/herdr), and is
 
 The full list, with each change marked *upstream candidate* or *fork-only*, is in [FORK-CHANGELOG.md](FORK-CHANGELOG.md). The known limits and bypasses are in [docs/fork.md](docs/fork.md).
 
-**Versions:** fork releases are tagged `vX.Y.Z-ev.N`. `X.Y.Z` is the upstream version the fork is based on, and `N` counts fork releases on that base, starting at 1. The suffix keeps fork tags apart from upstream's. The first published release will be `v0.9.5-ev.2`, because the `v0.9.5-ev.1` build failed and was never published. Fork binaries are unsigned, and no Windows binary is published.
+**Versions:** fork releases are tagged `vX.Y.Z-ev.N`. `X.Y.Z` is the upstream version the fork is based on, and `N` counts fork releases on that base, starting at 1. The suffix keeps fork tags apart from upstream's. The first published release is `v0.9.5-ev.2`; the `v0.9.5-ev.1` build failed and was never published. Fork binaries are unsigned, and no Windows binary is published.
 
 **Upstream:** herdr does not accept unsolicited pull requests ([CONTRIBUTING.md](https://github.com/herdrdev/herdr/blob/master/CONTRIBUTING.md)). This fork offers ideas upstream only in Discussions, never as pull requests. The core idea, letting a pane choose who may send it input, was offered upstream as an idea in [discussion #5638](https://github.com/herdrdev/herdr/discussions/5638). Nothing has been proposed as a pull request. The fork itself is dropped once upstream ships an equivalent.
 
