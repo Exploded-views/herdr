@@ -108,7 +108,7 @@ fork-release-workflow-test:
 # herdr-fork: FORK.md must name every upstream file the fork modifies (self-test, then the real check against scripts/fork/upstream-base).
 fork-md-coverage-test:
     scripts/fork/test-check-fork-md-coverage.sh
-    python3 -I scripts/fork/check-fork-md-coverage.py
+    {{python}} -I scripts/fork/check-fork-md-coverage.py
 
 # herdr-fork: runs fork-release.yml's binary check step under /bin/bash (3.2 on macOS) against a stub binary.
 release-check-step-test:

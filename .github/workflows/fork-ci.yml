@@ -21,7 +21,8 @@ concurrency:
 
 jobs:
   # herdr-fork: asserts the release workflow's security conditions (triggers, permissions, pinned
-  # actions, secrets, repo guard) from its YAML, so they cannot regress silently.
+  # actions, secrets, repo guard) from its YAML, so they cannot regress silently. Also checks that
+  # FORK.md names every upstream file the fork modifies (full history, for the pinned base).
   release-policy:
     if: github.repository == 'Exploded-views/herdr'
     runs-on: ubuntu-latest
