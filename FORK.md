@@ -41,7 +41,7 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 
 | Path | Kind | Why |
 |---|---|---|
-| `README.md` | changed | Banner: unofficial stopgap fork, link to #5638 |
+| `README.md` | changed | Banner: unofficial stopgap fork, link to #5638; "Divergence from upstream" section |
 | `.gitignore` | changed | Lets `docs/fork.md`, `docs/ci.md` and `docs/releases.md` be tracked (upstream ignores `/docs/*`) |
 | `FORK.md` | new | This list |
 | `FORK-CHANGELOG.md` | new | Fork changes, labelled *upstream candidate* or *fork-only* |

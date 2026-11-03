@@ -13,9 +13,10 @@ person at a terminal outside every pane (see "The input mode" below). The mode i
 changes nothing, by default.
 
 The official path is upstream discussion
-[#5638](https://github.com/herdrdev/herdr/discussions/5638). herdr does not accept
-unsolicited pull requests, and this fork proposes none. It is dropped the moment upstream
-ships an equivalent.
+[#5638](https://github.com/herdrdev/herdr/discussions/5638), where the core idea, letting a pane
+choose who may send it input, was offered as an idea. herdr does not accept unsolicited pull
+requests, and this fork opens none: nothing has been proposed as a pull request. The fork is
+dropped the moment upstream ships an equivalent.
 
 Every changed file is listed in [../FORK.md](../FORK.md). Fork CI is in [ci.md](ci.md),
 releases in [releases.md](releases.md), and user-visible changes in
@@ -102,11 +103,11 @@ Until a release is published, there is nothing to download.
 
 With no `[access]` section in the config, the fork behaves like upstream, with three differences:
 
-- No pane has a policy, so nothing is gated. `remote_input = "any"` and `remote_owner_tui = "allow"`.
+- No pane has a policy, so no input is gated. The `access.*` admin methods are always checked. `remote_input = "any"` and `remote_owner_tui = "allow"`.
 - **Update checks and `herdr update` are off.** Fork builds make no background update check and show no in-app update notice. `herdr update` prints that self-update is disabled.
 - **The input-origin log is on.** It records who sent each pane input, never the input itself. It goes to `access-input.log` (and `access-input.log.1`) in the herdr data directory, mode 0600, capped at about 2.5 MiB. `herdr access log` prints it. `[access] input_log = false` turns it off.
 
-Access policies are opt-in. Nothing is gated until you set one, either on a pane or in the config:
+Access policies are opt-in. No input is gated until you set one, either on a pane or in the config:
 
 - `herdr access pane set <pane> --accept-from outside` protects one pane. `herdr access pane get <pane>` shows its policy.
 - `herdr access pane set <pane> --input-mode human-only` lets only a person at a TUI outside every pane type into that pane.
@@ -119,7 +120,7 @@ Don't set `remote_input = "bridge-only"` until `bridge_agent` names this node's 
 
 ### Install
 
-Fork releases are GitHub release tarballs on the repository's release page, built for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (see [releases.md](releases.md#what-gets-published)). There is no Windows build. Each tarball comes with a `.sha256` file.
+Fork releases are GitHub release tarballs on the repository's release page, built for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (see [releases.md](releases.md#what-gets-published)). No Windows binary is published. Each tarball comes with a `.sha256` file.
 
 The fork installs beside upstream and never replaces it. Your upstream `herdr` (`~/.local/bin/herdr`, Homebrew, mise or Nix) is not touched, and a running upstream server keeps running from its own file. Don't copy over a binary a server is running from: on macOS that can kill the server.
 
