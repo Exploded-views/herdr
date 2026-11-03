@@ -13,9 +13,10 @@ person at a terminal outside every pane (see "The input mode" below). The mode i
 changes nothing, by default.
 
 The official path is upstream discussion
-[#5638](https://github.com/herdrdev/herdr/discussions/5638). herdr does not accept
-unsolicited pull requests, and this fork opens none. The core idea, letting a pane choose who may send it input, was offered upstream as an idea in [discussion #5638](https://github.com/herdrdev/herdr/discussions/5638). Nothing has been proposed as a pull request. It is dropped the moment upstream
-ships an equivalent.
+[#5638](https://github.com/herdrdev/herdr/discussions/5638), where the core idea, letting a pane
+choose who may send it input, was offered as an idea. herdr does not accept unsolicited pull
+requests, and this fork opens none: nothing has been proposed as a pull request. The fork is
+dropped the moment upstream ships an equivalent.
 
 Every changed file is listed in [../FORK.md](../FORK.md). Fork CI is in [ci.md](ci.md),
 releases in [releases.md](releases.md), and user-visible changes in
