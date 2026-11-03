@@ -24,7 +24,7 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is i
 
 **Versions:** fork releases are tagged `vX.Y.Z-ev.N`. `X.Y.Z` is the upstream version the fork is based on, and `N` counts fork releases on that base, starting at 1. The suffix keeps fork tags apart from upstream's. The first published release will be `v0.9.5-ev.2`. Fork binaries are unsigned, and there is no Windows build.
 
-**Upstream:** herdr does not accept unsolicited pull requests ([CONTRIBUTING.md](https://github.com/herdrdev/herdr/blob/master/CONTRIBUTING.md)). Ideas from this fork may be offered upstream only in Discussions, never as pull requests. None has been proposed yet. The fork is dropped once upstream ships an equivalent.
+**Upstream:** herdr does not accept unsolicited pull requests ([CONTRIBUTING.md](https://github.com/herdrdev/herdr/blob/master/CONTRIBUTING.md)). Ideas from this fork may be offered upstream only in Discussions, never as pull requests. The core idea, letting a pane choose who may send it input, was offered upstream as an idea in [discussion #5638](https://github.com/herdrdev/herdr/discussions/5638). Nothing has been proposed as a pull request. The fork is dropped once upstream ships an equivalent.
 
 # herdr
 

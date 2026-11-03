@@ -14,7 +14,7 @@ changes nothing, by default.
 
 The official path is upstream discussion
 [#5638](https://github.com/herdrdev/herdr/discussions/5638). herdr does not accept
-unsolicited pull requests, and this fork proposes none. It is dropped the moment upstream
+unsolicited pull requests, and this fork opens none. The core idea, letting a pane choose who may send it input, was offered upstream as an idea in [discussion #5638](https://github.com/herdrdev/herdr/discussions/5638). Nothing has been proposed as a pull request. It is dropped the moment upstream
 ships an equivalent.
 
 Every changed file is listed in [../FORK.md](../FORK.md). Fork CI is in [ci.md](ci.md),
