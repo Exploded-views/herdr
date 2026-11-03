@@ -97,7 +97,7 @@ The label describes the change; it is not a plan to send it upstream.
 
 ## Getting started
 
-Until a release is published, there is nothing to download.
+Releases are published on the repository's release page.
 
 ### What changes on day one
 
@@ -134,7 +134,7 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
    ```sh
    (
      set -e   # a failed step stops here and leaves `current` alone
-     V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.1
+     V=<version>   # the tag without the leading v, e.g. 0.9.5-ev.2
      mkdir -p ~/.local/opt/herdr-fork
      D=~/.local/opt/herdr-fork/$V
      mkdir "$D"   # no -p: refuses if $D exists

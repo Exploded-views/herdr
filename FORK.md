@@ -39,6 +39,9 @@ Linux builds and tests use `.github/workflows/fork-ci.Dockerfile` (see
 Every file the fork adds or changes, with the reason. Files the fork changes carry a
 `herdr-fork:` note at the top. Generated files can't carry one and are marked *(generated)*.
 
+CI checks that this table names every upstream file the fork modifies, against the base pinned in
+`scripts/fork/upstream-base`.
+
 | Path | Kind | Why |
 |---|---|---|
 | `README.md` | changed | Banner: unofficial stopgap fork, link to #5638; "Divergence from upstream" section |
@@ -131,12 +134,14 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `src/app/api/access_panes.rs`, `src/app/access.rs`, `src/app/actions.rs` | changed | Set and report the mode; bind `[access.default]` and `[access.<name>]` modes; the bridge keeps `any` |
 | `src/app/agents.rs`, `src/app/api/agents.rs` | changed | `agent start <bridge>` and `agent rename <bridge>` refused on a pane with a mode; a failed start restores the mode; tests |
 | `src/config/model.rs` | changed | `input_mode` in `[access.default]` and `[access.<name>]`; a non-`any` mode on the bridge is a config diagnostic |
-| `src/app/access_gate.rs`, `src/server/headless.rs`, `src/server/headless/input_origin.rs` | changed | The mode check after the allow-list on the api, shell-client and attach paths (attach input, mouse, wheel and image paste); `human-only` refusals are logged as `deny`; bench case `input_mode_any` |
+| `src/app/access_gate.rs`, `src/server/headless.rs`, `src/server/headless/input_origin.rs`, `src/server/pane_input.rs` | changed | The mode check after the allow-list on the api, shell-client and attach paths (attach input, mouse, wheel and image paste); `human-only` refusals are logged as `deny`; `attach_scroll_reaches_pty` says whether an attached client's scroll writes into the pane (a wheel the child asked for, or a page key it owns), so the mode gates only that and scrolling herdr's own history stays allowed; bench case `input_mode_any` |
 | `src/cli/access.rs`, `src/app/access_tests.rs`, `src/server/headless/tests/access_gate.rs` | changed | `herdr access pane set --input-mode`, and tests for the mode |
 | `docs/fork.md`, `docs/next/website/src/content/docs/cli-reference.mdx`, `docs/next/website/src/content/docs/ja/cli-reference.mdx`, `docs/next/website/src/content/docs/zh-cn/cli-reference.mdx`, `docs/next/website/src/data/config-reference.json`, `FORK-CHANGELOG.md` | changed | The `human-only` input mode, `access pane set --input-mode`, the config keys and the honest limits |
 | `scripts/fork/mutants/T10c-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10c-M1, M2, M3, M5, M5b, M6, M6b, M7, M8 and, from fix round 1, M9 to M24; re-derived T6-M1, T6-M3, T8-M3, T9b-M10 and T10b-M11 |
 | `tests/access_control.rs`, `tests/support/mod.rs`, `docs/ci.md` | new / changed / changed | End-to-end tests of the allow-list, caller tokens, the client path, the input log, `human-only`, the bridge guard and a login through an ssh server, against isolated test servers; `send_client_shell_text`; "End-to-end tests" in ci.md |
 | `scripts/fork/mutants/T11-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T11-M1 and T11-M2 (the saved session drops the pane's policy; the restore drops it) |
+| `scripts/fork/upstream-base`, `scripts/fork/check-fork-md-coverage.py`, `scripts/fork/test-check-fork-md-coverage.sh` | new | The pinned upstream base, the check that this table names every upstream file the fork modifies (modified, deleted or renamed since the base; added files are out of scope), and its self-test |
+| `.github/workflows/fork-ci.yml`, `justfile` | changed | `release-policy` checks out full history and runs the self-test and the check; `fork-md-coverage-test` recipe |
 
 ## Limits
 
