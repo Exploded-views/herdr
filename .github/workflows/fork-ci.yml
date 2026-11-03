@@ -127,6 +127,8 @@ jobs:
         uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
         with:
           version: 0.16.0
+      - name: Release check step under macOS bash 3.2
+        run: scripts/fork/test-release-check-step.sh
       - name: just ci (same filter as upstream's macOS job)
         run: just ci 'not binary(live_handoff)'
 

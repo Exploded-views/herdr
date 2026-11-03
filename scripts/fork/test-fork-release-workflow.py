@@ -249,6 +249,7 @@ def strict_shell(lines, what):
         raise AssertionError("%s must start with `set -euo pipefail`" % what)
 
 
+GUARDED_PREFIX = '${prefix[@]+"${prefix[@]}"}'
 ADMIN_HEADER = 'if [ "$permission" != "admin" ]; then'
 ADMIN_LOOP = 'for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do'
 ADMIN_QUERY = 'permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .permission)"'
@@ -468,6 +469,18 @@ class ForkReleaseWorkflow(unittest.TestCase):
         self.assertEqual(lines.count('file "$bin" | grep -Eq "$FILE_EXPECT"'), 1)
         self.assertEqual(lines.count('printf \'%s\' "$out" | grep -qF "$base"'), 1)
         self.assertEqual([l for l in lines if "||" in l], [])
+        # macOS's /bin/bash 3.2 treats an empty array as unbound under `set -u`, and the aarch64
+        # darwin target has an empty RUN_PREFIX, so the prefix must be expanded in the guarded form.
+        self.assertEqual(lines.count('read -r -a prefix <<< "$RUN_PREFIX"'), 1)
+        self.assertEqual(lines.count('out="$(' + GUARDED_PREFIX + ' "$bin" --version)"'), 1)
+
+    def test_no_unguarded_array_expansion(self):
+        # An array can be empty (bash 3.2 then fails under `set -u`), so every "${name[@]}" in a run
+        # script must be the guarded form ${name[@]+"${name[@]}"}.
+        for job_name, job in self.jobs.items():
+            for run in step_runs(job):
+                bare = re.sub(r'\$\{(\w+)\[@\]\+"\$\{\1\[@\]\}"\}', "", strip_comment_lines(run))
+                self.assertNotRegex(bare, r'\$\{\w+\[[@*]\]\}', "unguarded array expansion in job %s" % job_name)
 
     def test_artifacts_verified_before_release(self):
         lines = logical_lines(step_named(self.jobs["release"], "Verify the artifacts")["run"])
@@ -602,6 +615,11 @@ class ForkReleaseWorkflow(unittest.TestCase):
             self.assertEqual(ci["jobs"][n].get("if"), REPO_GUARD)
             self.assertEqual(ci["jobs"][n].get("permissions"), {"contents": "read"})
 
+    def test_fork_ci_macos_job_runs_the_check_step_test(self):
+        _, ci = load_workflow(FORK_CI_PATH)
+        runs = step_runs(ci["jobs"]["macos"])
+        self.assertEqual(runs.count("scripts/fork/test-release-check-step.sh"), 1)
+
 
 class ParserParity(unittest.TestCase):
     def test_minimal_parser_matches_pyyaml(self):
@@ -723,6 +741,8 @@ MUTATIONS = [
     ("set +o errexit in the publish step", _all("          tag_still_at_sha() {\n", "          set +o errexit\n          tag_still_at_sha() {\n")),
     ("errexit dropped from Verify the artifacts", _nth("          set -euo pipefail\n          find dist", "          set -o pipefail\n          find dist", 1)),
     ("|| true on the admin query", _all('--jq .permission)"', '--jq .permission)" || true', 2)),
+    ("unguarded prefix expansion restored", _all(GUARDED_PREFIX, '"${prefix[@]}"')),
+    ("unguarded prefix expansion in another step", _all('          base="${base%%-ev.*}"\n', '          base="${base%%-ev.*}"\n          args=(a)\n          echo "${args[@]}"\n')),
     ("ls-remote tail-matches the tag", _all('git ls-remote origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}"', 'git ls-remote origin "${TAG}" "${TAG}^{}"')),
     ("ls-remote takes the last line, not the exact ref", _all("awk -v ref=\"refs/tags/${TAG}\" '$2 == (ref \"^{}\") { peeled = $1 } $2 == ref { plain = $1 } END { print (peeled != \"\" ? peeled : plain) }'", "awk 'END { print $1 }'")),
 ]
