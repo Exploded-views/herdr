@@ -33,8 +33,13 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Release workflow policy test
         run: python3 scripts/fork/test-fork-release-workflow.py
+      - name: FORK.md coverage self-test
+        run: scripts/fork/test-check-fork-md-coverage.sh
+      - name: FORK.md names every modified upstream file
+        run: python3 -I scripts/fork/check-fork-md-coverage.py
 
   linux:
     if: github.repository == 'Exploded-views/herdr'
