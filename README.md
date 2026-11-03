@@ -6,24 +6,25 @@
 > by herdr's maintainers. Please don't report fork issues upstream. See
 > [docs/fork.md](docs/fork.md) and [FORK.md](FORK.md).
 
-## Divergence from upstream (as of v0.9.5-ev.1)
+## Divergence from upstream
 
 This is an unofficial fork of [herdr](https://github.com/herdrdev/herdr), and is not affiliated with or endorsed by its maintainers.
 
-**Upstream base:** herdr `master` at `bc8c2898` (2026-10-28). That is 38 commits after upstream's `v0.9.5` tag, and the crate version is still `0.9.5`. Everything upstream had at that commit is included unchanged. That includes upstream's macOS change that starts the server as a launchd job, so quitting the terminal app no longer stops the server. That change is upstream's work, not the fork's.
+**Upstream base:** herdr's `master` branch at `bc8c2898` (2026-10-28), crate version `0.9.5`. Upstream cut its `v0.9.5` release from a separate release branch, so this fork is not "the `v0.9.5` release plus changes". The `master` history already carries equivalents of the six fixes that `v0.9.5` added, and 19 commits after the release-metadata commit `2f3432c6`. Upstream's code is kept except where the fork changes it, and [FORK.md](FORK.md) lists every changed file. That includes upstream's macOS change that starts the server as a launchd job, so quitting the terminal app no longer stops the server. That change is upstream's work, not the fork's.
 
 **What this fork adds:**
-- **Per-pane input access control.** Each pane can carry an allow-list of who may send it input (`--accept-from`, `herdr access pane set|get`). Every API request is checked against the sender's process lineage. Named callers present a token, and a binding id (`acc_…`) targets a pane. Typing from a TUI client is checked too. Off by default: with no `[access]` config, behaviour is upstream's.
+- **Per-pane input access control.** Each pane can carry an allow-list of who may send it input (`--accept-from`, `herdr access pane set|get`). Every request that sends input to a pane is checked against the sender's process lineage: `pane send-text`, `send-keys` and `run`, and `agent prompt`, `send-keys` and `start`. The `access.*` admin methods are checked too. Reads and other methods are not gated. Named callers present a token, and a binding id (`acc_…`) targets a pane. Typing from a TUI client is checked too. Nothing is gated until a pane has a policy; see [what changes on day one](docs/fork.md#what-changes-on-day-one). At one uid, this is a guardrail against **misrouted input from cooperative agents**, not a security boundary.
 - **A human-only input mode.** `herdr access pane set <pane> --input-mode human-only` refuses all API input to that pane and takes typing only from a client outside every pane.
-- **An input-origin log.** It records who sent each input to a pane, never what was typed. It is on by default, local and owner-readable only; `[access] input_log = false` turns it off.
-- **Self-update is disabled,** so a fork install never replaces itself with upstream.
-- **An end-to-end test suite** for the access controls, mutation tests in CI, a release workflow, and Linux build images. These change nothing at run time.
+- **An input-origin log.** It records who sent each input to a pane, never what was typed. It is on by default, local and owner-readable only; `herdr access log` prints it, and `[access] input_log = false` turns it off.
+- **Self-update and update checks are disabled,** so a fork install never replaces itself with upstream.
+- **Reserved agent names.** Agent names starting with `acc_`, and the names `input_log` and `node_name`, are no longer accepted.
+- **An end-to-end test suite** for the access controls, mutation tests in CI, a release workflow, and a Linux build image. These change nothing at run time.
 
 The full list, with each change marked *upstream candidate* or *fork-only*, is in [FORK-CHANGELOG.md](FORK-CHANGELOG.md). The known limits and bypasses are in [docs/fork.md](docs/fork.md).
 
-**Versions:** fork releases are tagged `vX.Y.Z-ev.N`. `X.Y.Z` is the upstream version the fork is based on, and `N` counts fork releases on that base, starting at 1. The suffix keeps fork tags apart from upstream's.
+**Versions:** fork releases are tagged `vX.Y.Z-ev.N`. `X.Y.Z` is the upstream version the fork is based on, and `N` counts fork releases on that base, starting at 1. The suffix keeps fork tags apart from upstream's. The first published release will be `v0.9.5-ev.2`. Fork binaries are unsigned, and there is no Windows build.
 
-**Upstream:** herdr does not accept unsolicited pull requests. Ideas from this fork are offered upstream only as issues or discussions, never as pull requests. The fork is dropped once upstream ships an equivalent.
+**Upstream:** herdr does not accept unsolicited pull requests ([CONTRIBUTING.md](https://github.com/herdrdev/herdr/blob/master/CONTRIBUTING.md)). Ideas from this fork may be offered upstream only in Discussions, never as pull requests. None has been proposed yet. The fork is dropped once upstream ships an equivalent.
 
 # herdr
 
