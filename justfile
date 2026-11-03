@@ -105,6 +105,10 @@ bench-access:
 fork-release-workflow-test:
     {{python}} scripts/fork/test-fork-release-workflow.py
 
+# herdr-fork: runs fork-release.yml's binary check step under /bin/bash (3.2 on macOS) against a stub binary.
+release-check-step-test:
+    scripts/fork/test-release-check-step.sh
+
 # Profile Windows foreground inspection of isolated idle shells, without a server.
 [windows]
 bench-process-inspection:
