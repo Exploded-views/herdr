@@ -39,6 +39,9 @@ Linux builds and tests use `.github/workflows/fork-ci.Dockerfile` (see
 Every file the fork adds or changes, with the reason. Files the fork changes carry a
 `herdr-fork:` note at the top. Generated files can't carry one and are marked *(generated)*.
 
+CI checks that this table names every upstream file the fork modifies, against the base pinned in
+`scripts/fork/upstream-base`.
+
 | Path | Kind | Why |
 |---|---|---|
 | `README.md` | changed | Banner: unofficial stopgap fork, link to #5638; "Divergence from upstream" section |
