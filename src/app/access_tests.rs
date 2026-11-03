@@ -1480,6 +1480,9 @@ async fn a_pending_mark_clears_when_a_detection_reports_no_agent() {
 async fn a_pending_mark_clears_when_a_different_agent_appears() {
     use crate::access::policy::InputMode;
     let (mut state, pane, terminal) = pending_mark_pane();
+    // The other agent is seen before any session is known, so only its identity differs.
+    detect(&mut state, pane, Some(Agent::Claude), false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
     identify(&mut state, pane, 5151);
     detect(&mut state, pane, Some(Agent::Claude), false);
     let t = &state.terminals[&terminal];
