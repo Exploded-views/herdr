@@ -1522,3 +1522,26 @@ async fn a_restored_mark_with_an_owner_and_no_session_is_dropped() {
     assert!(!t.input_mode_set_explicitly);
     assert_eq!(t.input_mode, InputMode::HumanOnly);
 }
+
+#[tokio::test]
+async fn a_restored_pending_mark_is_dropped_and_the_mode_kept() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, _pane, terminal) = pending_mark_pane();
+    // The saved mark of a pane whose agent had no known session; no default applies here.
+    state.access_defaults = AccessDefaults::default();
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    let (explicit, owner, session) = (
+        t.input_mode_set_explicitly,
+        t.input_mode_mark_owner.clone(),
+        t.input_mode_mark_session.clone(),
+    );
+    t.restore_input_mode_mark(explicit, owner, session);
+    assert_eq!(t.input_mode, InputMode::Any);
+    assert!(!t.input_mode_set_explicitly);
+    assert!(t.input_mode_mark_owner.is_none() && t.input_mode_mark_session.is_none());
+    // A completed mark does round-trip.
+    t.input_mode_set_explicitly = true;
+    t.restore_input_mode_mark(true, Some("pi|".into()), Some(process_key(4242)));
+    assert!(t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode_mark_session, Some(process_key(4242)));
+}
