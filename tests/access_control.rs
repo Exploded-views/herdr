@@ -1,4 +1,4 @@
-// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server), including that human-only survives a restart. Unofficial stopgap; see FORK.md.
+// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server), including that human-only survives a restart, and that the human-only test waits for the agent. Unofficial stopgap; see FORK.md.
 //
 // How the tests are built:
 // - Each test owns a base directory under /tmp. The server, every CLI process and every pane
@@ -1228,6 +1228,11 @@ fn input_log_shows_a_refused_and_an_allowed_input_without_content() {
 #[test]
 fn human_only_refuses_the_api_and_takes_an_outside_client() {
     let (node, a, b) = setup("");
+    // Set the mode only once the server has the agent in pane b, so the mark is the agent's.
+    poll("pane b to report its agent", || {
+        let got = node.try_api("agent.get", json!({"target": b})).ok()?;
+        (got["result"]["agent"]["agent"] == "pi").then_some(())
+    });
     node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
         .assert_ok("access pane set --input-mode");
     let got = node.cli(&["access", "pane", "get", &b]);
