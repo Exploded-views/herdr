@@ -127,3 +127,9 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is b
   A mode in the config that cannot be read counts as `human-only`, with a diagnostic that names
   the key and the line. A start under the bridge's name into a pane with a mode is refused with
   the code `access_bridge_input_mode`. *upstream candidate*
+- An input-mode mark set with `access pane set` while an agent is in the pane but its session
+  is not yet known now stays for that agent (it was dropped, so a default could change the
+  mode). It is cleared when the agent is released, a detection reports no agent, or a different
+  agent appears, and a saved one is not restored. A mark set while the pane has no agent is
+  still cleared when the first agent arrives, by design, so a stricter default reaches it; an
+  explicit `any` set before the session is known is not kept either. *fork-only*

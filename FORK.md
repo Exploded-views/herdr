@@ -137,6 +137,9 @@ Every file the fork adds or changes, with the reason. Files the fork changes car
 | `scripts/fork/mutants/T10c-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T10c-M1, M2, M3, M5, M5b, M6, M6b, M7, M8 and, from fix round 1, M9 to M24; re-derived T6-M1, T6-M3, T8-M3, T9b-M10 and T10b-M11 |
 | `tests/access_control.rs`, `tests/support/mod.rs`, `docs/ci.md` | new / changed / changed | End-to-end tests of the allow-list, caller tokens, the client path, the input log, `human-only`, the bridge guard and a login through an ssh server, against isolated test servers; `send_client_shell_text`; "End-to-end tests" in ci.md |
 | `scripts/fork/mutants/T11-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T11-M1 and T11-M2 (the saved session drops the pane's policy; the restore drops it) |
+| `src/terminal/state.rs`, `src/persist/restore.rs`, `src/app/actions.rs`, `src/app/api/access_panes.rs` | changed | An input-mode mark set while the agent is identified but its session is not known (and the mode is not `any`) is pending: the same agent's session completes it; a release, a no-agent detection or a different agent clears it; a saved pending mark is not restored. An empty-pane mark is still cleared by the first agent. A repeated `access pane set` that changes nothing does not dirty the session |
+| `src/app/access_tests.rs`, `tests/access_control.rs` | changed | Tests for the mark rules, a restored human-only pane and a server restart; the human-only e2e waits for the agent before setting the mode |
+| `scripts/fork/mutants/T20-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T20-M1 to T20-M7 (the pending input-mode mark) |
 
 ## Limits
 
