@@ -231,7 +231,7 @@ jobs:
           base="${TAG#v}"
           base="${base%%-ev.*}"
           read -r -a prefix <<< "$RUN_PREFIX"
-          out="$("${prefix[@]}" "$bin" --version)"
+          out="$(${prefix[@]+"${prefix[@]}"} "$bin" --version)"
           echo "$out"
           printf '%s' "$out" | grep -qF "$base"
 
