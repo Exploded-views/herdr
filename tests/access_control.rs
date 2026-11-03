@@ -1228,7 +1228,8 @@ fn input_log_shows_a_refused_and_an_allowed_input_without_content() {
 #[test]
 fn human_only_refuses_the_api_and_takes_an_outside_client() {
     let (node, a, b) = setup("");
-    // Set the mode only once the server has the agent in pane b, so the mark is the agent's.
+    // A guard, not the fix: the pending-mark rule is what closes the race with the process read.
+    // This makes the test set the mode on a pane the server already sees as an agent.
     poll("pane b to report its agent", || {
         let got = node.try_api("agent.get", json!({"target": b})).ok()?;
         (got["result"]["agent"]["agent"] == "pi").then_some(())
@@ -1286,14 +1287,22 @@ fn human_only_survives_a_server_restart() {
     node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
         .assert_ok("access pane set --input-mode");
 
-    // The session must be on disk before the server stops, or there is nothing to restore.
+    // The session must be on disk before the server stops, or there is nothing to restore, and
+    // the saved mark must be complete: a pending mark is not restored, by design.
     let session = node.config_home.join(app_dir_name()).join("session.json");
-    poll("the session file to hold the pane's mode", || {
-        fs::read_to_string(&session)
-            .ok()
-            .filter(|saved| saved.contains("human-only"))
-            .map(|_| ())
-    });
+    poll(
+        "the session file to hold the pane's mode and a complete mark",
+        || {
+            fs::read_to_string(&session)
+                .ok()
+                .filter(|saved| {
+                    saved.contains("human-only")
+                        && saved.contains("input_mode_mark_session")
+                        && !saved.contains("pending")
+                })
+                .map(|_| ())
+        },
+    );
 
     node.restart_server();
 
