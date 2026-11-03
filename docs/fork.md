@@ -84,11 +84,13 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
   entry is a diagnostic and is ignored, and `access pane set`, `agent start <bridge>` and
   `agent rename` to the bridge's name are refused when they would break that. `flag` and an
   alert file are not in v1.
-  A mode chosen with `access pane set` is for the agent in the pane when it was set, and is
-  dropped when a different agent takes the pane. A mode set while no agent is in the pane is
-  cleared when the first agent arrives, so a stricter default reaches that agent. A mode set
-  while the agent is present but its session is not yet known stays for that agent when it is
-  a mode other than `any`; an explicit `any` is not kept, so a stricter default applies.
+  What `access pane set` records is a mark: the mode was chosen on purpose, for the agent in
+  the pane when it was set. The mode itself (the protection) never falls back. When a different
+  agent takes the pane, the mark is dropped, and the pane keeps its mode. When the pane had no
+  agent at the time, the mark is cleared when the first agent arrives, so a stricter default
+  can raise an `any` mode for that agent. When the agent is present but its session is not yet
+  known, the mark stays for that agent if the mode is not `any`; the mark of an explicit `any`
+  is not kept, so a stricter default applies.
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 

@@ -2222,9 +2222,10 @@ impl TerminalState {
     /// a change, except for a pending mark: a detection that reports no agent may be that
     /// agent leaving unseen, and its session was never known to tell a successor apart, so the
     /// mark is dropped. A pending mark is completed with the session of the same agent (same
-    /// identity) once that is known, and kept until then. A mark with no owner, or an owner but
-    /// an unknown session (an older saved file), is different and is dropped. Returns true when
-    /// the mark was dropped.
+    /// identity) once that is known, and kept until then. A mark with no owner is different and is
+    /// dropped. So is a mark with an owner but no session, which has two sources, both dropped
+    /// on purpose: an older saved file, and an explicit `any` set before the session was known
+    /// (never kept pending). Returns true when the mark was dropped.
     pub(crate) fn drop_stale_input_mode_mark(&mut self) -> bool {
         let Some(current) = self.agent_identity() else {
             if self.input_mode_set_explicitly && self.input_mode_mark_is_pending() {
