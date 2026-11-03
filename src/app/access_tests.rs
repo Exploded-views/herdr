@@ -1,4 +1,4 @@
-// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default; tests the `node_name` key. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default; tests the `node_name` key and the input-mode mark rules. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1371,4 +1371,154 @@ async fn a_pane_named_into_a_section_gets_that_sections_mode_at_detection() {
         .set_agent_name("worker".into());
     detect(&mut state, pane, Some(Agent::Pi), false);
     assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+fn set_before_detection(
+    state: &mut AppState,
+    terminal: &TerminalId,
+    mode: crate::access::policy::InputMode,
+    default_mode: crate::access::policy::InputMode,
+) {
+    state.access_defaults = crate::access::policy::AccessDefaults {
+        default_mode,
+        ..Default::default()
+    };
+    // What `handle_access_pane_set` does, with no agent in the pane yet.
+    let t = state.terminals.get_mut(terminal).unwrap();
+    t.input_mode = mode;
+    t.mark_input_mode_explicit();
+    assert!(t.agent_identity().is_none());
+}
+
+#[tokio::test]
+async fn a_mode_set_before_any_agent_is_detected_keeps_its_mode_at_the_first_detection() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = state_with_pane();
+    set_before_detection(&mut state, &terminal, InputMode::HumanOnly, InputMode::Any);
+    agent_seen(&mut state, pane);
+    assert_eq!(state.terminals[&terminal].input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn an_explicit_any_set_on_an_empty_pane_is_raised_by_the_default_when_the_first_agent_arrives(
+) {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = state_with_pane();
+    set_before_detection(&mut state, &terminal, InputMode::Any, InputMode::HumanOnly);
+    agent_seen(&mut state, pane);
+    let t = &state.terminals[&terminal];
+    // Fail closed: a looser mode chosen with nobody in the pane does not shield the agent
+    // that arrives from a stricter default.
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+    assert!(!t.input_mode_set_explicitly);
+}
+
+/// A pane with a mark set while a Pi agent is detected but its process is not read yet, under
+/// a stricter default.
+fn pending_mark_pane() -> (AppState, crate::layout::PaneId, TerminalId) {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.input_mode = InputMode::Any;
+    t.mark_input_mode_explicit();
+    assert!(t.input_mode_set_explicitly);
+    assert!(t.agent_identity().is_some() && t.agent_session_key().is_none());
+    (state, pane, terminal)
+}
+
+#[tokio::test]
+async fn a_mode_set_while_the_agent_is_present_keeps_its_mark_when_the_session_becomes_known() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = pending_mark_pane();
+    // The agent is reported first, as a hook or `pane.report_agent` does; its process is
+    // read a moment later.
+    identify(&mut state, pane, 4242);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = &state.terminals[&terminal];
+    assert_eq!(t.input_mode, InputMode::Any);
+    assert!(
+        t.input_mode_set_explicitly,
+        "the mark was dropped: owner {:?}, session {:?}",
+        t.input_mode_mark_owner, t.input_mode_mark_session
+    );
+    assert_eq!(t.input_mode_mark_session, Some(process_key(4242)));
+}
+
+#[tokio::test]
+async fn a_pending_mark_clears_when_the_agent_is_released() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = pending_mark_pane();
+    detect(&mut state, pane, None, true);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    identify(&mut state, pane, 5151);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_pending_mark_clears_when_a_detection_reports_no_agent() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = pending_mark_pane();
+    // An exit seen only as "no agent", the same as a blink looks.
+    detect(&mut state, pane, None, false);
+    assert!(!state.terminals[&terminal].input_mode_set_explicitly);
+    identify(&mut state, pane, 5151);
+    detect(&mut state, pane, Some(Agent::Pi), false);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_pending_mark_clears_when_a_different_agent_appears() {
+    use crate::access::policy::InputMode;
+    let (mut state, pane, terminal) = pending_mark_pane();
+    identify(&mut state, pane, 5151);
+    detect(&mut state, pane, Some(Agent::Claude), false);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_restored_legacy_mark_without_a_session_is_dropped() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    // A pane saved before marks had owners: explicit `any`, no owner, no session.
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.input_mode_set_explicitly = true;
+    assert!(t.input_mode_mark_owner.is_none() && t.input_mode_mark_session.is_none());
+    agent_seen(&mut state, pane);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
+}
+
+#[tokio::test]
+async fn a_restored_mark_with_an_owner_and_no_session_is_dropped() {
+    use crate::access::policy::{AccessDefaults, InputMode};
+    // A pane saved with an owner but no session: not a pending mark of this run.
+    let (mut state, pane, terminal) = state_with_pane();
+    state.access_defaults = AccessDefaults {
+        default_mode: InputMode::HumanOnly,
+        ..Default::default()
+    };
+    let t = state.terminals.get_mut(&terminal).unwrap();
+    t.input_mode_set_explicitly = true;
+    t.input_mode_mark_owner = Some("pi|".into());
+    agent_seen(&mut state, pane);
+    let t = &state.terminals[&terminal];
+    assert!(!t.input_mode_set_explicitly);
+    assert_eq!(t.input_mode, InputMode::HumanOnly);
 }
