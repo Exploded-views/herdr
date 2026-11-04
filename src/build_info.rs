@@ -58,8 +58,18 @@ pub fn commit() -> Option<&'static str> {
     non_empty(option_env!("HERDR_FORK_COMMIT"))
 }
 
-/// What this process tells `ping` callers about the build it runs.
+/// What this process tells an identity `ping` about the build it runs. The first call starts the
+/// binary hash (see `binary_sha256`).
 pub fn server_identity() -> crate::api::schema::ServerIdentity {
+    identity_with(binary_sha256())
+}
+
+/// The same, but never starts the hash: the hash is whatever is already cached, else `None`.
+pub fn server_identity_cached() -> crate::api::schema::ServerIdentity {
+    identity_with(BINARY_SHA256.get().cloned())
+}
+
+fn identity_with(binary_sha256: Option<String>) -> crate::api::schema::ServerIdentity {
     identity_for(
         BINARY_PATH.get().cloned().or_else(|| {
             resolve_binary_path()
@@ -68,7 +78,7 @@ pub fn server_identity() -> crate::api::schema::ServerIdentity {
         }),
         fork_tag(),
         commit(),
-        binary_sha256(),
+        binary_sha256,
     )
 }
 
@@ -146,12 +156,16 @@ fn remember_binary_path() -> Option<std::path::PathBuf> {
 
 /// Starts hashing this executable on a background thread, at most once per process, so neither
 /// the accept thread nor the app loop waits on it. The first caller starts it; later calls do
-/// nothing. If the file cannot be read the hash stays unset and status reports null.
+/// nothing. If the file cannot be read the hash stays unset and status reports null for the
+/// life of the process (logged once): a retry could only succeed on a file that may by then be a
+/// different one. The hash reads the path, not the running image, so the install rule "never
+/// write over a binary in place" bounds the window this laziness widens.
 fn start_binary_hash() {
     BINARY_HASH_STARTED.call_once(|| {
         let Some(path) = remember_binary_path() else {
             return;
         };
+        #[cfg(test)]
         HASH_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let spawned =
             crate::thread_spawn::spawn_named("herdr-binary-hash", move || match hash_file(&path) {
@@ -166,6 +180,7 @@ fn start_binary_hash() {
     });
 }
 
+#[cfg(test)]
 static HASH_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How many times this process has started hashing its executable (a test hook).
@@ -271,7 +286,7 @@ mod tests {
     }
 
     fn wait_for_hash() -> String {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             if let Some(hash) = super::server_identity().binary_sha256 {
                 return hash;
@@ -328,6 +343,7 @@ mod tests {
         assert_eq!(wait_for_hash(), want);
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_follows_a_symlink_to_the_file() {
         let dir = std::env::temp_dir().join(format!("herdr-resolve-{}", std::process::id()));

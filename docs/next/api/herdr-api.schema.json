@@ -3512,6 +3512,12 @@
           "type": "object"
         },
         "PingParams": {
+          "properties": {
+            "identity": {
+              "description": "Ask for the server's build identity, including its binary hash. The first such ping\nstarts the hash; any other ping reports only what is already known.",
+              "type": "boolean"
+            }
+          },
           "type": "object"
         },
         "PluginActionInvokeParams": {

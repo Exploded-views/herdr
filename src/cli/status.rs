@@ -201,7 +201,7 @@ fn server_status_lines(server: &ServerRuntimeStatus, indent: &str) -> Vec<String
 }
 
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
-    match super::target::server_status(&super::target::api_client()?) {
+    match super::target::server_status(&super::target::api_client()?, true) {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,

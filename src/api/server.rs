@@ -626,14 +626,21 @@ fn handle_request(
     stop_caller: Option<String>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 ) -> String {
-    if matches!(&request.method, Method::Ping(_)) {
+    if let Method::Ping(params) = &request.method {
+        // Only an identity ping may start the binary hash; the checks that ping first (every
+        // CLI command, attach, autodetect) must not.
+        let identity = if params.identity {
+            crate::build_info::server_identity()
+        } else {
+            crate::build_info::server_identity_cached()
+        };
         return serde_json::to_string(&SuccessResponse {
             id: request.id,
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
                 capabilities,
-                identity: crate::build_info::server_identity(),
+                identity,
             },
         })
         .unwrap_or_else(|_| {
