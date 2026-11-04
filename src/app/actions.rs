@@ -1758,8 +1758,13 @@ impl AppState {
                 self.remote_settings.bridge_if_bridge_only(),
                 terminal,
             ) {
-                self.access_seen
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if !self
+                    .access_seen
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.access_seen_unsaved
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 self.session_dirty = true;
             }
             terminal.reconcile_reported_resume();

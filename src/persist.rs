@@ -1,3 +1,4 @@
+// herdr-fork: `load_checked` reports an unreadable session file so the handoff latch fails closed. Unofficial stopgap; see FORK.md.
 //! Session persistence — save/restore workspaces, layouts, and working directories.
 //!
 //! Stored at `~/.config/herdr/session.json`.
@@ -10,7 +11,7 @@ mod restore;
 mod snapshot;
 mod writer;
 
-pub use self::io::{clear_history, load, load_history};
+pub use self::io::{clear_history, load, load_checked, load_history};
 pub use self::restore::restore;
 pub(crate) use self::restore::restored_worktree_space_membership;
 #[cfg(unix)]

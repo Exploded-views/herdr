@@ -892,6 +892,8 @@ pub struct AppState {
     /// `server.live_handoff` stays outside-only even when nothing is protected any more.
     /// Saved with the session; nothing clears it at runtime.
     pub(crate) access_seen: std::sync::atomic::AtomicBool,
+    /// The latch went from false to true and no save has been scheduled for it yet.
+    pub(crate) access_seen_unsaved: std::sync::atomic::AtomicBool,
     /// `[access]` node keys, read once at startup. `bridge_binding` is filled later.
     pub(crate) remote_settings: crate::access::policy::RemoteSettings,
     /// Named callers (`access.caller.*`), loaded once at startup. Only hashes of tokens.
@@ -914,8 +916,10 @@ pub struct AppState {
 impl AppState {
     /// Arm the handoff latch. One-way.
     pub(crate) fn latch_access_seen(&self) {
-        self.access_seen
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        use std::sync::atomic::Ordering::Relaxed;
+        if !self.access_seen.swap(true, Relaxed) {
+            self.access_seen_unsaved.store(true, Relaxed);
+        }
     }
 
     /// Arm the latch when `terminal` holds a policy or a non-`any` mode. Called before the
@@ -1174,6 +1178,7 @@ impl AppState {
             session_dirty: false,
             access_defaults: Default::default(),
             access_seen: Default::default(),
+            access_seen_unsaved: Default::default(),
             remote_settings: Default::default(),
             access_callers: Default::default(),
             access_callers_path: None,

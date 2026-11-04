@@ -461,7 +461,11 @@ impl App {
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
-        let snapshot = policy.restore_session.then(crate::persist::load).flatten();
+        let (snapshot, session_unreadable) = if policy.restore_session {
+            crate::persist::load_checked()
+        } else {
+            (None, false)
+        };
         let saved_access_seen = snapshot.as_ref().is_some_and(|snap| snap.access_seen);
         let mut plugin_installation_leases = crate::plugin_installations::Leases::new();
         let mut plugin_installation_cleanup_allowed = true;
@@ -640,6 +644,7 @@ impl App {
             session_dirty: false,
             access_defaults: resolved_access.defaults,
             access_seen: Default::default(),
+            access_seen_unsaved: Default::default(),
             remote_settings: resolved_access.remote,
             access_callers,
             access_callers_path,
@@ -654,7 +659,11 @@ impl App {
         state.bind_default_access_all();
         // Restored before the API is served: the saved latch, any restored protection, or a
         // config that asks for protection.
-        if saved_access_seen || state.config_asks_for_access() || state_has_access(&state) {
+        if saved_access_seen
+            || session_unreadable
+            || state.config_asks_for_access()
+            || state_has_access(&state)
+        {
             state.latch_access_seen();
         }
 

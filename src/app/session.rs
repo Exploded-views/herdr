@@ -20,6 +20,14 @@ impl App {
     }
 
     pub(crate) fn sync_session_save_schedule(&mut self) {
+        // The handoff latch went from false to true: it has to reach the saved session.
+        if self
+            .state
+            .access_seen_unsaved
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.state.session_dirty = true;
+        }
         if self.state.session_dirty {
             self.state.session_dirty = false;
             self.schedule_session_save();
@@ -39,9 +47,10 @@ impl App {
     }
 
     fn capture_session_save_job(&self) -> SessionSaveJob {
-        if self.state.workspaces.is_empty() {
+        if self.state.workspaces.is_empty() && !self.state.access_seen() {
             SessionSaveJob::Clear
         } else {
+            // With no workspace left and the latch set, an empty snapshot still carries it.
             let mut snapshot = crate::persist::capture(
                 &self.state.workspaces,
                 &self.state.terminals,
