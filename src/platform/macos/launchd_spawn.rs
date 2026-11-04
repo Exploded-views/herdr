@@ -44,6 +44,19 @@ fn switch_is_set() -> bool {
     !launchd_allowed(std::env::var_os(NO_LAUNCHD_ENV).as_deref(), false)
 }
 
+/// CI-only opt-in for the tests that really use launchd: both variables must
+/// be set. Even then they only ever use `dev.herdr.test.` labels, and never
+/// while `HERDR_NO_LAUNCHD` is set.
+#[cfg(test)]
+fn real_launchd_opted_in() -> bool {
+    if let Some(value) = test_hooks::opt_in() {
+        return value;
+    }
+    std::env::var_os("HERDR_TEST_REAL_LAUNCHD").is_some_and(|v| v == "1")
+        && std::env::var_os("GITHUB_ACTIONS").is_some_and(|v| v == "true")
+        && !switch_is_set()
+}
+
 fn label_prefix() -> &'static str {
     if cfg!(test) {
         TEST_LABEL_PREFIX
@@ -63,7 +76,7 @@ pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
         ));
     }
     #[cfg(test)]
-    if !test_hooks::fake_installed() {
+    if !test_hooks::fake_installed() && !real_launchd_opted_in() {
         return Err(io::Error::other("launchd is never used by unit tests"));
     }
     if std::env::var_os("SSH_CONNECTION").is_some() {
@@ -175,7 +188,13 @@ fn launchctl(args: &[&str]) -> io::Result<String> {
         if let Some(result) = test_hooks::run_fake(args) {
             return result;
         }
-        panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
+        #[cfg(test)]
+        let opted_in = real_launchd_opted_in();
+        #[cfg(not(test))]
+        let opted_in = false;
+        if !opted_in {
+            panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
+        }
     }
     let output = Command::new(LAUNCHCTL)
         .args(args)
@@ -514,8 +533,10 @@ mod tests {
     fn spawn_under_test_fails_even_without_the_switch() {
         // No fake installed: cfg(test) alone must refuse, and must not panic.
         test_hooks::set_switch(Some(false));
+        test_hooks::set_opt_in(Some(false));
         let result = spawn_launchd_job(&Command::new("/usr/bin/true"));
         test_hooks::set_switch(None);
+        test_hooks::set_opt_in(None);
         assert!(result.is_err());
     }
 
@@ -523,6 +544,7 @@ mod tests {
     #[should_panic(expected = "launchctl is forbidden")]
     fn tripwire_panics_when_launchctl_runs_under_the_switch() {
         test_hooks::set_switch(Some(true));
+        test_hooks::set_opt_in(Some(false));
         let _ = launchctl(&["list"]);
     }
 
@@ -543,6 +565,163 @@ mod tests {
         let _fake = fake_launchctl("");
         let _ = launchctl(&["bootout", "gui/501/dev.herdr.server.1.2"]);
     }
+
+    #[test]
+    fn opt_in_labels_and_sweep_stay_in_the_test_namespace() {
+        let fake = fake_launchctl(FINISHED_SERVER_LIST);
+        test_hooks::set_opt_in(Some(true));
+        let result = spawn_launchd_job(&Command::new("/usr/bin/true"));
+        test_hooks::set_opt_in(None);
+        let label = result.expect("job label from the fake");
+        assert!(label.starts_with(TEST_LABEL_PREFIX), "{label}");
+        let calls = fake.calls();
+        assert!(!calls.is_empty());
+        for call in &calls {
+            assert!(!call.contains(LABEL_PREFIX), "server label in {call}");
+            if call.contains("dev.herdr.") {
+                assert!(call.contains(TEST_LABEL_PREFIX), "{call}");
+            }
+        }
+    }
+
+    const DETACH_HELPER_OUT: &str = "HERDR_LAUNCHD_DETACH_HELPER_OUT";
+
+    /// Body of the launchd job in `detached_server_outlives_its_launcher_job`.
+    #[test]
+    #[ignore = "runs only as the launchd job of another test"]
+    fn detach_helper() {
+        let Some(out) = std::env::var_os(DETACH_HELPER_OUT) else {
+            return;
+        };
+        let warning = leave_launchd_job();
+        // The launcher exits right after forking; wait until that is visible.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        // SAFETY: plain process query.
+        while unsafe { libc::getppid() } != 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // SAFETY: plain process queries.
+        let (pid, ppid, sid) = unsafe { (libc::getpid(), libc::getppid(), libc::getsid(0)) };
+        let line = format!(
+            "{pid} {ppid} {sid} {} {} {}",
+            std::env::var("XPC_SERVICE_NAME").unwrap_or_default(),
+            std::env::var_os(DETACH_ENV).is_some(),
+            warning.is_some(),
+        );
+        let _ = std::fs::write(out, line);
+        std::thread::sleep(Duration::from_secs(30));
+    }
+
+    fn gui_domain_available() -> Option<libc::uid_t> {
+        if !real_launchd_opted_in() {
+            return None;
+        }
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        (launchctl(&["print", &format!("gui/{uid}")]).is_ok()
+            && std::env::var_os("SSH_CONNECTION").is_none())
+        .then_some(uid)
+    }
+
+    fn wait_for_output(out: &Path) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::fs::metadata(out).map_or(true, |meta| meta.len() == 0)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::read_to_string(out).expect("job output")
+    }
+
+    /// CI-only (HERDR_TEST_REAL_LAUNCHD=1 and GITHUB_ACTIONS=true); needs a GUI login session.
+    #[test]
+    fn detached_server_outlives_its_launcher_job() {
+        let Some(uid) = gui_domain_available() else {
+            eprintln!("skipping: real launchd is CI-only");
+            return;
+        };
+        let dir = PrivateDir::create().expect("dir");
+        let out = dir.path().join("out");
+        let mut command = Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                "platform::macos::launchd_spawn::tests::detach_helper",
+            ])
+            .args(["--ignored", "--test-threads=1"])
+            .env(DETACH_HELPER_OUT, &out);
+
+        let label = spawn_launchd_job(&command).expect("launchd job");
+        let written = wait_for_output(&out);
+        let target = format!("gui/{uid}/{label}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while job_is_running(&target) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let launcher_running = job_is_running(&target);
+        // Removing the finished job must not take the detached server with it.
+        let _ = launchctl(&["bootout", &target]);
+        std::thread::sleep(Duration::from_millis(300));
+
+        let fields: Vec<&str> = written.split(' ').collect();
+        let pid: libc::pid_t = fields[0].parse().expect("pid");
+        // SAFETY: probes and then stops the helper process started by this test.
+        let alive_after_bootout = unsafe { libc::kill(pid, 0) } == 0;
+        let detached_coalition = resource_coalition(pid as u32);
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+
+        assert!(!launcher_running, "the launcher job finished: {written}");
+        assert!(
+            alive_after_bootout,
+            "the detached server survives: {written}"
+        );
+        assert_eq!(fields[1], "1", "reparented to launchd: {written}");
+        assert_eq!(fields[2], fields[0], "leads its own session: {written}");
+        assert_eq!(fields[3], "0", "job name hidden from panes: {written}");
+        assert_eq!(fields[4], "false", "detach marker consumed: {written}");
+        assert_eq!(fields[5], "false", "no detach warning: {written}");
+        assert_ne!(
+            detached_coalition,
+            resource_coalition(std::process::id()),
+            "outside the caller's coalition"
+        );
+    }
+
+    /// CI-only (HERDR_TEST_REAL_LAUNCHD=1 and GITHUB_ACTIONS=true); needs a GUI login session.
+    #[test]
+    fn job_runs_outside_the_callers_coalition_and_is_not_restarted() {
+        let Some(uid) = gui_domain_available() else {
+            eprintln!("skipping: real launchd is CI-only");
+            return;
+        };
+        let dir = PrivateDir::create().expect("dir");
+        let out = dir.path().join("out");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf '%s %s %s' $$ \"$HERDR_LAUNCHD_TEST\" \"${HERDR_LAUNCHD_DETACH-unset}\" > out; exec sleep 30")
+            .env("HERDR_LAUNCHD_TEST", "yes")
+            .current_dir(dir.path());
+
+        let label = spawn_launchd_job(&command).expect("launchd job");
+        let written = wait_for_output(&out);
+        let mut fields = written.split(' ');
+        let pid: u32 = fields.next().and_then(|pid| pid.parse().ok()).expect("pid");
+        let job_coalition = resource_coalition(pid);
+        let own_coalition = resource_coalition(std::process::id());
+
+        // SAFETY: signals the job process started by this test.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        std::thread::sleep(Duration::from_millis(500));
+        let target = format!("gui/{uid}/{label}");
+        let restarted = job_is_running(&target);
+        let _ = launchctl(&["bootout", &target]);
+
+        assert_eq!(fields.next(), Some("yes"), "environment reached the job");
+        assert_eq!(fields.next(), Some("1"), "the job is told to detach");
+        assert_ne!(job_coalition, own_coalition, "job has its own coalition");
+        assert!(!restarted, "launchd does not restart the server");
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +734,7 @@ mod test_hooks {
     thread_local! {
         static FAKE: RefCell<Option<Rc<RefCell<Recording>>>> = const { RefCell::new(None) };
         static SWITCH: Cell<Option<bool>> = const { Cell::new(None) };
+        static OPT_IN: Cell<Option<bool>> = const { Cell::new(None) };
     }
 
     struct Recording {
@@ -587,6 +767,14 @@ mod test_hooks {
 
     pub(super) fn set_switch(value: Option<bool>) {
         SWITCH.with(|switch| switch.set(value));
+    }
+
+    pub(super) fn set_opt_in(value: Option<bool>) {
+        OPT_IN.with(|opt_in| opt_in.set(value));
+    }
+
+    pub(super) fn opt_in() -> Option<bool> {
+        OPT_IN.with(Cell::get)
     }
 
     pub(super) fn switch() -> Option<bool> {
