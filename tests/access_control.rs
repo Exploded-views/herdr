@@ -747,6 +747,16 @@ impl PaneRun {
         assert_eq!(self.rc, 0, "{what} from a pane should work: {}", self.text);
     }
 
+    /// Refused with `access_denied`, and the text names the sender's class as a pane.
+    fn assert_denied_from_pane(&self, what: &str) {
+        self.assert_denied(what);
+        assert!(
+            self.text.contains("from pane"),
+            "{what} should name the pane class: {}",
+            self.text
+        );
+    }
+
     /// Refused, and the refusal names the sender as a pane: the server recognised the process
     /// as running inside one, rather than refusing it as unknown.
     fn assert_refused_as_pane(&self, what: &str) {
@@ -1389,6 +1399,86 @@ fn live_handoff_is_refused_from_a_pane_right_after_a_restart() {
         ],
     );
     refused.assert_denied("server live-handoff right after a restart");
+    node.try_api("ping", json!({}))
+        .expect("the same server still answers");
+}
+
+/// Closing the only protected pane does not open the handoff to a pane. The nonexistent
+/// import executable makes a request that is let through fail as `handoff_failed`.
+#[test]
+fn live_handoff_stays_refused_from_a_pane_after_every_protected_pane_is_closed() {
+    let (node, _a, b) = setup("");
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+    node.cli(&["pane", "close", &b])
+        .assert_ok("pane close from outside");
+    let a = poll("only the caller pane to remain", || {
+        let listed = node.try_api("pane.list", json!({})).ok()?;
+        let panes = listed["result"]["panes"].as_array()?;
+        if panes.len() == 1 {
+            panes[0]["pane_id"].as_str().map(str::to_string)
+        } else {
+            None
+        }
+    });
+    let refused = node.herdr_in_pane(
+        &a,
+        &[
+            "server",
+            "live-handoff",
+            "--import-exe",
+            "/nonexistent/herdr-handoff-target",
+        ],
+    );
+    refused.assert_denied_from_pane("server live-handoff after the protected pane closed");
+    node.try_api("ping", json!({}))
+        .expect("the same server still answers");
+}
+
+/// The same, across a restart of the server on the same state.
+#[test]
+fn live_handoff_stays_refused_from_a_pane_after_the_close_and_a_restart() {
+    let (mut node, a, b) = setup("");
+    node.api_ok("pane.rename", json!({"pane_id": a, "label": "caller-a"}));
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+    node.cli(&["pane", "close", &b])
+        .assert_ok("pane close from outside");
+    let session = node.config_home.join(app_dir_name()).join("session.json");
+    poll(
+        "the session file to hold the latch and no protected pane",
+        || {
+            fs::read_to_string(&session)
+                .ok()
+                .filter(|saved| {
+                    saved.contains("access_seen")
+                        && saved.contains("caller-a")
+                        && !saved.contains("human-only")
+                })
+                .map(|_| ())
+        },
+    );
+
+    node.restart_server();
+
+    let restored = poll("the restored caller pane", || {
+        let listed = node.try_api("pane.list", json!({})).ok()?;
+        listed["result"]["panes"]
+            .as_array()?
+            .iter()
+            .find(|pane| pane["label"] == "caller-a")
+            .and_then(|pane| pane["pane_id"].as_str().map(str::to_string))
+    });
+    let refused = node.herdr_in_pane(
+        &restored,
+        &[
+            "server",
+            "live-handoff",
+            "--import-exe",
+            "/nonexistent/herdr-handoff-target",
+        ],
+    );
+    refused.assert_denied_from_pane("server live-handoff after the close and a restart");
     node.try_api("ping", json!({}))
         .expect("the same server still answers");
 }

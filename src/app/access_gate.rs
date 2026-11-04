@@ -2003,10 +2003,16 @@ mod tests {
             Caller::Classified(CallerClass::Pane(other.clone())),
             Caller::Classified(CallerClass::Unknown { remote_hint: false }),
             Caller::Classified(CallerClass::Remote),
+            Caller::Classified(CallerClass::Caller {
+                name: "ops".into(),
+                target: AccessBindingId::mint().unwrap(),
+                via_ssh: false,
+            }),
         ];
         for caller in &refused {
             let denied = app.check_access(&live_handoff(), caller).unwrap_err();
             assert!(matches!(denied, AccessDenied::Control { .. }));
+            assert!(denied.message().contains("from "), "{}", denied.message());
         }
         // A pane's input mode alone also makes the gate active.
         let mut moded = app_with_panes(2);
@@ -2039,6 +2045,129 @@ mod tests {
         let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])));
         assert!(app.check_access(&live_handoff(), &from_pane).is_ok());
         assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+    }
+
+    /// Every class that is not outside, as a handoff caller.
+    fn handoff_refused_callers(app: &App) -> Vec<(&'static str, Caller)> {
+        let panes = pane_ids(app);
+        vec![
+            (
+                "pane",
+                Caller::Classified(CallerClass::Pane(terminal_of(app, panes[0]))),
+            ),
+            (
+                "unknown",
+                Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+            ),
+            ("remote", Caller::Classified(CallerClass::Remote)),
+            (
+                "caller",
+                Caller::Classified(CallerClass::Caller {
+                    name: "ops".into(),
+                    target: AccessBindingId::mint().unwrap(),
+                    via_ssh: false,
+                }),
+            ),
+        ]
+    }
+
+    /// The handoff is still outside-only: refused for every other class, with the class named.
+    fn assert_handoff_outside_only(app: &App) {
+        for (class, caller) in handoff_refused_callers(app) {
+            let denied = app.check_access(&live_handoff(), &caller).expect_err(class);
+            assert!(matches!(denied, AccessDenied::Control { .. }), "{class}");
+            assert!(
+                denied.message().contains("from "),
+                "{class}: {}",
+                denied.message()
+            );
+        }
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+    }
+
+    #[test]
+    fn live_handoff_stays_outside_only_after_a_policy_is_removed() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let other = terminal_of(&app, panes[1]);
+        protect(&mut app, &other, vec![Principal::Outside]);
+        // The gate is seen active once.
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+        app.state.terminals.get_mut(&other).unwrap().access = None;
+        assert!(!app.any_access_protected());
+        assert_handoff_outside_only(&app);
+    }
+
+    #[test]
+    fn live_handoff_stays_outside_only_after_an_input_mode_is_cleared() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let other = terminal_of(&app, panes[1]);
+        app.state.terminals.get_mut(&other).unwrap().input_mode =
+            crate::access::policy::InputMode::HumanOnly;
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+        app.state.terminals.get_mut(&other).unwrap().input_mode =
+            crate::access::policy::InputMode::Any;
+        assert!(!app.any_access_protected());
+        assert_handoff_outside_only(&app);
+    }
+
+    #[test]
+    fn live_handoff_stays_outside_only_after_the_protected_terminal_is_removed() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let other = terminal_of(&app, panes[1]);
+        protect(&mut app, &other, vec![Principal::Outside]);
+        // No request is checked while it is protected: the removal itself is what is seen.
+        app.state.workspaces[0].tabs[0].panes.remove(&panes[1]);
+        app.state.remove_unattached_terminal_ids([other.clone()]);
+        assert!(!app.state.terminals.contains_key(&other));
+        assert!(!app.any_access_protected());
+        assert_handoff_outside_only(&app);
+    }
+
+    #[test]
+    fn live_handoff_stays_outside_only_after_bridge_only_or_a_token_was_seen() {
+        let mut bridged = app_with_panes(2);
+        bridged.state.remote_settings.input = RemoteInput::BridgeOnly;
+        assert!(bridged.check_access(&live_handoff(), &outside()).is_ok());
+        bridged.state.remote_settings.input = RemoteInput::Any;
+        assert_handoff_outside_only(&bridged);
+
+        let mut tokened = app_with_panes(2);
+        let _ = tokened.check_access(&live_handoff(), &token_peer("not-a-registered-token"));
+        assert!(!tokened.any_access_protected());
+        assert_handoff_outside_only(&tokened);
+    }
+
+    #[test]
+    fn an_access_pane_set_arms_the_handoff_latch() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let pane_id = app.public_pane_id(0, panes[1]).unwrap();
+        assert!(app
+            .check_access(
+                &live_handoff(),
+                &Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])))
+            )
+            .is_ok());
+        let response = call(&mut app, pane_set(&pane_id, &["any"]));
+        assert_eq!(response["result"]["type"], "access_policy", "{response}");
+        assert!(!app.any_access_protected());
+        assert_handoff_outside_only(&app);
+    }
+
+    #[test]
+    fn live_handoff_is_unchanged_on_a_node_that_only_ran_ungated_requests() {
+        let app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])));
+        let pane_id = app.public_pane_id(0, panes[1]).unwrap();
+        // Reads and a refused-or-allowed admin read leave the latch alone.
+        assert!(app.check_access(&pane_get(&pane_id), &from_pane).is_ok());
+        assert!(app.check_access(&live_handoff(), &from_pane).is_ok());
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+        assert!(app.check_access(&live_handoff(), &from_pane).is_ok());
     }
 
     #[test]
