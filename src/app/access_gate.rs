@@ -357,6 +357,10 @@ impl App {
             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendInput(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::AgentStart(params) => self.agent_start_gate_target(params),
+            // Admin: a handoff swaps the running server for any executable, so while anything is
+            // protected only an outside caller asks for one. With nothing configured the idle
+            // return above leaves it open, as upstream has it.
+            Method::ServerLiveHandoff(_) => GateTarget::AccessAdmin,
             // Admin: only an outside caller manages named callers.
             Method::AccessCallerAdd(_)
             | Method::AccessCallerList(_)
@@ -368,10 +372,6 @@ impl App {
             Method::AccessPaneSet(_) => GateTarget::AccessAdmin,
             // Admin: the input log names every sender, so only an outside caller reads it.
             Method::AccessLog(_) => GateTarget::AccessAdmin,
-            // Admin: a handoff swaps the running server for any executable, so while anything is
-            // protected only an outside caller asks for one. With nothing configured the idle
-            // return above leaves it open, as upstream has it.
-            Method::ServerLiveHandoff(_) => GateTarget::AccessAdmin,
             // Open (Meta): reading a policy writes nothing into any pane.
             Method::AccessPaneGet(_) => GateTarget::Open,
             // Open: nothing here writes caller-chosen bytes into an existing pane.
