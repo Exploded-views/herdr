@@ -1,0 +1,13 @@
+# herdr-fork: mutant HG-M2: the admin class check accepts a pane caller. Unofficial stopgap; see FORK.md.
+diff --git a/src/access/policy.rs b/src/access/policy.rs
+--- a/src/access/policy.rs
++++ b/src/access/policy.rs
+@@ -459,7 +459,7 @@
+         }
+         // Rule 5.
+         GateTarget::AccessAdmin => match caller {
+-            CallerClass::Outside { .. } => Ok(()),
++            CallerClass::Outside { .. } | CallerClass::Pane(_) => Ok(()),
+             _ => Err(control_denied("server", caller)),
+         },
+     }
