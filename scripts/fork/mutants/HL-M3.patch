@@ -1,0 +1,13 @@
+# herdr-fork: mutant HL-M3: the latch is checked after the idle return instead of before. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/access_gate.rs b/src/app/access_gate.rs
+index c4f9158f..879d8aa2 100644
+--- a/src/app/access_gate.rs
++++ b/src/app/access_gate.rs
+@@ -217,7 +217,6 @@ impl App {
+         // refuse anything and has nothing to record, so it still returns first.
+         let classifies_for_log = logs_input && log == Some(true);
+         if self.access_gate_idle(caller)
+-            && !handoff_latched
+             && !operation.name.starts_with("access.")
+             && !binds_at_start
+             && !classifies_for_log

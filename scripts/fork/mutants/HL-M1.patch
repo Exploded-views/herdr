@@ -1,0 +1,15 @@
+# herdr-fork: mutant HL-M1: the handoff latch is never set. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/state.rs b/src/app/state.rs
+index 816552b9..5363d359 100644
+--- a/src/app/state.rs
++++ b/src/app/state.rs
+@@ -914,8 +914,7 @@ pub struct AppState {
+ impl AppState {
+     /// Arm the handoff latch. One-way.
+     pub(crate) fn latch_access_seen(&self) {
+-        self.access_seen
+-            .store(true, std::sync::atomic::Ordering::Relaxed);
++        let _ = &self.access_seen;
+     }
+ 
+     /// Arm the latch when `terminal` holds a policy or a non-`any` mode. Called before the
