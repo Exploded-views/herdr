@@ -1,3 +1,4 @@
+// herdr-fork: HERDR_NO_LAUNCHD switch, cfg(test) refusal and a launchctl tripwire keep tests off the real launchd domain; see FORK.md.
 //! Starts the server daemon outside the launching terminal app.
 //!
 //! A process started from a terminal stays in that terminal app's launchd job
@@ -19,16 +20,52 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LAUNCHCTL: &str = "/bin/launchctl";
 const LABEL_PREFIX: &str = "dev.herdr.server.";
+/// Labels for anything launchd-related that runs under test; never overlaps `LABEL_PREFIX`.
+const TEST_LABEL_PREFIX: &str = "dev.herdr.test.";
+/// Any non-empty value turns the launchd start off. Read at run time only.
+const NO_LAUNCHD_ENV: &str = "HERDR_NO_LAUNCHD";
 /// Tells the job process to fork the server and exit; never inherited by panes.
 const DETACH_ENV: &str = "HERDR_LAUNCHD_DETACH";
 /// Finished jobs stay loaded until logout; older ones are removed on the next launch.
 const STALE_JOB_AGE: Duration = Duration::from_secs(60);
+
+/// Whether a launchd job may be created, given the switch's value and whether
+/// this is a test build. Pure, so the production answer can be tested from a
+/// test build.
+fn launchd_allowed(switch: Option<&OsStr>, under_test: bool) -> bool {
+    !under_test && switch.is_none_or(|value| value.is_empty())
+}
+
+fn switch_is_set() -> bool {
+    #[cfg(test)]
+    if let Some(set) = test_hooks::switch() {
+        return set;
+    }
+    !launchd_allowed(std::env::var_os(NO_LAUNCHD_ENV).as_deref(), false)
+}
+
+fn label_prefix() -> &'static str {
+    if cfg!(test) {
+        TEST_LABEL_PREFIX
+    } else {
+        LABEL_PREFIX
+    }
+}
 
 /// Submits `command` (program, arguments, environment changes, working
 /// directory) as a run-once job in the caller's GUI launchd domain. Fails, so
 /// the caller can spawn directly, when there is no GUI domain or the command
 /// cannot be represented exactly in a launchd job. Returns the job label.
 pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
+    if switch_is_set() {
+        return Err(io::Error::other(
+            "launchd is turned off by HERDR_NO_LAUNCHD",
+        ));
+    }
+    #[cfg(test)]
+    if !test_hooks::fake_installed() {
+        return Err(io::Error::other("launchd is never used by unit tests"));
+    }
     if std::env::var_os("SSH_CONNECTION").is_some() {
         // SSH logins already run outside any terminal app; keep them out of
         // the desktop session too.
@@ -40,7 +77,12 @@ pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?;
-    let label = format!("{LABEL_PREFIX}{}.{}", std::process::id(), now.as_nanos());
+    let label = format!(
+        "{}{}.{}",
+        label_prefix(),
+        std::process::id(),
+        now.as_nanos()
+    );
     let working_dir = match command.get_current_dir() {
         Some(dir) => Some(dir.to_path_buf()),
         None => std::env::current_dir().ok(),
@@ -123,9 +165,17 @@ fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
 }
 
 fn launchctl(args: &[&str]) -> io::Result<String> {
-    #[cfg(test)]
-    if let Some(result) = test_hooks::run_fake(args) {
-        return result;
+    if cfg!(test) || switch_is_set() {
+        // Tripwire: nothing under test, or under the switch, may reach the real launchd.
+        assert!(
+            args.iter().all(|arg| !arg.contains(LABEL_PREFIX)),
+            "launchctl is forbidden from naming a server job here: {args:?}"
+        );
+        #[cfg(test)]
+        if let Some(result) = test_hooks::run_fake(args) {
+            return result;
+        }
+        panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
     }
     let output = Command::new(LAUNCHCTL)
         .args(args)
@@ -156,7 +206,7 @@ fn remove_stale_jobs(domain: &str, now: Duration) {
     let Ok(list) = launchctl(&["list"]) else {
         return;
     };
-    for label in stale_job_labels(&list, now) {
+    for label in stale_job_labels(&list, now, label_prefix()) {
         let target = format!("{domain}/{label}");
         if job_is_running(&target) {
             continue;
@@ -167,7 +217,7 @@ fn remove_stale_jobs(domain: &str, now: Duration) {
     }
 }
 
-fn stale_job_labels(list_output: &str, now: Duration) -> Vec<&str> {
+fn stale_job_labels<'a>(list_output: &'a str, now: Duration, prefix: &str) -> Vec<&'a str> {
     list_output
         .lines()
         .filter_map(|line| {
@@ -175,7 +225,7 @@ fn stale_job_labels(list_output: &str, now: Duration) -> Vec<&str> {
             let pid = fields.next()?.trim();
             let label = fields.nth(1)?.trim();
             let started = label
-                .strip_prefix(LABEL_PREFIX)?
+                .strip_prefix(prefix)?
                 .rsplit_once('.')?
                 .1
                 .parse::<u128>()
@@ -317,7 +367,7 @@ mod tests {
         );
 
         assert_eq!(
-            stale_job_labels(&list, now),
+            stale_job_labels(&list, now, LABEL_PREFIX),
             vec![format!("dev.herdr.server.12.{old}").as_str()]
         );
     }
@@ -429,7 +479,26 @@ mod tests {
         test_hooks::install(list_output)
     }
 
-    const FINISHED_SERVER_LIST: &str = "-\t0\tdev.herdr.server.100.1000\n-\t0\tdev.herdr.test.100.1000\n";
+    const FINISHED_SERVER_LIST: &str =
+        "-\t0\tdev.herdr.server.100.1000\n-\t0\tdev.herdr.test.100.1000\n";
+
+    #[test]
+    fn production_decision_allows_launchd_unless_switched_off() {
+        let empty = OsStr::new("");
+        // Not under test: allowed with no switch, or an empty one.
+        assert!(launchd_allowed(None, false));
+        assert!(launchd_allowed(Some(empty), false));
+        // Any non-empty value, and any test build, turns it off.
+        assert!(!launchd_allowed(Some(OsStr::new("1")), false));
+        assert!(!launchd_allowed(None, true));
+    }
+
+    #[test]
+    fn test_and_production_labels_never_overlap() {
+        assert!(!TEST_LABEL_PREFIX.starts_with(LABEL_PREFIX));
+        assert!(!LABEL_PREFIX.starts_with(TEST_LABEL_PREFIX));
+        assert_eq!(label_prefix(), TEST_LABEL_PREFIX);
+    }
 
     #[test]
     fn switch_makes_spawn_fail_without_any_launchctl_call() {

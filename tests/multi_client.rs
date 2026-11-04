@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 //! Gate B integration tests for the ClientShell protocol.
 
 #![cfg(unix)]
@@ -89,6 +90,7 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
         })
         .unwrap();
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config);
@@ -117,6 +119,7 @@ fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
         })
         .unwrap();
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");

@@ -29,10 +29,13 @@ const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
 /// A `Command` for the herdr binary under test.
 pub fn herdr_command() -> std::process::Command {
-    std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
+    command
 }
 
 pub fn isolate_herdr_test_process(command: &mut CommandBuilder) {
+    command.env("HERDR_NO_LAUNCHD", "1");
     command.env_remove("HERDR_STARTUP_CWD");
     command.env_remove("HERDR_SESSION");
 }

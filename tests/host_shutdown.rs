@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 #![cfg(target_os = "linux")]
 
 use std::io::{BufRead, Read, Write};
@@ -126,6 +127,7 @@ async fn host_shutdown_saves_layout_before_releasing_delay_lock() {
     std::fs::write(&config, "onboarding = false\n[experimental]\nallow_nested = true\n[terminal]\ndefault_shell = \"/bin/sh\"\n").unwrap();
     let mut server = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(["--session", "shutdown", "server"])
             .env("XDG_CONFIG_HOME", &base)
             .env("XDG_STATE_HOME", &base)

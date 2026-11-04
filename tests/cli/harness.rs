@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 pub(super) use std::fs;
 pub(super) use std::io::{BufRead, BufReader, Write};
 pub(super) use std::os::unix::net::{UnixListener, UnixStream};
@@ -175,6 +176,8 @@ pub(super) fn spawn_named_server(
     .unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+
+    command.env("HERDR_NO_LAUNCHD", "1");
     command
         .args(["--session", session, "server"])
         .env("XDG_CONFIG_HOME", config_home)
@@ -227,6 +230,7 @@ pub(super) fn run_named_cli_with_env_and_socket_override(
     socket_override: Option<&Path>,
 ) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
     command
         .args(args)
         .env("XDG_CONFIG_HOME", config_home)
@@ -302,6 +306,8 @@ pub(super) fn spawn_herdr_with_config(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
@@ -324,6 +330,7 @@ pub(super) fn spawn_herdr_with_config(
 
 pub(super) fn run_cli(socket_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
     command.args(args);
     command.env("HERDR_SOCKET_PATH", socket_path);
     command.output().unwrap()
@@ -335,6 +342,7 @@ pub(super) fn run_cli_in_dir(
     current_dir: &Path,
 ) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
     command.args(args);
     command.current_dir(current_dir);
     command.env("HERDR_SOCKET_PATH", socket_path);

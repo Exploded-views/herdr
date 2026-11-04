@@ -309,6 +309,7 @@ impl Node {
             .unwrap();
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
         cmd.env_clear();
+        cmd.env("HERDR_NO_LAUNCHD", "1");
         cmd.arg("server");
         for (key, value) in self.env() {
             cmd.env(key, value);
@@ -516,6 +517,7 @@ impl Node {
     fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_herdr"));
         cmd.env_clear().args(args);
+        cmd.env("HERDR_NO_LAUNCHD", "1");
         for (key, value) in self.env() {
             cmd.env(key, value);
         }
@@ -792,6 +794,7 @@ fn sshd_helper() {
         return;
     };
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     cmd.args(args.split('\u{1f}'))
         .env_remove("HERDR_E2E_ARGS")
         .env_remove("HERDR_E2E_FILES");

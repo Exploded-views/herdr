@@ -94,6 +94,11 @@ Upstream ships no `NOTICE` file, and the fork adds none. Files the fork changes 
 - Self-update is disabled in fork builds, because `herdr update` would hand the running
   server over to an upstream binary without the allow-list.
 
+- Tests never touch the real macOS launchd domain: unit tests refuse and trip on any `launchctl`
+  call, the integration harness sets `HERDR_NO_LAUNCHD=1` on every herdr process it builds, and
+  tests use only the `dev.herdr.test.` label prefix. `cargo run`, `cargo install` and release builds
+  keep launchd unless you set `HERDR_NO_LAUNCHD` by hand.
+
 ### One deviation from the fork standard: FORK-CHANGELOG.md
 
 The fork standard keeps fork changes in `CHANGELOG.md`. herdr's maintainers curate and

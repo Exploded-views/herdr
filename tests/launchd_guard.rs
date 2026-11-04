@@ -20,8 +20,5 @@ fn shared_command_helper_sets_the_no_launchd_switch() {
 fn pty_isolation_helper_sets_the_no_launchd_switch() {
     let mut command = portable_pty::CommandBuilder::new("herdr");
     support::isolate_herdr_test_process(&mut command);
-    assert_eq!(
-        command.get_env("HERDR_NO_LAUNCHD"),
-        Some(OsStr::new("1"))
-    );
+    assert_eq!(command.get_env("HERDR_NO_LAUNCHD"), Some(OsStr::new("1")));
 }

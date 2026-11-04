@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 use super::harness::*;
 
 #[test]
@@ -233,6 +234,7 @@ fn dead_server_cli_reports_one_session_aware_json_line() {
     let stale_socket = runtime_dir.join("stale.sock");
     drop(UnixListener::bind(&stale_socket).unwrap());
     let stale = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["workspace", "create"])
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
@@ -266,6 +268,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
     );
 
     let workspace_list = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["workspace", "list"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
@@ -274,6 +277,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
     assert_eq!(workspace_list.status.code(), Some(1));
 
     let integration_install = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["integration", "install", "pi"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
@@ -286,6 +290,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
     );
 
     let integration_status = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["integration", "status"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
@@ -297,6 +302,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
     assert!(status_stdout.contains("claude: not installed"));
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["integration", "uninstall", "pi"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
@@ -329,6 +335,7 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     let missing_socket = runtime_dir.join("missing.sock");
 
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["integration", "status", "--outdated-only"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
@@ -355,6 +362,7 @@ fn integration_status_rejects_unknown_flags() {
     let missing_socket = runtime_dir.join("missing.sock");
 
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["integration", "status", "--wat"])
         .env("HERDR_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)

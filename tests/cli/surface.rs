@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 use super::harness::*;
 
 #[test]
@@ -259,6 +260,7 @@ fn help_commands_exit_successfully() {
 
     for args in help_cases {
         let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(*args)
             .output()
             .unwrap();
@@ -277,6 +279,7 @@ fn help_commands_exit_successfully() {
 fn root_and_command_group_help_point_agents_to_plain_text_docs() {
     for args in [&["--help"][..], &["agent", "--help"][..]] {
         let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(args)
             .env_remove("HERDR_SOCKET_PATH")
             .env_remove("HERDR_CLIENT_SOCKET_PATH")
@@ -325,6 +328,7 @@ fn subcommand_help_explains_automation_semantics_without_a_server() {
 
     for (args, expected) in cases {
         let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(*args)
             .env_remove("HERDR_SOCKET_PATH")
             .env_remove("HERDR_CLIENT_SOCKET_PATH")
@@ -351,18 +355,21 @@ fn subcommand_help_explains_automation_semantics_without_a_server() {
 #[test]
 fn removed_wait_and_agent_send_commands_are_rejected() {
     let wait = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["wait", "output", "w1:p1", "--match", "ready"])
         .output()
         .unwrap();
     assert_eq!(wait.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&wait.stderr).contains("unknown command: wait"));
     let help = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("--help")
         .output()
         .unwrap();
     assert!(!String::from_utf8_lossy(&help.stdout).contains("herdr wait <subcommand>"));
 
     let send = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["agent", "send", "reviewer", "hello"])
         .output()
         .unwrap();
@@ -404,6 +411,7 @@ fn agent_cli_rejects_invalid_wait_and_rename_grammar_locally() {
         &["agent", "rename", "reviewer", "worker", "--clear"][..],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(args)
             .env("HERDR_SOCKET_PATH", "/nonexistent/herdr.sock")
             .output()
@@ -422,6 +430,7 @@ fn agent_cli_rejects_invalid_wait_and_rename_grammar_locally() {
 #[test]
 fn completion_command_prints_zsh_script_without_session_startup() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["completion", "zsh"])
         .env_remove("HERDR_SOCKET_PATH")
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
@@ -454,6 +463,7 @@ fn completion_command_prints_zsh_script_without_session_startup() {
 #[test]
 fn root_help_hides_explicit_client_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("--help")
         .output()
         .unwrap();
@@ -469,6 +479,7 @@ fn root_help_hides_explicit_client_command() {
 #[test]
 fn root_help_advertises_api_schema_command_group() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("--help")
         .output()
         .unwrap();
@@ -484,6 +495,7 @@ fn root_help_advertises_api_schema_command_group() {
 #[test]
 fn api_schema_default_output_is_a_short_summary() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["api", "schema"])
         .output()
         .unwrap();
@@ -504,6 +516,7 @@ fn api_schema_default_output_is_a_short_summary() {
 #[test]
 fn api_schema_json_prints_bundled_schema() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["api", "schema", "--json"])
         .output()
         .unwrap();
@@ -565,6 +578,7 @@ fn api_schema_output_writes_bundled_schema_to_file() {
     let schema_path = base.join("herdr-api.schema.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["api", "schema", "--output"])
         .arg(&schema_path)
         .output()
@@ -592,6 +606,7 @@ fn explicit_client_command_respects_nested_guard() {
     fs::create_dir_all(&base).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("client")
         .env("HERDR_ENV", "1")
         .env("XDG_CONFIG_HOME", &base)
@@ -612,6 +627,7 @@ fn explicit_client_command_respects_nested_guard() {
 #[test]
 fn removed_show_changelog_flag_fails_before_nested_guard() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("--show-changelog")
         .env("HERDR_ENV", "1")
         .output()

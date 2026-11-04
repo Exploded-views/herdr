@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 use super::harness::*;
 use serde_json::{json, Value};
 
@@ -13,6 +14,7 @@ fn capture(args: &[&str], response: Value) -> Capture {
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(args)
         .env("HERDR_SOCKET_PATH", &socket)
         .env("XDG_CONFIG_HOME", &base)

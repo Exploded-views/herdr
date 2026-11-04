@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 //! Cross-area integration tests for end-to-end persistence flows.
 
 #![cfg(unix)]
@@ -118,6 +119,8 @@ fn spawn_server_with_path(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
@@ -157,6 +160,8 @@ fn spawn_client_process(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
