@@ -1,4 +1,4 @@
-// herdr-fork: `AgentStartParams` gains `accept_from`. Unofficial stopgap; see FORK.md.
+// herdr-fork: `AgentStartParams` gains `accept_from`; the `ping` result carries the server identity. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 
 use super::*;
@@ -730,12 +730,47 @@ fn success_response_round_trips() {
                 health_check: true,
                 ssh_agent_registration: false,
             }),
+            identity: ServerIdentity::default(),
         },
     };
 
     let json = serde_json::to_string(&response).unwrap();
     let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
+}
+
+#[test]
+fn pong_identity_fields_are_flat_and_optional() {
+    let response = SuccessResponse {
+        id: "req_1".into(),
+        result: ResponseResult::Pong {
+            version: "0.9.5".into(),
+            protocol: 22,
+            capabilities: None,
+            identity: ServerIdentity {
+                binary: Some("/bin/herdr".into()),
+                fork_tag: Some("v0.9.5-ev.3".into()),
+                commit: None,
+                binary_sha256: None,
+            },
+        },
+    };
+    let value = serde_json::to_value(&response).unwrap();
+    assert_eq!(value["result"]["binary"], "/bin/herdr");
+    assert_eq!(value["result"]["fork_tag"], "v0.9.5-ev.3");
+    assert!(value["result"].get("commit").is_none());
+    let restored: SuccessResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(restored, response);
+
+    // An older server's pong has none of the fields.
+    let old: SuccessResponse = serde_json::from_str(
+        r#"{"id":"r","result":{"type":"pong","version":"0.9.5","protocol":22}}"#,
+    )
+    .unwrap();
+    let ResponseResult::Pong { identity, .. } = old.result else {
+        panic!("not a pong")
+    };
+    assert_eq!(identity, ServerIdentity::default());
 }
 
 #[test]

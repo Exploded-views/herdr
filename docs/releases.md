@@ -27,9 +27,9 @@ upstream's `release.yml`, `preview.yml` and `distribution/` stay untouched.
    must be an ancestor of `origin/integ/next`. Every later job builds exactly that commit.
    The build checks out the triggering commit (`github.sha`), which `prepare` requires to equal the tag's commit.
 4. Each build job checks that the tag's base version matches `Cargo.toml`, runs
-   `cargo build --locked --release` from a clean tree (no shared build cache), checks the
-   binary's architecture, and runs `herdr --version` (natively, under Rosetta, or under qemu)
-   expecting the base version.
+   `cargo build --locked --release` from a clean tree (no shared build cache) with the tag in
+   `HERDR_FORK_TAG`, checks the binary's architecture, and runs `herdr --version` (natively,
+   under Rosetta, or under qemu) expecting exactly `herdr <base>`, then runs `herdr status client --json` expecting the tag in `fork_tag`.
 5. The `release` job, the only one with write access, runs in the `release` environment (see
    [ci.md](ci.md#repository-settings)), so it waits there for approval once the admin has set a
    required reviewer. It re-checks the admin, re-verifies every `.sha256`, confirms the tag

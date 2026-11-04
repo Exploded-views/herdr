@@ -1,0 +1,17 @@
+# herdr-fork: mutant FV-M1: the server identity ignores the fork tag. Unofficial stopgap; see FORK.md.
+diff --git a/src/build_info.rs b/src/build_info.rs
+index a6cdc6eb..0663384f 100644
+--- a/src/build_info.rs
++++ b/src/build_info.rs
+@@ -80,7 +80,10 @@ fn identity_for(
+ ) -> crate::api::schema::ServerIdentity {
+     crate::api::schema::ServerIdentity {
+         binary,
+-        fork_tag: fork_tag.map(str::to_owned),
++        fork_tag: {
++            let _ = fork_tag;
++            None
++        },
+         commit: commit.map(str::to_owned),
+         binary_sha256,
+     }

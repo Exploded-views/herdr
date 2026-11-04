@@ -1,4 +1,4 @@
-// herdr-fork: the client can attach a caller token to every request (`caller_token` beside the request fields). Unofficial stopgap; see FORK.md.
+// herdr-fork: the client can attach a caller token to every request (`caller_token` beside the request fields); `status` reads the server identity. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -129,10 +129,12 @@ impl ApiClient {
                 version,
                 protocol,
                 capabilities,
+                identity,
             } => Ok(crate::api::RuntimeStatus {
                 version: Some(version),
                 protocol: Some(protocol),
                 capabilities,
+                identity,
             }),
             result => Err(ApiClientError::UnexpectedResult(format!("{result:?}"))),
         }

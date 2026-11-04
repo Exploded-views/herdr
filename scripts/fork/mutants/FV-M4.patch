@@ -1,0 +1,14 @@
+# herdr-fork: mutant FV-M4: the ping handler drops the server identity. Unofficial stopgap; see FORK.md.
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 10d99816..e3a9b69f 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -633,7 +633,7 @@ fn handle_request(
+                 version: crate::build_info::version(),
+                 protocol: crate::protocol::PROTOCOL_VERSION,
+                 capabilities,
+-                identity: crate::build_info::server_identity(),
++                identity: Default::default(),
+             },
+         })
+         .unwrap_or_else(|_| {

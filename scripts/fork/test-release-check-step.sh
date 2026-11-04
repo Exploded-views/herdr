@@ -38,17 +38,19 @@ exec "$@"
 EOF
 chmod +x "$stubs/file" "$stubs/arch"
 
-# run_case <name> <want: pass|fail> <run_prefix> <file_expect> <file_line> <version_output>
+# run_case <name> <want: pass|fail> <run_prefix> <file_expect> <file_line> <version_output> <status_json>
 run_case() {
-  local name=$1 want=$2 prefix=$3 expect=$4 line=$5 version=$6
+  local name=$1 want=$2 prefix=$3 expect=$4 line=$5 version=$6 status=$7
   local work=$tmp/work-$name
   mkdir -p "$work/target/aarch64-apple-darwin/release"
-  printf '#!/bin/sh\necho "%s"\n' "$version" >"$work/target/aarch64-apple-darwin/release/herdr"
+  {
+    printf '%s\n' '#!/bin/sh' 'case "$1" in' '  --version) printf "%s\n" "$STUB_VERSION" ;;' '  status) printf "%s\n" "$STUB_STATUS" ;;' 'esac'
+  } >"$work/target/aarch64-apple-darwin/release/herdr"
   chmod +x "$work/target/aarch64-apple-darwin/release/herdr"
   local rc=0
   (
     cd "$work"
-    env -i HOME="$tmp" "PATH=$stubs:/usr/bin:/bin" STUB_FILE_LINE="$line" \
+    env -i HOME="$tmp" "PATH=$stubs:/usr/bin:/bin" STUB_FILE_LINE="$line" STUB_VERSION="$version" STUB_STATUS="$status" \
       TAG=v0.9.5-ev.2 TARGET=aarch64-apple-darwin RUN_PREFIX="$prefix" FILE_EXPECT="$expect" \
       /bin/bash "$tmp/step.sh"
   ) >"$tmp/out-$name" 2>&1 || rc=$?
@@ -61,14 +63,18 @@ run_case() {
   fi
 }
 
-good='herdr 0.9.5 (fork v0.9.5-ev.2)'
+good='herdr 0.9.5'
+status_good='{"version":"0.9.5","fork_tag":"v0.9.5-ev.2"}'
 arm='Mach-O 64-bit executable arm64'
 x86='Mach-O 64-bit executable x86_64'
 
 echo "bash: $(/bin/bash --version | head -n 1)"
-run_case empty-prefix pass "" "$arm" "$arm" "$good"
-run_case arch-prefix pass "arch -x86_64" "$x86" "$x86" "$good"
-run_case wrong-version fail "arch -x86_64" "$x86" "$x86" "herdr 0.9.4 (fork v0.9.4-ev.1)"
+run_case empty-prefix pass "" "$arm" "$arm" "$good" "$status_good"
+run_case arch-prefix pass "arch -x86_64" "$x86" "$x86" "$good" "$status_good"
+run_case wrong-version fail "arch -x86_64" "$x86" "$x86" "herdr 0.9.4" "$status_good"
+run_case tagged-version-line fail "" "$arm" "$arm" "herdr 0.9.5 (fork v0.9.5-ev.2)" "$status_good"
+run_case wrong-fork-tag fail "" "$arm" "$arm" "$good" '{"fork_tag":"v0.9.5-ev.1"}'
+run_case no-fork-tag fail "" "$arm" "$arm" "$good" '{"fork_tag":null}'
 
 [ "$fail" -eq 0 ] || exit 1
 echo "release check step: all cases passed"

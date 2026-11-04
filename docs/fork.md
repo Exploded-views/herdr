@@ -181,7 +181,7 @@ The fork installs beside upstream and never replaces it. Your upstream `herdr` (
 
    `herdr access` with no arguments never reaches the server. On the fork it prints the access usage to stderr and exits 2, which is the expected result. On upstream it prints `unknown command: access`, which means `herdr` is still upstream.
 
-   Don't use the protocol number or the version: upstream and the fork print the same ones, and the fork doesn't mark `--version` yet.
+   Don't use the protocol number or the version string alone: upstream and the fork print the same ones. `herdr --version` stays upstream-identical, so it can't tell them apart either (a tagged line is deferred until crewkit accepts `herdr X.Y.Z (fork vTAG)`). `herdr status server` shows which binary the running server started from (`binary:`, the path with symlinks resolved when the server started, `fork:`, `commit:`, `sha256:`). A server older than 0.9.5-ev.3 shows `unknown` for those lines, and `herdr status` then reports it as stale.
 
 To move to a later fork version, install it into its own `~/.local/opt/herdr-fork/<version>` and repoint `current` the same way (the `ln -sfn` and `mv` lines of the block above): write the new symlink under a new name, then `mv` it into place. Never write over a binary in place.
 

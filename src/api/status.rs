@@ -1,3 +1,4 @@
+// herdr-fork: `RuntimeStatus` carries the server identity (binary, fork tag, commit, sha256). Unofficial stopgap; see FORK.md.
 use std::io;
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +10,7 @@ pub struct RuntimeStatus {
     pub version: Option<String>,
     pub protocol: Option<u32>,
     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
+    pub identity: crate::api::schema::ServerIdentity,
 }
 
 pub fn read_runtime_status_at(
@@ -48,10 +50,12 @@ pub fn read_runtime_status_at(
             version,
             protocol,
             capabilities,
+            identity,
         } => Ok(Some(RuntimeStatus {
             version: Some(version),
             protocol: Some(protocol),
             capabilities,
+            identity,
         })),
         result => Err(io::Error::other(format!(
             "server status request returned unexpected result: {result:?}"

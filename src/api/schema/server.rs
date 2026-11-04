@@ -1,3 +1,4 @@
+// herdr-fork: adds `ServerIdentity`, the build a server reports in its `ping` result. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -36,6 +37,24 @@ crate::cli::projection::cli_params! {
 pub struct ServerSshAgentRegisterParams {
     /// Absolute remote-host agent socket. Registration lasts until this API connection closes.
     pub socket_path: String,
+}
+
+// Which build a server is. Every field is absent from an older server's `ping` result.
+// (A plain comment: a doc comment would land on the whole flattened `pong` result in the schema.)
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ServerIdentity {
+    /// The server's own executable path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// The fork release tag baked into the build (`v0.9.5-ev.3`); absent for an untagged build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_tag: Option<String>,
+    /// The git commit the build was made from; absent when the build had no git.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// The sha256 of the server's executable; absent until the server has hashed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -1,4 +1,4 @@
-// herdr-fork: declares the pure access model module (`access`), takes a leading `--caller-token-file`, and exits 2 on an unusable token file. Unofficial stopgap; see FORK.md.
+// herdr-fork: declares the pure access model module (`access`), takes a leading `--caller-token-file`, exits 2 on an unusable token file, and prints `--version` through `build_info::version_line`. Unofficial stopgap; see FORK.md.
 use std::io;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
@@ -740,7 +740,7 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("herdr {}", crate::build_info::version());
+        println!("{}", crate::build_info::version_line());
         return Ok(());
     }
 

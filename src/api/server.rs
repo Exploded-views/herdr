@@ -1,4 +1,4 @@
-// herdr-fork: build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
+// herdr-fork: the `ping` result carries the server identity and the server hashes its binary at start; build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,6 +161,8 @@ fn start_server_inner(
         }
     };
 
+    // After the accept thread, so a failure injected for that spawn is not taken by this one.
+    crate::build_info::start_binary_hash();
     Ok(ServerHandle {
         _thread: thread,
         path,
@@ -631,6 +633,7 @@ fn handle_request(
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
                 capabilities,
+                identity: crate::build_info::server_identity(),
             },
         })
         .unwrap_or_else(|_| {
@@ -1658,6 +1661,38 @@ mod tests {
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    #[test]
+    fn ping_response_reports_the_server_identity() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_id".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &Caller::test_outside(),
+            &tx,
+            None,
+            None,
+            None,
+            None,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let result = &value["result"];
+        assert_eq!(
+            result["binary"],
+            std::fs::canonicalize(std::env::current_exe().unwrap())
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            result["fork_tag"].as_str(),
+            crate::build_info::fork_tag(),
+            "{result}"
+        );
+        assert_eq!(result["commit"].as_str(), crate::build_info::commit());
     }
 
     #[test]
