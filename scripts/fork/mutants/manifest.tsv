@@ -152,3 +152,5 @@ HL-M3	HL-M3.patch	test(live_handoff_stays_outside_only_after_a_policy_is_removed
 HL-M4	HL-M4.patch	test(a_policy_bound_by_detection_then_removed_still_latches_the_handoff)
 HL-M5	HL-M5.patch	test(the_latch_survives_closing_the_last_workspace_and_a_restart)
 HL-M6	HL-M6.patch	test(an_unreadable_saved_session_starts_with_the_latch_set)
+HL-M7	HL-M7.patch	test(a_handoff_import_applies_the_saved_latch)
+HL-M8	HL-M8.patch	test(the_handoff_export_carries_the_latch)

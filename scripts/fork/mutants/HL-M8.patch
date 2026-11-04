@@ -1,0 +1,14 @@
+# herdr-fork: mutant HL-M8: a live handoff export drops the latch from the handed-over snapshot. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/session.rs b/src/app/session.rs
+index 66c18363..a1a63ea9 100644
+--- a/src/app/session.rs
++++ b/src/app/session.rs
+@@ -55,7 +55,7 @@ impl App {
+             self.state.active,
+             self.state.selected,
+         );
+-        snapshot.access_seen = self.state.access_seen();
++        snapshot.access_seen = false;
+         snapshot
+     }
+ 

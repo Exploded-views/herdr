@@ -1,0 +1,14 @@
+# herdr-fork: mutant HL-M7: a live handoff import ignores the latch in the handed-over snapshot. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 67d0b577..2c039425 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -832,7 +832,7 @@ impl App {
+         app.state.workspaces = workspaces;
+         app.state.terminals = terminals;
+         app.state.bind_default_access_all();
+-        if snapshot.access_seen || state_has_access(&app.state) {
++        if state_has_access(&app.state) {
+             app.state.latch_access_seen();
+         }
+         app.terminal_runtimes = runtimes.into();
