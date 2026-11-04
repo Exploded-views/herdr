@@ -756,6 +756,357 @@ async fn a_restored_input_mode_makes_the_gate_active_before_any_detection() {
     assert!(app.check_access(&handoff, &from_pane).is_err());
 }
 
+/// Start an app from a saved session, the way a server restart does.
+fn app_restored_from(name: &str, json: &serde_json::Value) -> App {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs(name);
+    std::fs::create_dir_all(crate::config::config_dir()).unwrap();
+    std::fs::write(
+        crate::config::config_dir().join("session.json"),
+        serde_json::to_string(json).unwrap(),
+    )
+    .unwrap();
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let policy = crate::app::AppPolicy {
+        restore_session: true,
+        ..crate::app::AppPolicy::TEST
+    };
+    let app = App::try_new(
+        &Config::default(),
+        policy,
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    app.unwrap()
+}
+
+fn handoff_from_a_pane_is_refused(app: &App) -> bool {
+    let terminal = app.state.terminals.keys().next().unwrap().clone();
+    let from_pane = crate::access::caller::Caller::Classified(
+        crate::access::policy::CallerClass::Pane(terminal),
+    );
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    app.check_access(&handoff, &from_pane).is_err()
+}
+
+#[tokio::test]
+async fn a_saved_handoff_latch_is_restored_before_the_api_is_served() {
+    let mut json = serde_json::to_value(agent_pane_snapshot()).unwrap();
+    json["access_seen"] = serde_json::json!(true);
+    let app = app_restored_from("latch-restored", &json);
+    // Nothing is protected after the restore; the saved latch alone keeps the gate shut.
+    assert!(!app.any_access_protected());
+    assert!(handoff_from_a_pane_is_refused(&app));
+}
+
+#[tokio::test]
+async fn a_saved_state_without_the_latch_restores_open() {
+    let json = serde_json::to_value(agent_pane_snapshot()).unwrap();
+    assert!(json.get("access_seen").is_none());
+    let app = app_restored_from("latch-absent", &json);
+    assert!(!app.any_access_protected());
+    assert!(!handoff_from_a_pane_is_refused(&app));
+}
+
+#[tokio::test]
+async fn a_restored_protected_state_sets_the_latch() {
+    let mut json = serde_json::to_value(agent_pane_snapshot()).unwrap();
+    let pane = json["workspaces"][0]["tabs"][0]["panes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    pane["input_mode"] = serde_json::json!("human-only");
+    let mut app = app_restored_from("latch-from-protected", &json);
+    assert!(app.any_access_protected());
+    // The protection ends before any request is checked.
+    for terminal in app.state.terminals.values_mut() {
+        terminal.input_mode = crate::access::policy::InputMode::Any;
+    }
+    assert!(!app.any_access_protected());
+    assert!(handoff_from_a_pane_is_refused(&app));
+}
+
+#[tokio::test]
+async fn the_handoff_latch_is_saved_with_the_session() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("latch-saved");
+    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    let saved = |app: &mut App| {
+        app.policy.persist_session = true;
+        app.start_background_session_save();
+        if let Some(thread) = app.session_save_thread.take() {
+            thread.join().unwrap();
+        }
+        let snapshot = crate::persist::load().expect("the session is saved");
+        serde_json::to_value(&snapshot).unwrap()
+    };
+
+    let mut latched = test_app(&Config::default());
+    let (state, _pane, terminal_id) = state_with_pane();
+    latched.state.workspaces = state.workspaces;
+    latched.state.terminals = state.terminals;
+    latched.state.active = Some(0);
+    latched
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .input_mode = crate::access::policy::InputMode::HumanOnly;
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    let outside =
+        crate::access::caller::Caller::Classified(crate::access::policy::CallerClass::Outside {
+            via_ssh: false,
+        });
+    assert!(latched.check_access(&handoff, &outside).is_ok());
+    latched
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .input_mode = crate::access::policy::InputMode::Any;
+    assert_eq!(saved(&mut latched)["access_seen"], true);
+
+    let _ = std::fs::remove_dir_all(dir.join("config"));
+    let _ = std::fs::remove_dir_all(dir.join("state"));
+    let mut never = test_app(&Config::default());
+    let (state, _pane, _terminal) = state_with_pane();
+    never.state.workspaces = state.workspaces;
+    never.state.terminals = state.terminals;
+    never.state.active = Some(0);
+    assert_ne!(saved(&mut never)["access_seen"], true);
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn pane_handoff_refused(app: &App, terminal: &TerminalId) -> bool {
+    let from_pane = crate::access::caller::Caller::Classified(
+        crate::access::policy::CallerClass::Pane(terminal.clone()),
+    );
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    app.check_access(&handoff, &from_pane).is_err()
+}
+
+#[tokio::test]
+async fn a_policy_bound_by_detection_then_removed_still_latches_the_handoff() {
+    // The app starts with no access config, so only the detection can arm the latch.
+    let mut app = test_app(&Config::default());
+    app.state.access_defaults = default_none_config().access.resolve().defaults;
+    let (state, pane, terminal_id) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    assert!(!app.any_access_protected());
+    assert!(!pane_handoff_refused(&app, &terminal_id));
+
+    agent_seen(&mut app.state, pane);
+    assert!(app.state.terminals[&terminal_id].access.is_some());
+    // The protection ends with no request checked in between.
+    app.state.terminals.get_mut(&terminal_id).unwrap().access = None;
+    assert!(!app.any_access_protected());
+    assert!(pane_handoff_refused(&app, &terminal_id));
+}
+
+#[tokio::test]
+async fn a_mode_bound_at_agent_start_latches_the_handoff() {
+    let mut app = test_app(&Config::default());
+    app.state.access_defaults = config_from("[access.worker]\ninput_mode = \"human-only\"\n")
+        .access
+        .resolve()
+        .defaults;
+    let (state, _pane, terminal_id) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    app.state
+        .bind_access_for_start(&terminal_id, "worker", None)
+        .unwrap();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .input_mode = crate::access::policy::InputMode::Any;
+    assert!(!app.any_access_protected());
+    assert!(pane_handoff_refused(&app, &terminal_id));
+}
+
+#[tokio::test]
+async fn a_config_that_asks_for_access_latches_the_handoff_before_any_pane_carries_it() {
+    for toml in [
+        "[access.default]\naccept_from = [\"none\"]\n",
+        "[access.worker]\naccept_from = [\"outside\"]\n",
+        "[access.default]\ninput_mode = \"human-only\"\n",
+        "[access]\nremote_input = \"bridge-only\"\nbridge_agent = \"relay\"\n",
+    ] {
+        let mut app = test_app(&config_from(toml));
+        let (state, _pane, terminal_id) = state_with_pane();
+        app.state.workspaces = state.workspaces;
+        app.state.terminals = state.terminals;
+        app.state.active = Some(0);
+        // No pane carries anything and the node is not bridge-only any more.
+        app.state.remote_settings.input = RemoteInput::Any;
+        assert!(!app.any_access_protected(), "{toml}");
+        assert!(pane_handoff_refused(&app, &terminal_id), "{toml}");
+    }
+    // A config with no protection leaves the handoff open.
+    let mut plain = test_app(&config_from("[access]\nnode_name = \"n\"\n"));
+    let (state, _pane, terminal_id) = state_with_pane();
+    plain.state.workspaces = state.workspaces;
+    plain.state.terminals = state.terminals;
+    assert!(!pane_handoff_refused(&plain, &terminal_id));
+}
+
+fn restore_in_place() -> App {
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let policy = crate::app::AppPolicy {
+        restore_session: true,
+        ..crate::app::AppPolicy::TEST
+    };
+    App::try_new(
+        &Config::default(),
+        policy,
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_latch_survives_closing_the_last_workspace_and_a_restart() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("latch-empty-save");
+    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    let mut app = test_app(&Config::default());
+    let (state, _pane, terminal_id) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .input_mode = crate::access::policy::InputMode::HumanOnly;
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    let outside =
+        crate::access::caller::Caller::Classified(crate::access::policy::CallerClass::Outside {
+            via_ssh: false,
+        });
+    assert!(app.check_access(&handoff, &outside).is_ok());
+    // Every workspace is closed, so there is nothing left to save but the latch.
+    app.state.workspaces.clear();
+    app.state.terminals.clear();
+    app.state.active = None;
+    app.policy.persist_session = true;
+    app.start_background_session_save();
+    if let Some(thread) = app.session_save_thread.take() {
+        thread.join().unwrap();
+    }
+
+    let restored = restore_in_place();
+    assert!(restored.state.workspaces.is_empty());
+    assert!(restored.state.active.is_none());
+    assert!(pane_handoff_refused(&restored, &terminal_id));
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn closing_the_last_workspace_of_a_never_protected_node_still_clears_the_session() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("latch-empty-clear");
+    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    let mut app = test_app(&Config::default());
+    let (state, _pane, _terminal) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    app.policy.persist_session = true;
+    app.start_background_session_save();
+    if let Some(thread) = app.session_save_thread.take() {
+        thread.join().unwrap();
+    }
+    assert!(crate::persist::load().is_some());
+    app.state.workspaces.clear();
+    app.state.terminals.clear();
+    app.start_background_session_save();
+    if let Some(thread) = app.session_save_thread.take() {
+        thread.join().unwrap();
+    }
+    assert!(crate::persist::load().is_none());
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_latch_going_from_false_to_true_schedules_a_save() {
+    let mut app = test_app(&Config::default());
+    app.policy.persist_session = true;
+    let (state, _pane, terminal_id) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    app.sync_session_save_schedule();
+    assert!(app.session_save_deadline.is_none());
+
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .input_mode = crate::access::policy::InputMode::HumanOnly;
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    let outside =
+        crate::access::caller::Caller::Classified(crate::access::policy::CallerClass::Outside {
+            via_ssh: false,
+        });
+    assert!(app.check_access(&handoff, &outside).is_ok());
+    app.sync_session_save_schedule();
+    assert!(app.session_save_deadline.is_some());
+    // The latch is already set: a second sighting schedules nothing new.
+    app.session_save_deadline = None;
+    assert!(app.check_access(&handoff, &outside).is_ok());
+    app.sync_session_save_schedule();
+    assert!(app.session_save_deadline.is_none());
+}
+
+#[tokio::test]
+async fn an_unreadable_saved_session_starts_with_the_latch_set() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("latch-corrupt");
+    std::fs::create_dir_all(crate::config::config_dir()).unwrap();
+    let session = crate::config::config_dir().join("session.json");
+    let terminal_id = state_with_pane().2;
+    for content in [
+        "{ this is not json",
+        "",
+        "{\"version\": 999, \"workspaces\": 7}",
+    ] {
+        std::fs::write(&session, content).unwrap();
+        let app = restore_in_place();
+        assert!(!app.any_access_protected());
+        assert!(pane_handoff_refused(&app, &terminal_id), "{content:?}");
+    }
+    // A missing file starts unlatched.
+    std::fs::remove_file(&session).unwrap();
+    let app = restore_in_place();
+    assert!(!pane_handoff_refused(&app, &terminal_id));
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn handoff_restore_binds_the_default_to_restored_agent_panes() {
@@ -784,6 +1135,67 @@ async fn handoff_restore_binds_the_default_to_restored_agent_panes() {
         terminal.access.as_ref().map(|p| p.accept_from.clone()),
         Some(vec![Principal::None])
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handoff_import_applies_the_saved_latch() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("handoff-latch-import");
+    let mut snapshot = agent_pane_snapshot();
+    snapshot.access_seen = true;
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new_from_handoff(
+        &Config::default(),
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+        &snapshot,
+        &mut HashMap::new(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert!(!app.any_access_protected());
+    assert!(handoff_from_a_pane_is_refused(&app));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handoff_import_without_the_latch_stays_open() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("handoff-latch-import-open");
+    let snapshot = agent_pane_snapshot();
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new_from_handoff(
+        &Config::default(),
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+        &snapshot,
+        &mut HashMap::new(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert!(!handoff_from_a_pane_is_refused(&app));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_handoff_export_carries_the_latch() {
+    let mut app = test_app(&Config::default());
+    let (state, _pane, _terminal) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    assert!(!app.handoff_snapshot().access_seen);
+    app.state.latch_access_seen();
+    assert!(app.handoff_snapshot().access_seen);
 }
 
 #[test]

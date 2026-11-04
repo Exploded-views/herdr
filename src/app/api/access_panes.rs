@@ -119,6 +119,8 @@ impl App {
                 "set needs accept_from, input_mode or both",
             );
         }
+        // An admin touching access at all arms the handoff latch, even to open a pane.
+        self.state.latch_access_seen();
         match accept {
             None => {}
             Some(AcceptFrom::Any) => self.state.unbind_access(&terminal),

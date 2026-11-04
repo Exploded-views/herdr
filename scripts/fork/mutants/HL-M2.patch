@@ -1,0 +1,28 @@
+# herdr-fork: mutant HL-M2: the handoff latch is neither saved nor restored. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 89df9378..b131d110 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -659,8 +659,7 @@ impl App {
+         state.bind_default_access_all();
+         // Restored before the API is served: the saved latch, any restored protection, or a
+         // config that asks for protection.
+-        if saved_access_seen
+-            || session_unreadable
++        if session_unreadable
+             || state.config_asks_for_access()
+             || state_has_access(&state)
+         {
+diff --git a/src/app/session.rs b/src/app/session.rs
+index 7652d5ae..578302b5 100644
+--- a/src/app/session.rs
++++ b/src/app/session.rs
+@@ -58,7 +58,7 @@ impl App {
+                 self.state.active,
+                 self.state.selected,
+             );
+-            snapshot.access_seen = self.state.access_seen();
++            snapshot.access_seen = false;
+             let history = self.persist_pane_history.then(|| {
+                 crate::persist::capture_history(
+                     &snapshot,

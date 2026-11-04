@@ -1,10 +1,10 @@
 # herdr-fork: mutant T9b-M10: access.pane.set any does not unbind. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/api/access_panes.rs b/src/app/api/access_panes.rs
-index b62d88da..e33f8371 100644
+index 85a1d8b6..b103f24e 100644
 --- a/src/app/api/access_panes.rs
 +++ b/src/app/api/access_panes.rs
-@@ -115,7 +115,7 @@ impl App {
-         }
+@@ -123,7 +123,7 @@ impl App {
+         self.state.latch_access_seen();
          match accept {
              None => {}
 -            Some(AcceptFrom::Any) => self.state.unbind_access(&terminal),

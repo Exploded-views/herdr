@@ -1,3 +1,4 @@
+// herdr-fork: the session snapshot carries the handoff latch (`access_seen`). Unofficial stopgap; see FORK.md.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -91,7 +92,14 @@ pub fn clear_history() {
     }
 }
 
+#[cfg(test)]
 pub fn load() -> Option<SessionSnapshot> {
+    load_checked().0
+}
+
+/// `load`, plus whether a session file exists that could not be read or understood. A caller
+/// that guards something with state kept in the file treats that as "unknown": fail closed.
+pub fn load_checked() -> (Option<SessionSnapshot>, bool) {
     let path = session_path();
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
@@ -100,18 +108,18 @@ pub fn load() -> Option<SessionSnapshot> {
                 event = "persist.restore", subsystem = "persist", outcome = "missing",
                 path = %path.display(), "session file is missing"
             );
-            return None;
+            return (None, false);
         }
         Err(err) => {
             warn!(
                 event = "persist.restore", subsystem = "persist", outcome = "read_error",
                 path = %path.display(), err = %err, "failed to read session file"
             );
-            return None;
+            return (None, true);
         }
     };
     match parse_snapshot(&content) {
-        Ok(snapshot) => Some(snapshot),
+        Ok(snapshot) => (Some(snapshot), false),
         Err(err) => {
             if let Some(version) = snapshot_file_version(&content) {
                 if version > SNAPSHOT_VERSION {
@@ -120,14 +128,14 @@ pub fn load() -> Option<SessionSnapshot> {
                         path = %path.display(), file_version = version, supported = SNAPSHOT_VERSION,
                         "session file is from a newer herdr version, ignoring"
                     );
-                    return None;
+                    return (None, true);
                 }
             }
             warn!(
                 event = "persist.restore", subsystem = "persist", outcome = "parse_error",
                 path = %path.display(), err = %err, "failed to parse session file, ignoring"
             );
-            None
+            (None, true)
         }
     }
 }
@@ -198,6 +206,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            access_seen: false,
         }
     }
 
