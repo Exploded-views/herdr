@@ -1,14 +1,14 @@
-# herdr-fork: mutant LG-M2: the launchctl tripwire only prints instead of panicking. Unofficial stopgap; see FORK.md.
+# herdr-fork: mutant LG-M2: the launchctl tripwire returns instead of panicking, so no launchctl runs. Unofficial stopgap; see FORK.md.
 diff --git a/src/platform/macos/launchd_spawn.rs b/src/platform/macos/launchd_spawn.rs
-index 7e6f3a87..cd2251f0 100644
+index 80ccfc14..24e8511b 100644
 --- a/src/platform/macos/launchd_spawn.rs
 +++ b/src/platform/macos/launchd_spawn.rs
-@@ -175,7 +175,7 @@ fn launchctl(args: &[&str]) -> io::Result<String> {
-         if let Some(result) = test_hooks::run_fake(args) {
-             return result;
+@@ -193,7 +193,7 @@ fn launchctl(args: &[&str]) -> io::Result<String> {
+         #[cfg(not(test))]
+         let opted_in = false;
+         if !opted_in {
+-            panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
++            return Ok(String::new());
          }
--        panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
-+        eprintln!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
      }
      let output = Command::new(LAUNCHCTL)
-         .args(args)
