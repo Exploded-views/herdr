@@ -888,6 +888,12 @@ pub struct AppState {
     pub session_dirty: bool,
     /// `[access]` sections, read once at startup; reload leaves them alone.
     pub(crate) access_defaults: crate::access::policy::AccessDefaults,
+    /// One-way: set once access protection has been applied, seen or configured. While set,
+    /// `server.live_handoff` stays outside-only even when nothing is protected any more.
+    /// Saved with the session; nothing clears it at runtime.
+    pub(crate) access_seen: std::sync::atomic::AtomicBool,
+    /// The latch went from false to true and no save has been scheduled for it yet.
+    pub(crate) access_seen_unsaved: std::sync::atomic::AtomicBool,
     /// `[access]` node keys, read once at startup. `bridge_binding` is filled later.
     pub(crate) remote_settings: crate::access::policy::RemoteSettings,
     /// Named callers (`access.caller.*`), loaded once at startup. Only hashes of tokens.
@@ -908,6 +914,40 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Arm the handoff latch. One-way.
+    pub(crate) fn latch_access_seen(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if !self.access_seen.swap(true, Relaxed) {
+            self.access_seen_unsaved.store(true, Relaxed);
+        }
+    }
+
+    /// Arm the latch when `terminal` holds a policy or a non-`any` mode. Called before the
+    /// terminal is dropped, so closing a protected terminal is itself a sighting.
+    pub(crate) fn latch_if_protected(&self, terminal: &crate::terminal::TerminalId) {
+        if self
+            .terminals
+            .get(terminal)
+            .is_some_and(|state| state.access.is_some() || !state.input_mode.is_any())
+        {
+            self.latch_access_seen();
+        }
+    }
+
+    pub(crate) fn access_seen(&self) -> bool {
+        self.access_seen.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Does the startup config alone ask for protection (bridge-only, a policy, a mode)?
+    pub(crate) fn config_asks_for_access(&self) -> bool {
+        let defaults = &self.access_defaults;
+        self.remote_settings.input == crate::access::policy::RemoteInput::BridgeOnly
+            || defaults.default.is_some()
+            || !defaults.by_name.is_empty()
+            || !defaults.default_mode.is_any()
+            || defaults.mode_by_name.values().any(|mode| !mode.is_any())
+    }
+
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
     }
@@ -1137,6 +1177,8 @@ impl AppState {
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
             access_defaults: Default::default(),
+            access_seen: Default::default(),
+            access_seen_unsaved: Default::default(),
             remote_settings: Default::default(),
             access_callers: Default::default(),
             access_callers_path: None,

@@ -1,3 +1,4 @@
+// herdr-fork: the session snapshot carries the handoff latch (`access_seen`). Unofficial stopgap; see FORK.md.
 use std::time::{Duration, Instant};
 
 use super::{App, SESSION_SAVE_DEBOUNCE};
@@ -19,6 +20,14 @@ impl App {
     }
 
     pub(crate) fn sync_session_save_schedule(&mut self) {
+        // The handoff latch went from false to true: it has to reach the saved session.
+        if self
+            .state
+            .access_seen_unsaved
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.state.session_dirty = true;
+        }
         if self.state.session_dirty {
             self.state.session_dirty = false;
             self.schedule_session_save();
@@ -37,17 +46,33 @@ impl App {
         }
     }
 
+    /// The session snapshot a live handoff hands to the replacement server, latch included.
+    #[cfg(unix)]
+    pub(crate) fn handoff_snapshot(&self) -> crate::persist::SessionSnapshot {
+        let mut snapshot = crate::persist::capture(
+            &self.state.workspaces,
+            &self.state.terminals,
+            &self.terminal_runtimes,
+            self.state.active,
+            self.state.selected,
+        );
+        snapshot.access_seen = self.state.access_seen();
+        snapshot
+    }
+
     fn capture_session_save_job(&self) -> SessionSaveJob {
-        if self.state.workspaces.is_empty() {
+        if self.state.workspaces.is_empty() && !self.state.access_seen() {
             SessionSaveJob::Clear
         } else {
-            let snapshot = crate::persist::capture(
+            // With no workspace left and the latch set, an empty snapshot still carries it.
+            let mut snapshot = crate::persist::capture(
                 &self.state.workspaces,
                 &self.state.terminals,
                 &self.terminal_runtimes,
                 self.state.active,
                 self.state.selected,
             );
+            snapshot.access_seen = self.state.access_seen();
             let history = self.persist_pane_history.then(|| {
                 crate::persist::capture_history(
                     &snapshot,

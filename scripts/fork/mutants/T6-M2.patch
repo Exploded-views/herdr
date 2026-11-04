@@ -1,11 +1,11 @@
 # herdr-fork: mutant T6-M2: bind_access does not mark the session dirty. Unofficial stopgap; see FORK.md.
 diff --git a/src/app/access.rs b/src/app/access.rs
-index d82880a1..9c0d18fd 100644
+index 9e8a97e1..24f37804 100644
 --- a/src/app/access.rs
 +++ b/src/app/access.rs
-@@ -35,7 +35,6 @@ impl AppState {
-             });
+@@ -36,7 +36,6 @@ impl AppState {
              state.access_opened_explicitly = false;
+             self.latch_access_seen();
          }
 -        self.mark_session_dirty();
          Ok(binding)

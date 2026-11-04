@@ -1,0 +1,13 @@
+# herdr-fork: mutant HL-M6: an unreadable session file starts with the latch clear. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 89df9378..77e630c7 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -660,7 +660,6 @@ impl App {
+         // Restored before the API is served: the saved latch, any restored protection, or a
+         // config that asks for protection.
+         if saved_access_seen
+-            || session_unreadable
+             || state.config_asks_for_access()
+             || state_has_access(&state)
+         {
