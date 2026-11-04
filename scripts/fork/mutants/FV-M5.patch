@@ -1,93 +1,14 @@
 # herdr-fork: mutant FV-M5: a starting server hashes its binary again. Unofficial stopgap; see FORK.md.
 diff --git a/src/build_info.rs b/src/build_info.rs
-index 8d506f47..c92d3e0d 100644
+index c86a9939..c92d3e0d 100644
 --- a/src/build_info.rs
 +++ b/src/build_info.rs
-@@ -1,4 +1,4 @@
--// herdr-fork: adds `fork_tag`, `version_line` (switch `VERSION_LINE_NAMES_FORK`), the git commit, the binary path and hash, and `server_identity`, which the server reports. Unofficial stopgap; see FORK.md.
-+// herdr-fork: adds `fork_tag`, `version_line` (switch `VERSION_LINE_NAMES_FORK`), the git commit, the binary path and its lazy hash, and `server_identity`, which the server reports. Unofficial stopgap; see FORK.md.
- //! Build identity helpers.
- 
- pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
-@@ -124,19 +124,34 @@ static BINARY_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
- static BINARY_SHA256: std::sync::OnceLock<String> = std::sync::OnceLock::new();
- static BINARY_HASH_STARTED: std::sync::Once = std::sync::Once::new();
- 
--/// Resolves this executable's path once, then hashes that same file on a background thread, so
--/// no request waits on it. Later calls do nothing. If the file cannot be read the hash stays
--/// unset and status reports null.
--pub fn start_binary_hash() {
-+/// Fixes this executable's resolved path. A server calls it at start: one `current_exe` and
-+/// `canonicalize`, no file reads. Hashing waits for the first identity request.
-+pub fn on_server_start() {
+@@ -127,7 +127,7 @@ static BINARY_HASH_STARTED: std::sync::Once = std::sync::Once::new();
+ /// Fixes this executable's resolved path. A server calls it at start: one `current_exe` and
+ /// `canonicalize`, no file reads. Hashing waits for the first identity request.
+ pub fn on_server_start() {
+-    let _ = remember_binary_path();
 +    start_binary_hash();
-+}
-+
-+fn remember_binary_path() -> Option<std::path::PathBuf> {
-+    match resolve_binary_path() {
-+        Ok(path) => {
-+            let _ = BINARY_PATH.set(path.display().to_string());
-+            // The first resolved path wins, so the hash reads the file `binary` names.
-+            BINARY_PATH.get().map(std::path::PathBuf::from)
-+        }
-+        Err(error) => {
-+            tracing::warn!(%error, "could not resolve the server binary path");
-+            None
-+        }
-+    }
-+}
-+
-+/// Starts hashing this executable on a background thread, at most once per process, so neither
-+/// the accept thread nor the app loop waits on it. The first caller starts it; later calls do
-+/// nothing. If the file cannot be read the hash stays unset and status reports null.
-+fn start_binary_hash() {
-     BINARY_HASH_STARTED.call_once(|| {
--        let path = match resolve_binary_path() {
--            Ok(path) => path,
--            Err(error) => {
--                tracing::warn!(%error, "could not resolve the server binary path");
--                return;
--            }
-+        let Some(path) = remember_binary_path() else {
-+            return;
-         };
--        let _ = BINARY_PATH.set(path.display().to_string());
-         HASH_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-         let spawned =
-             crate::thread_spawn::spawn_named("herdr-binary-hash", move || match hash_file(&path) {
-@@ -151,11 +166,6 @@ pub fn start_binary_hash() {
-     });
  }
  
--/// What a starting server does about its identity.
--pub fn on_server_start() {
--    start_binary_hash();
--}
--
- static HASH_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
- 
- /// How many times this process has started hashing its executable (a test hook).
-@@ -164,8 +174,13 @@ pub fn hash_runs() -> usize {
-     HASH_RUNS.load(std::sync::atomic::Ordering::SeqCst)
- }
- 
--/// The hash of this executable, or `None` until `start_binary_hash` has finished.
-+/// The hash of this executable, cached for the life of the process. The first call starts the
-+/// hash in the background and returns `None`; calls return `None` until it has finished.
- pub fn binary_sha256() -> Option<String> {
-+    if let Some(hash) = BINARY_SHA256.get() {
-+        return Some(hash.clone());
-+    }
-+    start_binary_hash();
-     BINARY_SHA256.get().cloned()
- }
- 
-@@ -274,7 +289,7 @@ mod tests {
-         super::on_server_start();
-         std::thread::sleep(std::time::Duration::from_millis(200));
-         assert_eq!(super::hash_runs(), 0);
--        assert_eq!(super::binary_sha256(), None);
-+        assert_eq!(super::BINARY_SHA256.get(), None);
-     }
- 
-     #[test]
+ fn remember_binary_path() -> Option<std::path::PathBuf> {
