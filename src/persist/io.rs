@@ -92,6 +92,7 @@ pub fn clear_history() {
     }
 }
 
+#[cfg(test)]
 pub fn load() -> Option<SessionSnapshot> {
     load_checked().0
 }

@@ -11,7 +11,9 @@ mod restore;
 mod snapshot;
 mod writer;
 
-pub use self::io::{clear_history, load, load_checked, load_history};
+#[cfg(test)]
+pub use self::io::load;
+pub use self::io::{clear_history, load_checked, load_history};
 pub use self::restore::restore;
 pub(crate) use self::restore::restored_worktree_space_membership;
 #[cfg(unix)]
