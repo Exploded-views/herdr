@@ -849,7 +849,7 @@ mod tests {
     #[test]
     fn non_input_methods_stay_open() {
         let app = app_with_panes(1);
-        let method = Method::Ping(PingParams {});
+        let method = Method::Ping(PingParams::default());
         assert!(matches!(app.gate_target(&method), GateTarget::Open));
     }
 

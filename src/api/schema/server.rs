@@ -1,8 +1,13 @@
-// herdr-fork: adds `ServerIdentity`, the build a server reports in its `ping` result. Unofficial stopgap; see FORK.md.
+// herdr-fork: adds `ServerIdentity`, the build a server reports in its `ping` result, and `PingParams::identity`, the opt-in that asks for it. Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PingParams {}
+pub struct PingParams {
+    /// Ask for the server's build identity, including its binary hash. The first such ping
+    /// starts the hash; any other ping reports only what is already known.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identity: bool,
+}
 
 crate::cli::projection::cli_params! {
     #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

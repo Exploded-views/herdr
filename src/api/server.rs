@@ -1663,6 +1663,34 @@ mod tests {
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
     }
 
+    fn ping(identity: bool) -> String {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        handle_request(
+            Request {
+                id: "req_id".into(),
+                method: Method::Ping(crate::api::schema::PingParams { identity }),
+            },
+            &Caller::test_outside(),
+            &tx,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_default_ping_does_not_start_the_hash_and_an_identity_ping_does() {
+        for _ in 0..3 {
+            let value: serde_json::Value = serde_json::from_str(&ping(false)).unwrap();
+            assert!(value["result"].get("binary_sha256").is_none());
+        }
+        assert_eq!(crate::build_info::hash_runs(), 0);
+        ping(true);
+        ping(true);
+        assert_eq!(crate::build_info::hash_runs(), 1);
+    }
+
     #[test]
     fn ping_response_reports_the_server_identity() {
         let (tx, _rx) = mpsc::unbounded_channel();
