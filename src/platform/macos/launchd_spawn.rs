@@ -19,29 +19,22 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LAUNCHCTL: &str = "/bin/launchctl";
-const LABEL_PREFIX: &str = "dev.herdr.server.";
+use crate::platform::launchd_guard as guard;
+
+const LABEL_PREFIX: &str = guard::SERVER_LABEL_PREFIX;
 /// Labels for anything launchd-related that runs under test; never overlaps `LABEL_PREFIX`.
 const TEST_LABEL_PREFIX: &str = "dev.herdr.test.";
-/// Any non-empty value turns the launchd start off. Read at run time only.
-const NO_LAUNCHD_ENV: &str = "HERDR_NO_LAUNCHD";
 /// Tells the job process to fork the server and exit; never inherited by panes.
 const DETACH_ENV: &str = "HERDR_LAUNCHD_DETACH";
 /// Finished jobs stay loaded until logout; older ones are removed on the next launch.
 const STALE_JOB_AGE: Duration = Duration::from_secs(60);
-
-/// Whether a launchd job may be created, given the switch's value and whether
-/// this is a test build. Pure, so the production answer can be tested from a
-/// test build.
-fn launchd_allowed(switch: Option<&OsStr>, under_test: bool) -> bool {
-    !under_test && switch.is_none_or(|value| value.is_empty())
-}
 
 fn switch_is_set() -> bool {
     #[cfg(test)]
     if let Some(set) = test_hooks::switch() {
         return set;
     }
-    !launchd_allowed(std::env::var_os(NO_LAUNCHD_ENV).as_deref(), false)
+    guard::switch_set(std::env::var_os(guard::NO_LAUNCHD_ENV).as_deref())
 }
 
 /// CI-only opt-in for the tests that really use launchd: both variables must
@@ -187,28 +180,21 @@ fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
 }
 
 fn launchctl(args: &[&str]) -> io::Result<String> {
-    if cfg!(test) || switch_is_set() {
-        // Tripwire: nothing under test, or under the switch, may reach the real launchd.
-        assert!(
-            args.iter().all(|arg| !arg.contains(LABEL_PREFIX)),
-            "launchctl is forbidden from naming a server job here: {args:?}"
-        );
-        #[cfg(test)]
-        if let Some(result) = test_hooks::run_fake(args) {
-            return result;
+    let guarded = cfg!(test) || switch_is_set();
+    #[cfg(test)]
+    let permitted = test_hooks::fake_installed() || real_launchd_opted_in();
+    #[cfg(not(test))]
+    let permitted = false;
+    if let Err(message) = guard::check_call(args, guarded, permitted) {
+        // Tripwire: nothing under test, or under the switch, reaches the real launchd.
+        if cfg!(test) {
+            panic!("{message}");
         }
-        #[cfg(test)]
-        let opted_in = real_launchd_opted_in();
-        #[cfg(not(test))]
-        let opted_in = false;
-        if !opted_in {
-            let message =
-                format!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
-            if cfg!(test) {
-                panic!("{message}");
-            }
-            return Err(io::Error::other(message));
-        }
+        return Err(io::Error::other(message));
+    }
+    #[cfg(test)]
+    if let Some(result) = test_hooks::run_fake(args) {
+        return result;
     }
     let output = Command::new(LAUNCHCTL)
         .args(args)
@@ -514,17 +500,6 @@ mod tests {
 
     const FINISHED_SERVER_LIST: &str =
         "-\t0\tdev.herdr.server.100.1000\n-\t0\tdev.herdr.test.100.1000\n";
-
-    #[test]
-    fn production_decision_allows_launchd_unless_switched_off() {
-        let empty = OsStr::new("");
-        // Not under test: allowed with no switch, or an empty one.
-        assert!(launchd_allowed(None, false));
-        assert!(launchd_allowed(Some(empty), false));
-        // Any non-empty value, and any test build, turns it off.
-        assert!(!launchd_allowed(Some(OsStr::new("1")), false));
-        assert!(!launchd_allowed(None, true));
-    }
 
     #[test]
     fn test_and_production_labels_never_overlap() {
