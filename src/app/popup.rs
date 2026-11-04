@@ -1,3 +1,4 @@
+// herdr-fork: closing a popup pane arms the handoff latch when its terminal was protected. Unofficial stopgap; see FORK.md.
 use std::path::PathBuf;
 
 use crate::app::{App, Mode};
@@ -20,6 +21,7 @@ impl App {
         self.state
             .direct_attach_resize_locks
             .remove(&popup.terminal_id);
+        self.state.latch_if_protected(&popup.terminal_id);
         self.state.terminals.remove(&popup.terminal_id);
         self.shutdown_terminal_runtime(popup.terminal_id);
         self.state.mode = if self.state.active.is_some() {

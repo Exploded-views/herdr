@@ -639,11 +639,7 @@ impl AppState {
                 })
             });
             if !still_attached {
-                if let Some(terminal) = self.terminals.get(&terminal_id) {
-                    if terminal.access.is_some() || !terminal.input_mode.is_any() {
-                        self.latch_access_seen();
-                    }
-                }
+                self.latch_if_protected(&terminal_id);
             }
             if !still_attached
                 && self.terminals.remove(&terminal_id).is_some()

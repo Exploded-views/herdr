@@ -918,6 +918,18 @@ impl AppState {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Arm the latch when `terminal` holds a policy or a non-`any` mode. Called before the
+    /// terminal is dropped, so closing a protected terminal is itself a sighting.
+    pub(crate) fn latch_if_protected(&self, terminal: &crate::terminal::TerminalId) {
+        if self
+            .terminals
+            .get(terminal)
+            .is_some_and(|state| state.access.is_some() || !state.input_mode.is_any())
+        {
+            self.latch_access_seen();
+        }
+    }
+
     pub(crate) fn access_seen(&self) -> bool {
         self.access_seen.load(std::sync::atomic::Ordering::Relaxed)
     }
