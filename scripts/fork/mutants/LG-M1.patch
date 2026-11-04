@@ -1,17 +1,14 @@
-# herdr-fork: mutant LG-M1: spawn_launchd_job ignores HERDR_NO_LAUNCHD. Unofficial stopgap; see FORK.md.
-diff --git a/src/platform/macos/launchd_spawn.rs b/src/platform/macos/launchd_spawn.rs
-index bcaa20d0..bd23c74b 100644
---- a/src/platform/macos/launchd_spawn.rs
-+++ b/src/platform/macos/launchd_spawn.rs
-@@ -79,11 +79,6 @@ fn label_prefix() -> &'static str {
- /// the caller can spawn directly, when there is no GUI domain or the command
- /// cannot be represented exactly in a launchd job. Returns the job label.
- pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
--    if switch_is_set() {
--        return Err(io::Error::other(
--            "launchd is turned off by HERDR_NO_LAUNCHD",
--        ));
--    }
-     #[cfg(test)]
-     if !test_hooks::fake_installed() && !real_launchd_opted_in() {
-         return Err(io::Error::other("launchd is never used by unit tests"));
+# herdr-fork: mutant LG-M1: the HERDR_NO_LAUNCHD switch is ignored. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/launchd_guard.rs b/src/platform/launchd_guard.rs
+index 441a8dae..d5147665 100644
+--- a/src/platform/launchd_guard.rs
++++ b/src/platform/launchd_guard.rs
+@@ -18,7 +18,7 @@ pub(crate) fn launchd_allowed(switch: Option<&OsStr>, under_test: bool) -> bool
+ 
+ /// Whether the switch value turns launchd off.
+ pub(crate) fn switch_set(switch: Option<&OsStr>) -> bool {
+-    !launchd_allowed(switch, false)
++    false
+ }
+ 
+ /// The tripwire. `guarded` is true under test or with the switch set; `permitted` is true when a
