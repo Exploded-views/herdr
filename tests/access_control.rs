@@ -1,4 +1,4 @@
-// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server), including that human-only survives a restart, and that the human-only test waits for the agent. Unofficial stopgap; see FORK.md.
+// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server), including that human-only survives a restart, and that the human-only test waits for the agent; live handoff is admin only while access is protected and access state survives a handoff. Unofficial stopgap; see FORK.md.
 //
 // How the tests are built:
 // - Each test owns a base directory under /tmp. The server, every CLI process and every pane
@@ -1329,6 +1329,152 @@ fn human_only_survives_a_server_restart() {
         "{}",
         refused.describe()
     );
+}
+
+#[test]
+fn live_handoff_cli_is_refused_from_a_pane_when_access_is_protected() {
+    let (node, a, b) = setup("");
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+    let before = node.try_api("ping", json!({})).expect("a ping");
+    let refused = node.herdr_in_pane(
+        &a,
+        &[
+            "server",
+            "live-handoff",
+            "--import-exe",
+            "/nonexistent/herdr-handoff-target",
+        ],
+    );
+    refused.assert_denied("server live-handoff");
+    // Nothing changed: the same server still answers, and the policy is still there.
+    let after = node.try_api("ping", json!({})).expect("a ping");
+    assert_eq!(before["result"], after["result"]);
+    let got = node.cli(&["access", "pane", "get", &b]);
+    let fields: Vec<&str> = got.stdout.trim_end().split('\t').collect();
+    assert_eq!(&fields[3..], ["human-only", "explicit"], "{}", got.stdout);
+}
+
+#[test]
+fn live_handoff_is_refused_from_a_pane_right_after_a_restart() {
+    let (mut node, a, b) = setup("");
+    node.api_ok("pane.rename", json!({"pane_id": a, "label": "caller-a"}));
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+    let session = node.config_home.join(app_dir_name()).join("session.json");
+    poll("the session file to hold the pane's input mode", || {
+        fs::read_to_string(&session)
+            .ok()
+            .filter(|saved| saved.contains("human-only") && saved.contains("caller-a"))
+            .map(|_| ())
+    });
+
+    node.restart_server();
+
+    let restored = poll("the restored caller pane", || {
+        let listed = node.try_api("pane.list", json!({})).ok()?;
+        listed["result"]["panes"]
+            .as_array()?
+            .iter()
+            .find(|pane| pane["label"] == "caller-a")
+            .and_then(|pane| pane["pane_id"].as_str().map(str::to_string))
+    });
+    let refused = node.herdr_in_pane(
+        &restored,
+        &[
+            "server",
+            "live-handoff",
+            "--import-exe",
+            "/nonexistent/herdr-handoff-target",
+        ],
+    );
+    refused.assert_denied("server live-handoff right after a restart");
+    node.try_api("ping", json!({}))
+        .expect("the same server still answers");
+}
+
+/// A real handoff to the test's own binary, asked from outside every pane. The new server
+/// is not this test's child, so the test stops it through the API.
+#[cfg(unix)]
+#[test]
+fn access_state_survives_a_live_handoff() {
+    let (node, a, b) = setup("");
+    // The replacement server is not this test's child: stop it on every exit path.
+    struct StopReplacement<'a>(&'a Node);
+    impl Drop for StopReplacement<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.try_api("server.stop", json!({}));
+        }
+    }
+    let _stop = StopReplacement(&node);
+    node.api_ok("pane.rename", json!({"pane_id": a, "label": "caller-a"}));
+    node.api_ok("pane.rename", json!({"pane_id": b, "label": "protected-b"}));
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+    let session = node.config_home.join(app_dir_name()).join("session.json");
+    poll("the session file to hold the pane's input mode", || {
+        fs::read_to_string(&session)
+            .ok()
+            .filter(|saved| saved.contains("human-only") && saved.contains("protected-b"))
+            .map(|_| ())
+    });
+    // One refusal from outside before the handoff, to find again in the log afterwards.
+    node.cli(&["pane", "send-text", &b, "HANDOFF_BEFORE_1"])
+        .assert_denied("pane send-text before the handoff");
+    node.wait_log("the refusal before the handoff", |events| {
+        events
+            .iter()
+            .any(|e| e["route"] == "pane.send_text" && e["decision"] == "deny")
+    });
+
+    node.cli(&[
+        "server",
+        "live-handoff",
+        "--import-exe",
+        env!("CARGO_BIN_EXE_herdr"),
+    ])
+    .assert_ok("server live-handoff from outside");
+
+    let find = |label: &str| {
+        poll(&format!("the pane {label} on the new server"), || {
+            let listed = node.try_api("pane.list", json!({})).ok()?;
+            listed["result"]["panes"]
+                .as_array()?
+                .iter()
+                .find(|pane| pane["label"] == label)
+                .and_then(|pane| pane["pane_id"].as_str().map(str::to_string))
+        })
+    };
+    let (a, b) = (find("caller-a"), find("protected-b"));
+
+    let got = node.cli(&["access", "pane", "get", &b]);
+    let fields: Vec<&str> = got.stdout.trim_end().split('\t').collect();
+    // The mode is what must survive; whether it still counts as set on purpose is not asserted.
+    assert_eq!(fields[3], "human-only", "{}", got.stdout);
+    node.cli(&["pane", "send-text", &b, "HANDOFF_AFTER_1"])
+        .assert_denied("pane send-text after the handoff");
+    node.herdr_in_pane(
+        &a,
+        &[
+            "server",
+            "live-handoff",
+            "--import-exe",
+            env!("CARGO_BIN_EXE_herdr"),
+        ],
+    )
+    .assert_denied("server live-handoff from a pane after a handoff");
+    // The log still holds the entry from before the handoff and records a new one: this
+    // refusal comes from a pane, which no earlier entry does.
+    node.herdr_in_pane(&a, &["pane", "send-text", &b, "HANDOFF_AFTER_2"])
+        .assert_denied("pane send-text from a pane after the handoff");
+    node.wait_log("entries from before and after the handoff", |events| {
+        let denied = |class: &str| {
+            events.iter().any(|e| {
+                e["route"] == "pane.send_text" && e["decision"] == "deny" && e["class"] == class
+            })
+        };
+        denied("outside") && denied("pane")
+    });
 }
 
 #[test]

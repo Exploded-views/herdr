@@ -1,4 +1,4 @@
-// herdr-fork: the access gate (a pane's input mode is checked after its allow-list, on the api path, the shell-client path and for attached terminals): classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method and `access.pane.set` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding; classification uses the shell identity cached at spawn or adoption, and Input requests are recorded in the input log when it is on. Unofficial stopgap; see FORK.md.
+// herdr-fork: the access gate (a pane's input mode is checked after its allow-list, on the api path, the shell-client path and for attached terminals): classify an api caller and decide whether a method may reach a pane's input; an `agent.start` that loosens a pane's policy and every `access.caller.*` method, `access.pane.set` and (while anything is protected) `server.live_handoff` are admin only, and a caller token is matched against the caller registry; a shell client's pane and popup input are judged with its own lineage, and a remote refusal names the bridge's binding; classification uses the shell identity cached at spawn or adoption, and Input requests are recorded in the input log when it is on. Unofficial stopgap; see FORK.md.
 //! One check in front of every Input-class api method. `check_access` is the
 //! only entry point; the server calls it right after the shutdown check and
 //! again right before it dispatches, once queued events have been applied.
@@ -357,6 +357,10 @@ impl App {
             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendInput(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::AgentStart(params) => self.agent_start_gate_target(params),
+            // Admin: a handoff swaps the running server for any executable, so while anything is
+            // protected only an outside caller asks for one. With nothing configured the idle
+            // return above leaves it open, as upstream has it.
+            Method::ServerLiveHandoff(_) => GateTarget::AccessAdmin,
             // Admin: only an outside caller manages named callers.
             Method::AccessCallerAdd(_)
             | Method::AccessCallerList(_)
@@ -373,7 +377,6 @@ impl App {
             // Open: nothing here writes caller-chosen bytes into an existing pane.
             Method::Ping(_)
             | Method::ServerStop(_)
-            | Method::ServerLiveHandoff(_)
             | Method::ServerReloadConfig(_)
             | Method::ServerSshAgentRegister(_)
             | Method::ServerAgentManifests(_)
@@ -1982,6 +1985,60 @@ mod tests {
         for caller in refused.iter().chain([&outside()]) {
             assert!(app.check_access(&pane_get(&pane_id), caller).is_ok());
         }
+    }
+
+    fn live_handoff() -> Method {
+        Method::ServerLiveHandoff(crate::api::schema::ServerLiveHandoffParams::default())
+    }
+
+    #[test]
+    fn live_handoff_is_refused_from_a_pane_when_access_is_protected() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let (caller_terminal, other) = (terminal_of(&app, panes[0]), terminal_of(&app, panes[1]));
+        protect(&mut app, &other, vec![Principal::Outside]);
+        assert!(app.any_access_protected());
+        let refused = [
+            Caller::Classified(CallerClass::Pane(caller_terminal)),
+            Caller::Classified(CallerClass::Pane(other.clone())),
+            Caller::Classified(CallerClass::Unknown { remote_hint: false }),
+            Caller::Classified(CallerClass::Remote),
+        ];
+        for caller in &refused {
+            let denied = app.check_access(&live_handoff(), caller).unwrap_err();
+            assert!(matches!(denied, AccessDenied::Control { .. }));
+        }
+        // A pane's input mode alone also makes the gate active.
+        let mut moded = app_with_panes(2);
+        let panes = pane_ids(&moded);
+        let (first, second) = (terminal_of(&moded, panes[0]), terminal_of(&moded, panes[1]));
+        moded.state.terminals.get_mut(&second).unwrap().input_mode =
+            crate::access::policy::InputMode::HumanOnly;
+        assert!(moded
+            .check_access(
+                &live_handoff(),
+                &Caller::Classified(CallerClass::Pane(first))
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn live_handoff_is_allowed_from_outside_when_access_is_protected() {
+        let mut app = app_with_panes(2);
+        let panes = pane_ids(&app);
+        let other = terminal_of(&app, panes[1]);
+        protect(&mut app, &other, vec![Principal::Outside]);
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
+    }
+
+    #[test]
+    fn live_handoff_is_unchanged_from_a_pane_when_nothing_is_protected() {
+        let app = app_with_panes(2);
+        assert!(!app.any_access_protected());
+        let panes = pane_ids(&app);
+        let from_pane = Caller::Classified(CallerClass::Pane(terminal_of(&app, panes[0])));
+        assert!(app.check_access(&live_handoff(), &from_pane).is_ok());
+        assert!(app.check_access(&live_handoff(), &outside()).is_ok());
     }
 
     #[test]

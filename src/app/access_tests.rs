@@ -1,4 +1,4 @@
-// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default; tests the `node_name` key and the input-mode mark rules. Unofficial stopgap; see FORK.md.
+// herdr-fork: tests for per-pane access policy state, persistence, config and the sticky default; tests the `node_name` key and the input-mode mark rules; a restored input mode makes the gate active. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -708,6 +708,52 @@ async fn startup_restore_binds_the_default_to_restored_agent_panes() {
         terminal.access.as_ref().map(|p| p.accept_from.clone()),
         Some(vec![Principal::None])
     );
+}
+
+#[tokio::test]
+async fn a_restored_input_mode_makes_the_gate_active_before_any_detection() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("restored-mode");
+    std::fs::create_dir_all(crate::config::config_dir()).unwrap();
+    let mut json = serde_json::to_value(agent_pane_snapshot()).unwrap();
+    let pane = json["workspaces"][0]["tabs"][0]["panes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    pane["input_mode"] = serde_json::json!("human-only");
+    std::fs::write(
+        crate::config::config_dir().join("session.json"),
+        serde_json::to_string(&json).unwrap(),
+    )
+    .unwrap();
+
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let policy = crate::app::AppPolicy {
+        restore_session: true,
+        ..crate::app::AppPolicy::TEST
+    };
+    let app = App::try_new(
+        &Config::default(),
+        policy,
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    // Right after construction, with no detection pass run, the restored mode counts.
+    assert!(app.any_access_protected());
+    let terminal = app.state.terminals.keys().next().unwrap().clone();
+    let from_pane = crate::access::caller::Caller::Classified(
+        crate::access::policy::CallerClass::Pane(terminal),
+    );
+    let handoff = crate::api::schema::Method::ServerLiveHandoff(Default::default());
+    assert!(app.check_access(&handoff, &from_pane).is_err());
 }
 
 #[cfg(unix)]

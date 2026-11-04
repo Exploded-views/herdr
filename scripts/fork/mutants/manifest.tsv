@@ -135,6 +135,8 @@ T10c-M25	T10c-M25.patch	test(the_explicit_mark_clears_when_the_agent_exits_unsee
 T10c-M26	T10c-M26.patch	test(a_detection_that_blinks_does_not_clear_the_mark)
 T11-M1	T11-M1.patch	test(token_works_on_first_request_after_restart)
 T11-M2	T11-M2.patch	test(token_works_on_first_request_after_restart) | test(live_handoff_carries_access_policy)
+HG-M1	HG-M1.patch	test(live_handoff_is_refused_from_a_pane_when_access_is_protected)
+HG-M2	HG-M2.patch	test(live_handoff_is_refused_from_a_pane_when_access_is_protected)
 T20-M1	T20-M1.patch	test(a_pending_mark_clears_when_a_different_agent_appears)
 T20-M2	T20-M2.patch	test(a_pending_mark_clears_when_the_agent_is_released)
 T20-M3	T20-M3.patch	test(a_mark_set_on_an_empty_pane_clears_when_the_first_agent_arrives)
