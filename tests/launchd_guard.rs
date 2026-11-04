@@ -2,6 +2,8 @@
 //! The harness must set HERDR_NO_LAUNCHD on every herdr process it builds, so a test never
 //! reaches the user's real launchd domain. These tests only inspect the built commands.
 
+#![cfg(unix)]
+
 pub mod support;
 
 use std::ffi::OsStr;
