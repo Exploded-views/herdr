@@ -47,6 +47,7 @@ impl App {
     }
 
     /// The session snapshot a live handoff hands to the replacement server, latch included.
+    #[cfg(unix)]
     pub(crate) fn handoff_snapshot(&self) -> crate::persist::SessionSnapshot {
         let mut snapshot = crate::persist::capture(
             &self.state.workspaces,

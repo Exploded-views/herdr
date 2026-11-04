@@ -1459,12 +1459,6 @@ fn live_handoff_stays_refused_from_a_pane_after_the_close_and_a_restart() {
     );
 
     node.restart_server();
-    assert!(
-        fs::read_to_string(&session)
-            .unwrap()
-            .contains("access_seen"),
-        "the stopped server should have saved the latch"
-    );
 
     let restored = poll("the restored caller pane", || {
         let listed = node.try_api("pane.list", json!({})).ok()?;
@@ -1484,6 +1478,12 @@ fn live_handoff_stays_refused_from_a_pane_after_the_close_and_a_restart() {
         ],
     );
     refused.assert_denied_from_pane("server live-handoff after the close and a restart");
+    assert!(
+        fs::read_to_string(&session)
+            .unwrap()
+            .contains("access_seen"),
+        "the stopped server should have saved the latch"
+    );
     node.try_api("ping", json!({}))
         .expect("the same server still answers");
 }

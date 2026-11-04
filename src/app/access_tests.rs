@@ -1185,6 +1185,7 @@ async fn a_handoff_import_without_the_latch_stays_open() {
     assert!(!handoff_from_a_pane_is_refused(&app));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn the_handoff_export_carries_the_latch() {
     let mut app = test_app(&Config::default());
