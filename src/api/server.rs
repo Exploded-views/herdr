@@ -1,4 +1,4 @@
-// herdr-fork: the `ping` result carries the server identity and the server hashes its binary at start; build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
+// herdr-fork: the `ping` result carries the server identity and the server hashes its binary on the first identity request; build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,7 +161,7 @@ fn start_server_inner(
         }
     };
 
-    // After the accept thread, so a failure injected for that spawn is not taken by this one.
+    // Cheap: fixes the binary path. The hash waits for the first identity request.
     crate::build_info::on_server_start();
     Ok(ServerHandle {
         _thread: thread,

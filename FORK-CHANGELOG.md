@@ -38,7 +38,7 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is b
 - `herdr status server` (and `--json`; also the `server:` block of plain `herdr status` and
   `.server` of `herdr status --json`) shows which build the running server is: its
   resolved executable path (symlinks followed once, at server start; `binary`), fork tag, git commit and the sha256 of its binary, which the
-  server computes in the background after it starts (null until ready). `herdr status client`
+  server computes in the background on the first status request, never at start (null until ready). `herdr status client`
   keeps its own `binary:` line and gains a `fork:` line (and `fork_tag` in `--json`). `herdr status` reports a server with a different fork tag
   as stale, including a tagged client against an upstream server. The `ping` result gains the
   four optional fields; no protocol bump. *fork-only*
