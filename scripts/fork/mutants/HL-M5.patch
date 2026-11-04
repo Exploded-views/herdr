@@ -1,0 +1,14 @@
+# herdr-fork: mutant HL-M5: an empty-workspace save clears the session again, dropping the latch. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/session.rs b/src/app/session.rs
+index 7652d5ae..afeb19f9 100644
+--- a/src/app/session.rs
++++ b/src/app/session.rs
+@@ -47,7 +47,7 @@ impl App {
+     }
+ 
+     fn capture_session_save_job(&self) -> SessionSaveJob {
+-        if self.state.workspaces.is_empty() && !self.state.access_seen() {
++        if self.state.workspaces.is_empty() {
+             SessionSaveJob::Clear
+         } else {
+             // With no workspace left and the latch set, an empty snapshot still carries it.
