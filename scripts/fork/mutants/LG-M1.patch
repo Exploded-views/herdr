@@ -1,9 +1,9 @@
 # herdr-fork: mutant LG-M1: spawn_launchd_job ignores HERDR_NO_LAUNCHD. Unofficial stopgap; see FORK.md.
 diff --git a/src/platform/macos/launchd_spawn.rs b/src/platform/macos/launchd_spawn.rs
-index 80ccfc14..816c5ea3 100644
+index bcaa20d0..bd23c74b 100644
 --- a/src/platform/macos/launchd_spawn.rs
 +++ b/src/platform/macos/launchd_spawn.rs
-@@ -70,11 +70,6 @@ fn label_prefix() -> &'static str {
+@@ -79,11 +79,6 @@ fn label_prefix() -> &'static str {
  /// the caller can spawn directly, when there is no GUI domain or the command
  /// cannot be represented exactly in a launchd job. Returns the job label.
  pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
