@@ -1,0 +1,12 @@
+# herdr-fork: mutant T20-M2: a released agent no longer clears a pending mark. Unofficial stopgap; see FORK.md.
+diff --git a/src/app/actions.rs b/src/app/actions.rs
+--- a/src/app/actions.rs
++++ b/src/app/actions.rs
+@@ -1736,7 +1736,6 @@
+             if terminal.input_mode_set_explicitly {
+                 let released = mutation.as_ref().is_some_and(|m| m.agent_released);
+                 if released {
+-                    terminal.clear_input_mode_mark();
+                     self.session_dirty = true;
+                 } else {
+                     // Completing a pending mark with its agent's session changes what is saved too.

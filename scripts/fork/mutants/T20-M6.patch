@@ -1,0 +1,15 @@
+# herdr-fork: mutant T20-M6: a saved pending mark is restored as it was. Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2197,10 +2197,6 @@
+         owner: Option<String>,
+         session: Option<String>,
+     ) {
+-        if session.as_deref() == Some(PENDING_MARK_SESSION) {
+-            self.clear_input_mode_mark();
+-            return;
+-        }
+         self.input_mode_set_explicitly = explicit;
+         self.input_mode_mark_owner = owner;
+         self.input_mode_mark_session = session;

@@ -1,4 +1,4 @@
-// herdr-fork: restore the per-pane access policy and input mode in every restore branch; a test pins that an adopted pane caches its shell identity. Unofficial stopgap; see FORK.md.
+// herdr-fork: restore the per-pane access policy and input mode in every restore branch; a test pins that an adopted pane caches its shell identity; a test pins a restored human-only pane across a new agent; a pending input-mode mark is not restored. Unofficial stopgap; see FORK.md.
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -455,9 +455,11 @@ fn unavailable_restored_terminal(
         terminal.access = pane.access.clone();
         terminal.access_opened_explicitly = pane.access_opened_explicitly;
         terminal.input_mode = pane.input_mode;
-        terminal.input_mode_set_explicitly = pane.input_mode_set_explicitly;
-        terminal.input_mode_mark_owner = pane.input_mode_mark_owner.clone();
-        terminal.input_mode_mark_session = pane.input_mode_mark_session.clone();
+        terminal.restore_input_mode_mark(
+            pane.input_mode_set_explicitly,
+            pane.input_mode_mark_owner.clone(),
+            pane.input_mode_mark_session.clone(),
+        );
         if let Some(session) = restored_terminal_agent_session(pane.agent_session.as_ref(), false) {
             terminal.set_persisted_agent_session(session);
         }
@@ -604,12 +606,11 @@ fn restore_tab(
             terminal.access_opened_explicitly =
                 saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
             terminal.input_mode = saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
-            terminal.input_mode_set_explicitly =
-                saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly);
-            terminal.input_mode_mark_owner =
-                saved_pane.and_then(|pane| pane.input_mode_mark_owner.clone());
-            terminal.input_mode_mark_session =
-                saved_pane.and_then(|pane| pane.input_mode_mark_session.clone());
+            terminal.restore_input_mode_mark(
+                saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly),
+                saved_pane.and_then(|pane| pane.input_mode_mark_owner.clone()),
+                saved_pane.and_then(|pane| pane.input_mode_mark_session.clone()),
+            );
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -710,12 +711,11 @@ fn restore_tab(
                     saved_pane.is_some_and(|pane| pane.access_opened_explicitly);
                 terminal.input_mode =
                     saved_pane.map_or_else(Default::default, |pane| pane.input_mode);
-                terminal.input_mode_set_explicitly =
-                    saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly);
-                terminal.input_mode_mark_owner =
-                    saved_pane.and_then(|pane| pane.input_mode_mark_owner.clone());
-                terminal.input_mode_mark_session =
-                    saved_pane.and_then(|pane| pane.input_mode_mark_session.clone());
+                terminal.restore_input_mode_mark(
+                    saved_pane.is_some_and(|pane| pane.input_mode_set_explicitly),
+                    saved_pane.and_then(|pane| pane.input_mode_mark_owner.clone()),
+                    saved_pane.and_then(|pane| pane.input_mode_mark_session.clone()),
+                );
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -2003,6 +2003,110 @@ mod tests {
         assert!(
             handoff_runtimes.is_empty(),
             "handoff restore should not replace pending native agent resume with a shell runtime"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_restored_human_only_pane_keeps_its_mode_when_a_new_agent_is_identified() {
+        use crate::access::policy::InputMode;
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("workspace".into()),
+                custom_name: None,
+                identity_cwd: cwd.clone(),
+                worktree_space: None,
+                public_pane_numbers: HashMap::new(),
+                next_public_pane_number: 0,
+                public_tab_numbers: Vec::new(),
+                next_public_tab_number: 0,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Pane(0),
+                    panes: HashMap::from([(
+                        0,
+                        super::super::snapshot::PaneSnapshot {
+                            cwd,
+                            label: None,
+                            agent_name: None,
+                            managed_agent_kind: None,
+                            agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                source: "herdr:codex".into(),
+                                agent: "codex".into(),
+                                kind: crate::agent_resume::AgentSessionRefKind::Id,
+                                value: "codex-session".into(),
+                            }),
+                            agent_resume: None,
+                            launch_argv: None,
+                            access: None,
+                            access_opened_explicitly: false,
+                            input_mode: InputMode::HumanOnly,
+                            input_mode_set_explicitly: true,
+                            input_mode_mark_owner: Some("codex|".into()),
+                            input_mode_mark_session: Some("proc:4242:7|".into()),
+                        },
+                    )]),
+                    zoomed: false,
+                    focused: Some(0),
+                    root_pane: Some(0),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        };
+        let (events, _event_rx) = mpsc::channel(4);
+
+        // The resume-plan path: the pane waits for its agent to be launched again.
+        let (workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let pane = workspaces[0].tabs[0].root_pane;
+        let terminal_id = workspaces[0].tabs[0].terminal_id(pane).unwrap().clone();
+        assert!(terminals[&terminal_id].pending_agent_resume_plan.is_some());
+        assert_eq!(terminals[&terminal_id].input_mode, InputMode::HumanOnly);
+        assert!(terminals[&terminal_id].input_mode_set_explicitly);
+
+        let mut state = crate::app::AppState::test_new();
+        state.workspaces = workspaces;
+        state.terminals = terminals;
+        state.active = Some(0);
+        // A new agent process, not the one the mark was set for, is identified. No config
+        // default is set, so nothing can raise or lower the mode.
+        state.handle_app_event(crate::events::AppEvent::AgentProcessIdentified {
+            pane_id: pane,
+            process: Some(crate::platform::ProcessIdentity {
+                pid: 9999,
+                start_token: 7,
+            }),
+        });
+        state.handle_app_event(crate::events::AppEvent::StateChanged {
+            pane_id: pane,
+            agent: Some(crate::detect::Agent::Codex),
+            state: crate::detect::AgentState::Working,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert_eq!(
+            state.terminals[&terminal_id].input_mode,
+            InputMode::HumanOnly
         );
     }
 
