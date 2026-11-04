@@ -120,6 +120,14 @@ impl AppPolicy {
 
 /// Read the caller registry once. A file that cannot be read leaves the
 /// registry empty and refuses changes, so the unreadable file is not overwritten.
+/// Some terminal holds a policy or a non-`any` input mode.
+fn state_has_access(state: &state::AppState) -> bool {
+    state
+        .terminals
+        .values()
+        .any(|terminal| terminal.access.is_some() || !terminal.input_mode.is_any())
+}
+
 fn load_access_callers(
     persist: bool,
 ) -> (
@@ -454,6 +462,7 @@ impl App {
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
         let snapshot = policy.restore_session.then(crate::persist::load).flatten();
+        let saved_access_seen = snapshot.as_ref().is_some_and(|snap| snap.access_seen);
         let mut plugin_installation_leases = crate::plugin_installations::Leases::new();
         let mut plugin_installation_cleanup_allowed = true;
         if policy.persist_plugin_registry {
@@ -630,6 +639,7 @@ impl App {
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
             access_defaults: resolved_access.defaults,
+            access_seen: Default::default(),
             remote_settings: resolved_access.remote,
             access_callers,
             access_callers_path,
@@ -642,6 +652,11 @@ impl App {
 
         state.terminals = restored_terminals;
         state.bind_default_access_all();
+        // Restored before the API is served: the saved latch, any restored protection, or a
+        // config that asks for protection.
+        if saved_access_seen || state.config_asks_for_access() || state_has_access(&state) {
+            state.latch_access_seen();
+        }
 
         // Background auto-update is disabled for non-persistent test apps
         // and in debug/test builds so local development never mutates the
@@ -808,6 +823,9 @@ impl App {
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
         app.state.bind_default_access_all();
+        if snapshot.access_seen || state_has_access(&app.state) {
+            app.state.latch_access_seen();
+        }
         app.terminal_runtimes = runtimes.into();
         app.state.active = snapshot
             .active

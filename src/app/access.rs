@@ -34,6 +34,8 @@ impl AppState {
                 accept_from,
             });
             state.access_opened_explicitly = false;
+            self.access_seen
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.mark_session_dirty();
         Ok(binding)
@@ -110,6 +112,8 @@ impl AppState {
                 if let Some(state) = self.terminals.get_mut(terminal) {
                     if state.input_mode.is_any() && !mode.is_any() {
                         state.input_mode = mode;
+                        self.access_seen
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.mark_session_dirty();
                     }
                 }
@@ -215,6 +219,7 @@ impl AppState {
             self.remote_settings.bridge_if_bridge_only(),
             state,
         ) {
+            self.latch_access_seen();
             self.mark_session_dirty();
         }
     }

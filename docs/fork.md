@@ -281,8 +281,10 @@ stop a process that sets out to get around it:
   gated by the input mode: a pane set to `human-only` takes attach input only from an outside
   client.
 - **Live handoff.** `herdr server live-handoff --import-exe` can swap in a build without the
-  allow-list. It is refused from inside a pane whenever any access policy or mode is set, and
-  is still open on a node with nothing configured.
+  allow-list. Once any access policy, input mode, bridge-only setting or caller token has been in
+  use, it stays refused from every caller but one outside every pane for the life of the saved
+  session, even if every protected pane is later closed or the server is restarted. A node that
+  never used access (nothing configured, no caller token presented) is unchanged and still open.
 - **Control requests** (close, rename, report-agent on another pane, `server stop`,
   `server reload-config`, `server ssh-agent register`, plugin and custom commands) aren't
   gated. `server stop` is a denial of service, not misrouted input.

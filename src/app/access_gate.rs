@@ -201,6 +201,13 @@ impl App {
         log: Option<bool>,
     ) -> Result<(), AccessDenied> {
         let operation = method.operation();
+        // The gate is active for this request: protection has been seen. One-way.
+        if !self.access_gate_idle(caller) {
+            self.state.latch_access_seen();
+        }
+        // Once seen, a handoff is outside-only even when the gate is otherwise idle.
+        let handoff_latched =
+            matches!(method, Method::ServerLiveHandoff(_)) && self.state.access_seen();
         let binds_at_start =
             matches!(method, Method::AgentStart(params) if params.accept_from.is_some());
         let logs_input =
@@ -210,6 +217,7 @@ impl App {
         // refuse anything and has nothing to record, so it still returns first.
         let classifies_for_log = logs_input && log == Some(true);
         if self.access_gate_idle(caller)
+            && !handoff_latched
             && !operation.name.starts_with("access.")
             && !binds_at_start
             && !classifies_for_log
@@ -357,9 +365,9 @@ impl App {
             Method::PaneSendKeys(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::PaneSendInput(params) => self.parsed_pane_gate_target(&params.pane_id),
             Method::AgentStart(params) => self.agent_start_gate_target(params),
-            // Admin: a handoff swaps the running server for any executable, so while anything is
-            // protected only an outside caller asks for one. With nothing configured the idle
-            // return above leaves it open, as upstream has it.
+            // Admin: a handoff swaps the running server for any executable, so once anything
+            // has been protected (the latch) only an outside caller asks for one. A node that
+            // never used access leaves it open, as upstream has it.
             Method::ServerLiveHandoff(_) => GateTarget::AccessAdmin,
             // Admin: only an outside caller manages named callers.
             Method::AccessCallerAdd(_)
@@ -2134,7 +2142,7 @@ mod tests {
         bridged.state.remote_settings.input = RemoteInput::Any;
         assert_handoff_outside_only(&bridged);
 
-        let mut tokened = app_with_panes(2);
+        let tokened = app_with_panes(2);
         let _ = tokened.check_access(&live_handoff(), &token_peer("not-a-registered-token"));
         assert!(!tokened.any_access_protected());
         assert_handoff_outside_only(&tokened);

@@ -638,6 +638,13 @@ impl AppState {
                         .any(|pane| pane.attached_terminal_id == terminal_id)
                 })
             });
+            if !still_attached {
+                if let Some(terminal) = self.terminals.get(&terminal_id) {
+                    if terminal.access.is_some() || !terminal.input_mode.is_any() {
+                        self.latch_access_seen();
+                    }
+                }
+            }
             if !still_attached
                 && self.terminals.remove(&terminal_id).is_some()
                 && !self.terminal_runtime_shutdowns.contains(&terminal_id)
@@ -1755,6 +1762,8 @@ impl AppState {
                 self.remote_settings.bridge_if_bridge_only(),
                 terminal,
             ) {
+                self.access_seen
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 self.session_dirty = true;
             }
             terminal.reconcile_reported_resume();

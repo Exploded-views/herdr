@@ -1,3 +1,4 @@
+// herdr-fork: the session snapshot carries the handoff latch (`access_seen`). Unofficial stopgap; see FORK.md.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -198,6 +199,7 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            access_seen: false,
         }
     }
 
