@@ -144,6 +144,9 @@ CI checks that this table names every upstream file the fork modifies, against t
 | `scripts/fork/mutants/HG-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants HG-M1 and HG-M2 (live handoff mapped back to open; the admin class accepting a pane) |
 | `scripts/fork/upstream-base`, `scripts/fork/check-fork-md-coverage.py`, `scripts/fork/test-check-fork-md-coverage.sh` | new | The pinned upstream base, the check that this table names every upstream file the fork modifies (modified, deleted or renamed since the base; added files are out of scope), and its self-test |
 | `.github/workflows/fork-ci.yml`, `justfile` | changed | `release-policy` checks out full history and runs the self-test and the check; `fork-md-coverage-test` recipe |
+| `src/terminal/state.rs`, `src/persist/restore.rs`, `src/app/actions.rs`, `src/app/api/access_panes.rs` | changed | An input-mode mark set while the agent is identified but its session is not known (and the mode is not `any`) is pending: the same agent's session completes it; a release, a no-agent detection or a different agent clears it; a saved pending mark is not restored. An empty-pane mark is still cleared by the first agent. A repeated `access pane set` that changes nothing does not dirty the session |
+| `src/app/access_tests.rs`, `tests/access_control.rs` | changed | Tests for the mark rules, a restored human-only pane and a server restart; the human-only e2e waits for the agent before setting the mode |
+| `scripts/fork/mutants/T20-M*.patch`, `scripts/fork/mutants/manifest.tsv` | new / changed | Mutants T20-M1 to T20-M7 (the pending input-mode mark) |
 
 ## Limits
 

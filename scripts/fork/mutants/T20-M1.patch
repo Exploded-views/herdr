@@ -1,0 +1,12 @@
+# herdr-fork: mutant T20-M1: the pending mark is completed by any agent identity, not only the one it was set for. Unofficial stopgap; see FORK.md.
+diff --git a/src/terminal/state.rs b/src/terminal/state.rs
+--- a/src/terminal/state.rs
++++ b/src/terminal/state.rs
+@@ -2229,7 +2229,6 @@
+         let session = self.agent_session_key();
+         if self.input_mode_set_explicitly
+             && self.input_mode_mark_is_pending()
+-            && self.input_mode_mark_owner.as_deref() == Some(current.as_str())
+         {
+             if session.is_some() {
+                 self.input_mode_mark_session = session;

@@ -1,4 +1,4 @@
-// herdr-fork: bind the sticky default access policy and input mode when an agent is first detected. Unofficial stopgap; see FORK.md.
+// herdr-fork: bind the sticky default access policy and input mode when an agent is first detected, and keep a mark set while the agent is present until its session is known. Unofficial stopgap; see FORK.md.
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
@@ -1738,8 +1738,14 @@ impl AppState {
                 if released {
                     terminal.clear_input_mode_mark();
                     self.session_dirty = true;
-                } else if terminal.drop_stale_input_mode_mark() {
-                    self.session_dirty = true;
+                } else {
+                    // Completing a pending mark with its agent's session changes what is saved too.
+                    let session_before = terminal.input_mode_mark_session.clone();
+                    if terminal.drop_stale_input_mode_mark()
+                        || terminal.input_mode_mark_session != session_before
+                    {
+                        self.session_dirty = true;
+                    }
                 }
             }
             // Any mutation that leaves an agent here (a detection, a label switch at

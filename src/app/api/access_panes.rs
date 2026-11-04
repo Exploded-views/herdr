@@ -1,4 +1,4 @@
-// herdr-fork: handlers for the `access.pane.*` methods, including the pane's input mode. Unofficial stopgap; see FORK.md.
+// herdr-fork: handlers for the `access.pane.*` methods, including the pane's input mode; a repeated set that changes nothing does not dirty the session. Unofficial stopgap; see FORK.md.
 //! `access.pane.set` and `access.pane.get`. The gate has already decided who
 //! may ask: `set` is an `AccessAdmin` request (only a caller outside every
 //! pane), `get` is open. Nothing here handles a token.
@@ -136,12 +136,21 @@ impl App {
         if let Some(mode) = mode {
             if let Some(state) = self.state.terminals.get_mut(&terminal) {
                 // Chosen on purpose, even when it is `any`: the sticky default leaves it be.
-                let changed = state.input_mode != mode
-                    || !state.input_mode_set_explicitly
-                    || state.input_mode_mark_owner != state.agent_identity()
-                    || state.input_mode_mark_session != state.agent_session_key();
+                let mark_before = (
+                    state.input_mode_set_explicitly,
+                    state.input_mode_mark_owner.clone(),
+                    state.input_mode_mark_session.clone(),
+                );
+                let mode_before = state.input_mode;
                 state.input_mode = mode;
                 state.mark_input_mode_explicit();
+                let changed = state.input_mode != mode_before
+                    || mark_before
+                        != (
+                            state.input_mode_set_explicitly,
+                            state.input_mode_mark_owner.clone(),
+                            state.input_mode_mark_session.clone(),
+                        );
                 if changed {
                     self.state.mark_session_dirty();
                 }

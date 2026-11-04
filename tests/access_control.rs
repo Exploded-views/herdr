@@ -1,4 +1,4 @@
-// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server); live handoff is admin only while access is protected and access state survives a handoff. Unofficial stopgap; see FORK.md.
+// herdr-fork: end-to-end tests of per-pane sender access control against isolated test servers (the built `herdr`, real panes, real CLI processes, a shell-client socket and a simulated ssh server), including that human-only survives a restart, and that the human-only test waits for the agent; live handoff is admin only while access is protected and access state survives a handoff. Unofficial stopgap; see FORK.md.
 //
 // How the tests are built:
 // - Each test owns a base directory under /tmp. The server, every CLI process and every pane
@@ -1228,6 +1228,12 @@ fn input_log_shows_a_refused_and_an_allowed_input_without_content() {
 #[test]
 fn human_only_refuses_the_api_and_takes_an_outside_client() {
     let (node, a, b) = setup("");
+    // A guard, not the fix: the pending-mark rule is what closes the race with the process read.
+    // This makes the test set the mode on a pane the server already sees as an agent.
+    poll("pane b to report its agent", || {
+        let got = node.try_api("agent.get", json!({"target": b})).ok()?;
+        (got["result"]["agent"]["agent"] == "pi").then_some(())
+    });
     node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
         .assert_ok("access pane set --input-mode");
     let got = node.cli(&["access", "pane", "get", &b]);
@@ -1269,6 +1275,60 @@ fn human_only_refuses_the_api_and_takes_an_outside_client() {
         &["HUMAN_API_1", "HUMAN_API_2", "HUMAN_CLIENT_PANE_1"],
     );
     node.finish_client_in_pane();
+}
+
+#[test]
+fn human_only_survives_a_server_restart() {
+    let (mut node, _a, b) = setup("");
+    node.api_ok(
+        "pane.rename",
+        json!({"pane_id": b, "label": "human-only-b"}),
+    );
+    node.cli(&["access", "pane", "set", &b, "--input-mode", "human-only"])
+        .assert_ok("access pane set --input-mode");
+
+    // The session must be on disk before the server stops, or there is nothing to restore, and
+    // the saved mark must be complete: a pending mark is not restored, by design.
+    let session = node.config_home.join(app_dir_name()).join("session.json");
+    poll(
+        "the session file to hold the pane's mode and a complete mark",
+        || {
+            fs::read_to_string(&session)
+                .ok()
+                .filter(|saved| {
+                    saved.contains("human-only")
+                        && saved.contains("input_mode_mark_session")
+                        && !saved.contains("pending")
+                })
+                .map(|_| ())
+        },
+    );
+
+    node.restart_server();
+
+    // The restored pane, found by its label: ids and terminals may be renumbered.
+    let restored = poll("the restored pane", || {
+        let listed = node.try_api("pane.list", json!({})).ok()?;
+        listed["result"]["panes"]
+            .as_array()?
+            .iter()
+            .find(|pane| pane["label"] == "human-only-b")
+            .and_then(|pane| pane["pane_id"].as_str().map(str::to_string))
+    });
+
+    let got = node.cli(&["access", "pane", "get", &restored]);
+    let fields: Vec<&str> = got.stdout.trim_end().split('\t').collect();
+    assert_eq!(&fields[3..], ["human-only", "explicit"], "{}", got.stdout);
+
+    let refused = node.cli(&["pane", "send-text", &restored, "RESTART_HUMAN_1"]);
+    refused.assert_denied("pane send-text into a restored human-only pane");
+    assert!(
+        refused
+            .stderr
+            .contains("accepts only typed input; input sent through the herdr API is refused."),
+        "{}",
+        refused.describe()
+    );
 }
 
 #[test]

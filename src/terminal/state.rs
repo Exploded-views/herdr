@@ -1,4 +1,4 @@
-// herdr-fork: per-pane `access` policy and `input_mode` (neither cleared by agent release). Unofficial stopgap; see FORK.md.
+// herdr-fork: per-pane `access` policy and `input_mode` (neither cleared by agent release); an input-mode mark set while the agent is present stays for it until its session is known. Unofficial stopgap; see FORK.md.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -183,6 +183,10 @@ pub struct TerminalState {
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
     pub restore_error: Option<String>,
 }
+
+/// The mark's session while the agent it was set for is identified but its session is not
+/// known. Only `mark_input_mode_explicit` writes it.
+const PENDING_MARK_SESSION: &str = "pending";
 
 impl TerminalState {
     pub fn new(id: TerminalId, cwd: PathBuf) -> Self {
@@ -2162,11 +2166,27 @@ impl TerminalState {
         }
     }
 
-    /// An admin chose this pane's mode on purpose, for the agent that is here now.
+    /// An admin chose this pane's mode on purpose, for the agent that is here now. With no
+    /// agent identified the mark has no owner, and the first agent identified drops it (a
+    /// stricter default then reaches that agent). If an agent is identified but its session is
+    /// not known yet (no process read, no hook session), the mark's session is
+    /// `PENDING_MARK_SESSION`: that same agent's session, once known, completes the mark (see
+    /// `drop_stale_input_mode_mark`). Only a mode other than `any` is kept pending: a mark only
+    /// shields an `any` mode from a stricter default, so a non-`any` mark completed by the
+    /// wrong process (a same-kind swap) can loosen nothing, while an explicit `any` set with
+    /// no session known keeps no session and is dropped at the next identification, so the
+    /// default applies. Nothing else writes that value, and a saved one is never
+    /// restored (see `restore_input_mode_mark`).
     pub(crate) fn mark_input_mode_explicit(&mut self) {
         self.input_mode_set_explicitly = true;
         self.input_mode_mark_owner = self.agent_identity();
         self.input_mode_mark_session = self.agent_session_key();
+        if self.input_mode_mark_owner.is_some()
+            && self.input_mode_mark_session.is_none()
+            && self.input_mode != crate::access::policy::InputMode::Any
+        {
+            self.input_mode_mark_session = Some(PENDING_MARK_SESSION.to_string());
+        }
     }
 
     pub(crate) fn clear_input_mode_mark(&mut self) {
@@ -2175,17 +2195,58 @@ impl TerminalState {
         self.input_mode_mark_session = None;
     }
 
+    /// Put a saved mark back on a restored pane. A pending mark was for an agent run that is
+    /// gone after a restart, and nothing could tell its successor apart, so it is not
+    /// restored: the pane keeps its mode, and the default applies as to any unmarked pane.
+    pub(crate) fn restore_input_mode_mark(
+        &mut self,
+        explicit: bool,
+        owner: Option<String>,
+        session: Option<String>,
+    ) {
+        if session.as_deref() == Some(PENDING_MARK_SESSION) {
+            self.clear_input_mode_mark();
+            return;
+        }
+        self.input_mode_set_explicitly = explicit;
+        self.input_mode_mark_owner = owner;
+        self.input_mode_mark_session = session;
+    }
+
+    fn input_mode_mark_is_pending(&self) -> bool {
+        self.input_mode_mark_session.as_deref() == Some(PENDING_MARK_SESSION)
+    }
+
     /// Drop the mark when a different agent is in the pane than the one it was set for. An
     /// agent that is not detected right now (a restored pane, a detection that blinked) is not
-    /// a change. Returns true when the mark was dropped.
+    /// a change, except for a pending mark: a detection that reports no agent may be that
+    /// agent leaving unseen, and its session was never known to tell a successor apart, so the
+    /// mark is dropped. A pending mark is completed with the session of the same agent (same
+    /// identity) once that is known, and kept until then. A mark with no owner is different and is
+    /// dropped. So is a mark with an owner but no session, which has two sources, both dropped
+    /// on purpose: an older saved file, and an explicit `any` set before the session was known
+    /// (never kept pending). Returns true when the mark was dropped.
     pub(crate) fn drop_stale_input_mode_mark(&mut self) -> bool {
         let Some(current) = self.agent_identity() else {
+            if self.input_mode_set_explicitly && self.input_mode_mark_is_pending() {
+                self.clear_input_mode_mark();
+                return true;
+            }
             return false;
         };
+        let session = self.agent_session_key();
+        if self.input_mode_set_explicitly
+            && self.input_mode_mark_is_pending()
+            && self.input_mode_mark_owner.as_deref() == Some(current.as_str())
+        {
+            if session.is_some() {
+                self.input_mode_mark_session = session;
+            }
+            return false;
+        }
         // The kind and name are not enough: a new agent of the same kind that started after
         // the last one left unseen has the same ones. Its session differs, and an unknown
         // session (on either side) counts as different.
-        let session = self.agent_session_key();
         if self.input_mode_set_explicitly
             && (self.input_mode_mark_owner.is_none()
                 || self.input_mode_mark_owner.as_deref() != Some(current.as_str())
