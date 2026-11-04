@@ -1,0 +1,14 @@
+# herdr-fork: mutant FV-M6: the ping handler ignores the identity flag. Unofficial stopgap; see FORK.md.
+diff --git a/src/api/server.rs b/src/api/server.rs
+index 8da18d35..b1755d08 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -629,7 +629,7 @@ fn handle_request(
+     if let Method::Ping(params) = &request.method {
+         // Only an identity ping may start the binary hash; the checks that ping first (every
+         // CLI command, attach, autodetect) must not.
+-        let identity = if params.identity {
++        let identity = if params.identity || true {
+             crate::build_info::server_identity()
+         } else {
+             crate::build_info::server_identity_cached()
