@@ -137,6 +137,7 @@ pub fn start_binary_hash() {
             }
         };
         let _ = BINARY_PATH.set(path.display().to_string());
+        HASH_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let spawned =
             crate::thread_spawn::spawn_named("herdr-binary-hash", move || match hash_file(&path) {
                 Ok(hash) => {
@@ -148,6 +149,19 @@ pub fn start_binary_hash() {
             tracing::warn!(%error, "could not start the binary hash thread");
         }
     });
+}
+
+/// What a starting server does about its identity.
+pub fn on_server_start() {
+    start_binary_hash();
+}
+
+static HASH_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times this process has started hashing its executable (a test hook).
+#[cfg(test)]
+pub fn hash_runs() -> usize {
+    HASH_RUNS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// The hash of this executable, or `None` until `start_binary_hash` has finished.
@@ -241,27 +255,64 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_server_hashes_its_binary_in_the_background() {
-        super::start_binary_hash();
-        super::start_binary_hash();
-        let want = super::hash_file(&std::env::current_exe().unwrap()).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let got = loop {
-            if let Some(hash) = super::binary_sha256() {
-                break hash;
+    fn wait_for_hash() -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(hash) = super::server_identity().binary_sha256 {
+                return hash;
             }
             assert!(
                 std::time::Instant::now() < deadline,
                 "hash never became ready"
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        assert_eq!(got, want);
-        assert_eq!(super::server_identity().binary_sha256, Some(want));
+        }
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn starting_a_server_does_not_start_hashing() {
+        super::on_server_start();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(super::hash_runs(), 0);
+        assert_eq!(super::binary_sha256(), None);
+    }
+
+    #[test]
+    fn the_first_identity_request_hashes_once_and_later_ones_reuse_it() {
+        super::on_server_start();
+        assert_eq!(super::hash_runs(), 0);
+        let first = wait_for_hash();
+        assert_eq!(super::hash_runs(), 1);
+        for _ in 0..5 {
+            assert_eq!(super::server_identity().binary_sha256, Some(first.clone()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(super::hash_runs(), 1);
+    }
+
+    #[test]
+    fn concurrent_first_requests_start_one_hash() {
+        let threads: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(super::server_identity))
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        wait_for_hash();
+        assert_eq!(super::hash_runs(), 1);
+    }
+
+    #[test]
+    fn the_cached_hash_is_the_sha256_of_the_test_binary() {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        let want: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(wait_for_hash(), want);
+    }
+
     #[test]
     fn resolve_follows_a_symlink_to_the_file() {
         let dir = std::env::temp_dir().join(format!("herdr-resolve-{}", std::process::id()));

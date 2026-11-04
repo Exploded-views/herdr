@@ -162,7 +162,7 @@ fn start_server_inner(
     };
 
     // After the accept thread, so a failure injected for that spawn is not taken by this one.
-    crate::build_info::start_binary_hash();
+    crate::build_info::on_server_start();
     Ok(ServerHandle {
         _thread: thread,
         path,
