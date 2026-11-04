@@ -1,9 +1,9 @@
 # herdr-fork: mutant LG-M1: spawn_launchd_job ignores HERDR_NO_LAUNCHD. Unofficial stopgap; see FORK.md.
 diff --git a/src/platform/macos/launchd_spawn.rs b/src/platform/macos/launchd_spawn.rs
-index 7e6f3a87..0cbabf52 100644
+index 80ccfc14..816c5ea3 100644
 --- a/src/platform/macos/launchd_spawn.rs
 +++ b/src/platform/macos/launchd_spawn.rs
-@@ -57,11 +57,6 @@ fn label_prefix() -> &'static str {
+@@ -70,11 +70,6 @@ fn label_prefix() -> &'static str {
  /// the caller can spawn directly, when there is no GUI domain or the command
  /// cannot be represented exactly in a launchd job. Returns the job label.
  pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
@@ -13,5 +13,5 @@ index 7e6f3a87..0cbabf52 100644
 -        ));
 -    }
      #[cfg(test)]
-     if !test_hooks::fake_installed() {
+     if !test_hooks::fake_installed() && !real_launchd_opted_in() {
          return Err(io::Error::other("launchd is never used by unit tests"));
