@@ -57,6 +57,15 @@ fn real_launchd_opted_in() -> bool {
         && !switch_is_set()
 }
 
+/// Whether this process was started over SSH; tests inject the answer.
+fn started_over_ssh() -> bool {
+    #[cfg(test)]
+    if let Some(value) = test_hooks::ssh() {
+        return value;
+    }
+    std::env::var_os("SSH_CONNECTION").is_some()
+}
+
 fn label_prefix() -> &'static str {
     if cfg!(test) {
         TEST_LABEL_PREFIX
@@ -79,7 +88,7 @@ pub(crate) fn spawn_launchd_job(command: &Command) -> io::Result<String> {
     if !test_hooks::fake_installed() && !real_launchd_opted_in() {
         return Err(io::Error::other("launchd is never used by unit tests"));
     }
-    if std::env::var_os("SSH_CONNECTION").is_some() {
+    if started_over_ssh() {
         // SSH logins already run outside any terminal app; keep them out of
         // the desktop session too.
         return Err(io::Error::other("started over SSH"));
@@ -193,7 +202,12 @@ fn launchctl(args: &[&str]) -> io::Result<String> {
         #[cfg(not(test))]
         let opted_in = false;
         if !opted_in {
-            panic!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
+            let message =
+                format!("launchctl is forbidden under test or HERDR_NO_LAUNCHD: {args:?}");
+            if cfg!(test) {
+                panic!("{message}");
+            }
+            return Err(io::Error::other(message));
         }
     }
     let output = Command::new(LAUNCHCTL)
@@ -523,8 +537,10 @@ mod tests {
     fn switch_makes_spawn_fail_without_any_launchctl_call() {
         let fake = fake_launchctl(FINISHED_SERVER_LIST);
         test_hooks::set_switch(Some(true));
+        test_hooks::set_ssh(Some(false));
         let result = spawn_launchd_job(&Command::new("/usr/bin/true"));
         test_hooks::set_switch(None);
+        test_hooks::set_ssh(None);
         assert!(result.is_err(), "the switch refuses the job");
         assert_eq!(fake.calls(), Vec::<String>::new(), "no launchctl call");
     }
@@ -570,8 +586,10 @@ mod tests {
     fn opt_in_labels_and_sweep_stay_in_the_test_namespace() {
         let fake = fake_launchctl(FINISHED_SERVER_LIST);
         test_hooks::set_opt_in(Some(true));
+        test_hooks::set_ssh(Some(false));
         let result = spawn_launchd_job(&Command::new("/usr/bin/true"));
         test_hooks::set_opt_in(None);
+        test_hooks::set_ssh(None);
         let label = result.expect("job label from the fake");
         assert!(label.starts_with(TEST_LABEL_PREFIX), "{label}");
         let calls = fake.calls();
@@ -734,6 +752,7 @@ mod test_hooks {
     thread_local! {
         static FAKE: RefCell<Option<Rc<RefCell<Recording>>>> = const { RefCell::new(None) };
         static SWITCH: Cell<Option<bool>> = const { Cell::new(None) };
+        static SSH: Cell<Option<bool>> = const { Cell::new(None) };
         static OPT_IN: Cell<Option<bool>> = const { Cell::new(None) };
     }
 
@@ -771,6 +790,14 @@ mod test_hooks {
 
     pub(super) fn set_opt_in(value: Option<bool>) {
         OPT_IN.with(|opt_in| opt_in.set(value));
+    }
+
+    pub(super) fn set_ssh(value: Option<bool>) {
+        SSH.with(|ssh| ssh.set(value));
+    }
+
+    pub(super) fn ssh() -> Option<bool> {
+        SSH.with(Cell::get)
     }
 
     pub(super) fn opt_in() -> Option<bool> {
