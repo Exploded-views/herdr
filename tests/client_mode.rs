@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 //! Integration tests for thin client mode.
 
 #![cfg(unix)]
@@ -125,6 +126,8 @@ fn spawn_client_process_with_args_and_env(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.args(args);
     cmd.env("HERDR_DISABLE_SOUND", "1");
@@ -186,6 +189,8 @@ fn spawn_server_with_config(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
@@ -437,6 +442,8 @@ fn client_sees_headless_startup_config_diagnostic() {
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
@@ -499,6 +506,7 @@ fn server_unreachable_shows_clear_error() {
     .unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .arg("client")
         .env("HERDR_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
@@ -2078,6 +2086,8 @@ fn client_receives_notify_on_agent_state_change() {
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+
+    cmd.env("HERDR_NO_LAUNCHD", "1");
     support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);

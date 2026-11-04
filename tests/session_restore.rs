@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 //! Session restore must not wait for optional repository metadata.
 #![cfg(unix)]
 
@@ -128,6 +129,7 @@ fn server_restores_while_git_metadata_is_blocked() {
             "onboarding = false\n[terminal]\ndefault_shell = \"/bin/sh\"\n[ui.sidebar.spaces]\nrows = [[\"workspace\"]]\n").unwrap();
         support::register_runtime_dir(&runtime_dir);
         let child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .arg("server")
             .env("XDG_CONFIG_HOME", &config_home)
             .env("XDG_RUNTIME_DIR", &runtime_dir)

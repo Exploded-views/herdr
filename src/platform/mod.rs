@@ -6,6 +6,10 @@
 
 #[cfg(unix)]
 pub(crate) mod ssh_agent;
+// herdr-fork: the platform-neutral launchd test guard, unit-tested on every unix platform.
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) mod launchd_guard;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Native adapters construct only the event classifications their OS can report.

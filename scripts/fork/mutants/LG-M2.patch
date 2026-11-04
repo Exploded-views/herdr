@@ -1,0 +1,15 @@
+# herdr-fork: mutant LG-M2: the launchctl tripwire lets an unpermitted call through. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/launchd_guard.rs b/src/platform/launchd_guard.rs
+index 441a8dae..9c5384b2 100644
+--- a/src/platform/launchd_guard.rs
++++ b/src/platform/launchd_guard.rs
+@@ -34,6 +34,9 @@ pub(crate) fn check_call(args: &[&str], guarded: bool, permitted: bool) -> Resul
+         ));
+     }
+     if !permitted {
++        return Ok(());
++    }
++    if false {
+         return Err(format!(
+             "launchctl is forbidden under test or {NO_LAUNCHD_ENV}: {args:?}"
+         ));

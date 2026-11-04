@@ -1,0 +1,14 @@
+# herdr-fork: mutant LG-M1: the HERDR_NO_LAUNCHD switch is ignored. Unofficial stopgap; see FORK.md.
+diff --git a/src/platform/launchd_guard.rs b/src/platform/launchd_guard.rs
+index 441a8dae..d5147665 100644
+--- a/src/platform/launchd_guard.rs
++++ b/src/platform/launchd_guard.rs
+@@ -18,7 +18,7 @@ pub(crate) fn launchd_allowed(switch: Option<&OsStr>, under_test: bool) -> bool
+ 
+ /// Whether the switch value turns launchd off.
+ pub(crate) fn switch_set(switch: Option<&OsStr>) -> bool {
+-    !launchd_allowed(switch, false)
++    false
+ }
+ 
+ /// The tripwire. `guarded` is true under test or with the switch set; `permitted` is true when a

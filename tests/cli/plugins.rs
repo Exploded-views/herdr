@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 use super::harness::*;
 
 #[test]
@@ -555,6 +556,8 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     run_git(&source_repo, &["commit", "--quiet", "-m", "update plugin"]);
 
     let mut update = Command::new(env!("CARGO_BIN_EXE_herdr"));
+
+    update.env("HERDR_NO_LAUNCHD", "1");
     update
         .args([
             "--session",

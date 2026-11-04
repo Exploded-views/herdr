@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 #![cfg(windows)]
 
 use std::io;
@@ -135,6 +136,7 @@ fn server_integrity_requires_startup_consent_on_both_endpoints() {
         )
         .unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        command.env("HERDR_NO_LAUNCHD", "1");
         command.args(["--session", "integrity-test", "server"]);
         if allow_unelevated {
             command.arg("--allow-unelevated-clients");

@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 #![cfg(unix)]
 
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -17,6 +18,7 @@ fn closed_pipe_writer() -> Stdio {
 
 fn run_with_closed_stdout(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(args)
         .stdout(closed_pipe_writer())
         .stderr(Stdio::piped())

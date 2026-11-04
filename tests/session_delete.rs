@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -47,6 +48,7 @@ impl SessionConfig {
 
     fn delete(&self, name: &str) -> Output {
         Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(["session", "delete", name, "--json"])
             .env("XDG_CONFIG_HOME", &self.root)
             .env_remove("HERDR_SESSION")
