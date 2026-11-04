@@ -295,7 +295,10 @@ stop a process that sets out to get around it:
   allow-list. Once any access policy, input mode, bridge-only setting or caller token has been in
   use, it stays refused from every caller but one outside every pane for the life of the saved
   session, even if every protected pane is later closed or the server is restarted. A node that
-  never used access (nothing configured, no caller token presented) is unchanged and still open.
+  never used access (nothing configured, no caller token presented) is unchanged and still open. A
+  session file that cannot be read, or is from a newer herdr, starts latched. The latch ends only
+  with the saved session (for example a deleted or missing session file), and a handoff or
+  downgrade to a build without the latch drops it.
 - **Control requests** (close, rename, report-agent on another pane, `server stop`,
   `server reload-config`, `server ssh-agent register`, plugin and custom commands) aren't
   gated. `server stop` is a denial of service, not misrouted input.

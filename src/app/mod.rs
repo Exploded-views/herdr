@@ -118,8 +118,6 @@ impl AppPolicy {
     };
 }
 
-/// Read the caller registry once. A file that cannot be read leaves the
-/// registry empty and refuses changes, so the unreadable file is not overwritten.
 /// Some terminal holds a policy or a non-`any` input mode.
 fn state_has_access(state: &state::AppState) -> bool {
     state
@@ -128,6 +126,8 @@ fn state_has_access(state: &state::AppState) -> bool {
         .any(|terminal| terminal.access.is_some() || !terminal.input_mode.is_any())
 }
 
+/// Read the caller registry once. A file that cannot be read leaves the
+/// registry empty and refuses changes, so the unreadable file is not overwritten.
 fn load_access_callers(
     persist: bool,
 ) -> (

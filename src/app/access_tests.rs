@@ -1137,6 +1137,66 @@ async fn handoff_restore_binds_the_default_to_restored_agent_panes() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handoff_import_applies_the_saved_latch() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("handoff-latch-import");
+    let mut snapshot = agent_pane_snapshot();
+    snapshot.access_seen = true;
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new_from_handoff(
+        &Config::default(),
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+        &snapshot,
+        &mut HashMap::new(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert!(!app.any_access_protected());
+    assert!(handoff_from_a_pane_is_refused(&app));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handoff_import_without_the_latch_stays_open() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let dir = scratch_dirs("handoff-latch-import-open");
+    let snapshot = agent_pane_snapshot();
+    let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new_from_handoff(
+        &Config::default(),
+        None,
+        api_rx,
+        crate::api::EventHub::default(),
+        &snapshot,
+        &mut HashMap::new(),
+    );
+    std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = app.unwrap();
+
+    assert!(!handoff_from_a_pane_is_refused(&app));
+}
+
+#[tokio::test]
+async fn the_handoff_export_carries_the_latch() {
+    let mut app = test_app(&Config::default());
+    let (state, _pane, _terminal) = state_with_pane();
+    app.state.workspaces = state.workspaces;
+    app.state.terminals = state.terminals;
+    app.state.active = Some(0);
+    assert!(!app.handoff_snapshot().access_seen);
+    app.state.latch_access_seen();
+    assert!(app.handoff_snapshot().access_seen);
+}
+
 #[test]
 fn access_input_log_key_is_accepted_and_defaults_on() {
     let bare = config_from("").access.resolve();

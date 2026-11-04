@@ -1449,20 +1449,22 @@ fn live_handoff_stays_refused_from_a_pane_after_the_close_and_a_restart() {
         .assert_ok("pane close from outside");
     let session = node.config_home.join(app_dir_name()).join("session.json");
     poll(
-        "the session file to hold the latch and no protected pane",
+        "the session file to hold the caller pane and no protected pane",
         || {
             fs::read_to_string(&session)
                 .ok()
-                .filter(|saved| {
-                    saved.contains("access_seen")
-                        && saved.contains("caller-a")
-                        && !saved.contains("human-only")
-                })
+                .filter(|saved| saved.contains("caller-a") && !saved.contains("human-only"))
                 .map(|_| ())
         },
     );
 
     node.restart_server();
+    assert!(
+        fs::read_to_string(&session)
+            .unwrap()
+            .contains("access_seen"),
+        "the stopped server should have saved the latch"
+    );
 
     let restored = poll("the restored caller pane", || {
         let listed = node.try_api("pane.list", json!({})).ok()?;

@@ -46,6 +46,19 @@ impl App {
         }
     }
 
+    /// The session snapshot a live handoff hands to the replacement server, latch included.
+    pub(crate) fn handoff_snapshot(&self) -> crate::persist::SessionSnapshot {
+        let mut snapshot = crate::persist::capture(
+            &self.state.workspaces,
+            &self.state.terminals,
+            &self.terminal_runtimes,
+            self.state.active,
+            self.state.selected,
+        );
+        snapshot.access_seen = self.state.access_seen();
+        snapshot
+    }
+
     fn capture_session_save_job(&self) -> SessionSaveJob {
         if self.state.workspaces.is_empty() && !self.state.access_seen() {
             SessionSaveJob::Clear

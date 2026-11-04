@@ -136,7 +136,8 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is b
 - `server live-handoff` is accepted only from outside every pane once any access policy, input mode,
   bridge-only setting or caller token has been in use, and stays so for the life of the saved
   session (the latch is saved with it), even if every protected pane is later closed. On a node
-  that never used access (nothing configured, no caller token presented) it stays open. *fork-only*
+  that never used access (nothing configured, no caller token presented) it stays open. A session
+  file that cannot be read, or is from a newer herdr, starts latched. *fork-only*
 - `access pane set --input-mode` while an agent is in the pane but its session is not yet known
   now keeps its `explicit` mark for that agent (`access pane get` keeps showing `explicit`)
   instead of losing it when the session becomes known. A default never changes a `human-only`
