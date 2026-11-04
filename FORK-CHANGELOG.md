@@ -32,6 +32,10 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is b
 
 ## Unreleased
 
+- Tests no longer touch the real macOS launchd domain. A `HERDR_NO_LAUNCHD` switch turns the
+  launchd start off (the server is then spawned directly), unit tests refuse it, and the test
+  harness sets it. Two unit tests that really use launchd, on `dev.herdr.test.` labels, run only in
+  the fork's macOS CI job. Release builds are unchanged. *fork-only*
 - Fork CI checks that FORK.md names every upstream file the fork modifies, against the pinned upstream
   base. *fork-only*
 - Fork documentation, fork CI, and a Linux build and test image shared by CI and local

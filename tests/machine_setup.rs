@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 #![cfg(unix)]
 
 use std::fs;
@@ -151,6 +152,7 @@ fn setup_options(
     )
     .unwrap();
     let status = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_NO_LAUNCHD", "1")
         .args(["status", "client", "--json"])
         .output()
         .unwrap();
@@ -158,6 +160,7 @@ fn setup_options(
 
     let pair = native_pty_system().openpty(PtySize::default()).unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
     if handoff {
         command.args(["--remote", "fake-host", "--handoff"]);
     } else {
@@ -322,6 +325,7 @@ fn machine_add_accepts_help_argument_order() {
     )
     .unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    command.env("HERDR_NO_LAUNCHD", "1");
     command.args(["machine", "add", "--label", "coder", "workstation.coder"]);
     // Reach remote preparation, but never execute SSH or start a server.
     command.env("PATH", root.join("no-executables"));

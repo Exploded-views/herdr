@@ -1,3 +1,4 @@
+// herdr-fork: tests set HERDR_NO_LAUNCHD on every herdr process so they never reach the real launchd domain. See FORK.md.
 #![cfg(all(unix, not(target_os = "macos")))]
 
 use std::fs;
@@ -127,6 +128,7 @@ exec "$TEST_REMOTE_HERDR" "$@"
         let local = UnixListener::bind(root.join("local.sock")).unwrap();
         local.set_nonblocking(true).unwrap();
         let status = Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .env("HERDR_NO_LAUNCHD", "1")
             .args(["status", "client", "--json"])
             .output()
             .unwrap();
@@ -142,6 +144,7 @@ exec "$TEST_REMOTE_HERDR" "$@"
 
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        command.env("HERDR_NO_LAUNCHD", "1");
         command
             .args(args)
             .env(
