@@ -1,4 +1,4 @@
-// herdr-fork: dispatches `herdr access`; takes a leading `--caller-token-file`; an unusable token file reaches `finish_cli` as a typed error. Unofficial stopgap; see FORK.md.
+// herdr-fork: dispatches `herdr access`; takes a leading `--caller-token-file`; an unusable token file reaches `finish_cli` as a typed error. The protocol check pings without the identity flag. Unofficial stopgap; see FORK.md.
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -800,7 +800,7 @@ pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde
 }
 
 fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
-    let status = target::server_status(client)
+    let status = target::server_status(client, false)
         .map_err(|err| map_server_not_running_or_io(err, request_id, client))?;
     let server_protocol = status
         .protocol

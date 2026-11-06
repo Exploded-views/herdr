@@ -1,3 +1,4 @@
+// herdr-fork: `status server` shows the server's binary, fork tag, commit and sha256; the stale-server check also compares fork tags. Unofficial stopgap; see FORK.md.
 use serde::Serialize;
 
 use crate::api;
@@ -75,6 +76,7 @@ enum ServerRuntimeStatus {
         version: Option<String>,
         protocol: Option<u32>,
         capabilities: Option<crate::api::schema::ServerCapabilities>,
+        identity: crate::api::schema::ServerIdentity,
     },
     NotRunning,
 }
@@ -102,6 +104,7 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
         "  endpoint_protocol_generation: {}",
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION
     );
+    println!("  fork: {}", option_label(crate::build_info::fork_tag()));
     println!();
     println!("server:");
     print_server_status_body(&server, "  ");
@@ -143,42 +146,67 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION
     );
     println!("binary: {}", current_exe_label());
+    println!("fork: {}", option_label(crate::build_info::fork_tag()));
     Ok(())
 }
 
 fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
+    for line in server_status_lines(server, indent) {
+        println!("{line}");
+    }
+}
+
+fn server_status_lines(server: &ServerRuntimeStatus, indent: &str) -> Vec<String> {
     match server {
         ServerRuntimeStatus::Running {
             version,
             protocol,
             capabilities,
-        } => {
-            println!("{indent}status: running");
-            println!("{indent}version: {}", option_label(version.as_deref()));
-            println!(
+            identity,
+        } => vec![
+            format!("{indent}status: running"),
+            format!("{indent}version: {}", option_label(version.as_deref())),
+            format!(
+                "{indent}binary: {}",
+                option_label(identity.binary.as_deref())
+            ),
+            format!(
+                "{indent}fork: {}",
+                option_label(identity.fork_tag.as_deref())
+            ),
+            format!(
+                "{indent}commit: {}",
+                option_label(identity.commit.as_deref())
+            ),
+            format!(
+                "{indent}sha256: {}",
+                option_label(identity.binary_sha256.as_deref())
+            ),
+            format!(
                 "{indent}endpoint_compatible: {}",
                 endpoint_compatibility_label(capabilities.as_ref())
-            );
-            println!("{indent}private_protocol: {}", protocol_label(*protocol));
-            println!(
+            ),
+            format!("{indent}private_protocol: {}", protocol_label(*protocol)),
+            format!(
                 "{indent}private_protocol_compatible: {}",
                 compatibility_label(*protocol)
-            );
-            println!("{indent}socket: {}", super::target::socket_label());
-        }
-        ServerRuntimeStatus::NotRunning => {
-            println!("{indent}status: not running");
-            println!("{indent}socket: {}", super::target::socket_label());
-        }
+            ),
+            format!("{indent}socket: {}", super::target::socket_label()),
+        ],
+        ServerRuntimeStatus::NotRunning => vec![
+            format!("{indent}status: not running"),
+            format!("{indent}socket: {}", super::target::socket_label()),
+        ],
     }
 }
 
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
-    match super::target::server_status(&super::target::api_client()?) {
+    match super::target::server_status(&super::target::api_client()?, true) {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,
             capabilities: status.capabilities,
+            identity: status.identity,
         }),
         Err(err) if super::target::is_remote() => Err(super::target::remote_error(
             super::api_client_error_to_io(err),
@@ -248,6 +276,7 @@ struct FullStatusJson {
 #[derive(Serialize)]
 struct ClientStatusJson {
     version: String,
+    fork_tag: Option<&'static str>,
     channel: &'static str,
     protocol: u32,
     endpoint_protocol_generation: u32,
@@ -263,6 +292,11 @@ struct ServerStatusJson {
     status: &'static str,
     running: bool,
     version: Option<String>,
+    /// The server's own executable path (the client's is `client.binary`).
+    binary: Option<String>,
+    fork_tag: Option<String>,
+    commit: Option<String>,
+    binary_sha256: Option<String>,
     protocol: Option<u32>,
     capabilities: Option<ServerCapabilitiesJson>,
     compatible: Option<bool>,
@@ -292,6 +326,7 @@ struct UpdateStatusJson {
 fn client_status_json() -> ClientStatusJson {
     ClientStatusJson {
         version: crate::build_info::version(),
+        fork_tag: crate::build_info::fork_tag(),
         channel: crate::config::Config::load().config.update.channel.as_str(),
         protocol: crate::protocol::PROTOCOL_VERSION,
         endpoint_protocol_generation: crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
@@ -313,10 +348,15 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             version,
             protocol,
             capabilities,
+            identity,
         } => ServerStatusJson {
             status: "running",
             running: true,
             version: version.clone(),
+            binary: identity.binary.clone(),
+            fork_tag: identity.fork_tag.clone(),
+            commit: identity.commit.clone(),
+            binary_sha256: identity.binary_sha256.clone(),
             protocol: *protocol,
             capabilities: capabilities
                 .as_ref()
@@ -343,6 +383,10 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             status: "not_running",
             running: false,
             version: None,
+            binary: None,
+            fork_tag: None,
+            commit: None,
+            binary_sha256: None,
             protocol: None,
             capabilities: None,
             compatible: None,
@@ -382,11 +426,30 @@ fn restart_needed_bool(server: &ServerRuntimeStatus) -> Option<bool> {
 
 fn server_binary_stale_bool(server: &ServerRuntimeStatus) -> Option<bool> {
     match server {
-        ServerRuntimeStatus::Running { version, .. } => version
-            .as_deref()
-            .map(|version| version != crate::build_info::version()),
+        ServerRuntimeStatus::Running {
+            version, identity, ..
+        } => version.as_deref().map(|version| {
+            server_differs_from_client(
+                version,
+                identity.fork_tag.as_deref(),
+                &crate::build_info::version(),
+                crate::build_info::fork_tag(),
+            )
+        }),
         ServerRuntimeStatus::NotRunning => Some(false),
     }
+}
+
+/// A server is a different build from this client when the version string differs, or when the
+/// fork tags differ: a fork client against another tag, or a tagged client against an untagged
+/// (upstream or older fork) server, whose `ping` result carries no tag.
+fn server_differs_from_client(
+    server_version: &str,
+    server_tag: Option<&str>,
+    client_version: &str,
+    client_tag: Option<&str>,
+) -> bool {
+    server_version != client_version || server_tag != client_tag
 }
 
 fn print_json(value: &impl Serialize) -> std::io::Result<()> {
@@ -426,6 +489,7 @@ mod tests {
                 health_check: true,
                 ssh_agent_registration: false,
             }),
+            identity: crate::api::schema::ServerIdentity::default(),
         }
     }
 
@@ -453,5 +517,128 @@ mod tests {
 
         assert_eq!(restart_needed_bool(&server), Some(true));
         assert_eq!(server_binary_stale_bool(&server), Some(false));
+    }
+
+    fn identity() -> crate::api::schema::ServerIdentity {
+        crate::api::schema::ServerIdentity {
+            binary: Some("/opt/herdr-fork/bin/herdr".into()),
+            fork_tag: Some("v0.9.5-ev.3".into()),
+            commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            binary_sha256: Some("ab".repeat(32)),
+        }
+    }
+
+    #[test]
+    fn status_json_carries_the_server_identity() {
+        let mut server = running_server(Some("0.9.5"), None);
+        let ServerRuntimeStatus::Running { identity: slot, .. } = &mut server else {
+            unreachable!()
+        };
+        *slot = identity();
+        let value = serde_json::to_value(server_status_json(&server)).unwrap();
+        assert_eq!(value["binary"], "/opt/herdr-fork/bin/herdr");
+        assert_eq!(value["fork_tag"], "v0.9.5-ev.3");
+        assert_eq!(value["commit"], "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(value["binary_sha256"], "ab".repeat(32));
+    }
+
+    #[test]
+    fn client_status_json_carries_the_fork_tag() {
+        let value = serde_json::to_value(client_status_json()).unwrap();
+        assert_eq!(value["fork_tag"].as_str(), crate::build_info::fork_tag());
+        assert!(value.get("fork_tag").is_some());
+    }
+
+    #[test]
+    fn status_json_reports_null_for_an_untagged_unhashed_server() {
+        let server = running_server(Some("0.9.5"), None);
+        let value = serde_json::to_value(server_status_json(&server)).unwrap();
+        for key in ["binary", "fork_tag", "commit", "binary_sha256"] {
+            assert!(value.get(key).is_some_and(|v| v.is_null()), "{key}");
+        }
+    }
+
+    #[test]
+    fn human_status_shows_binary_fork_commit_and_sha256() {
+        let mut server = running_server(Some("0.9.5"), None);
+        let ServerRuntimeStatus::Running { identity: slot, .. } = &mut server else {
+            unreachable!()
+        };
+        *slot = identity();
+        let lines = server_status_lines(&server, "");
+        for want in [
+            "binary: /opt/herdr-fork/bin/herdr".to_string(),
+            "fork: v0.9.5-ev.3".to_string(),
+            "commit: 0123456789abcdef0123456789abcdef01234567".to_string(),
+            format!("sha256: {}", "ab".repeat(32)),
+        ] {
+            assert!(lines.contains(&want), "{want} in {lines:?}");
+        }
+    }
+
+    #[test]
+    fn human_status_says_unknown_for_an_older_server() {
+        let lines = server_status_lines(&running_server(Some("0.9.5"), None), "  ");
+        assert!(lines.contains(&"  fork: unknown".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"  sha256: unknown".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_version_and_tag_is_not_a_mismatch() {
+        assert!(!server_differs_from_client(
+            "0.9.5",
+            Some("v0.9.5-ev.3"),
+            "0.9.5",
+            Some("v0.9.5-ev.3")
+        ));
+        assert!(!server_differs_from_client("0.9.5", None, "0.9.5", None));
+    }
+
+    #[test]
+    fn a_tagged_client_against_an_untagged_server_is_a_mismatch() {
+        assert!(server_differs_from_client(
+            "0.9.5",
+            None,
+            "0.9.5",
+            Some("v0.9.5-ev.3")
+        ));
+    }
+
+    #[test]
+    fn an_untagged_client_against_a_tagged_server_is_a_mismatch() {
+        assert!(server_differs_from_client(
+            "0.9.5",
+            Some("v0.9.5-ev.3"),
+            "0.9.5",
+            None
+        ));
+    }
+
+    #[test]
+    fn differing_fork_tags_are_a_mismatch() {
+        assert!(server_differs_from_client(
+            "0.9.5",
+            Some("v0.9.5-ev.2"),
+            "0.9.5",
+            Some("v0.9.5-ev.3")
+        ));
+    }
+
+    #[test]
+    fn a_server_with_a_different_version_is_still_a_mismatch() {
+        assert!(server_differs_from_client("0.9.4", None, "0.9.5", None));
+    }
+
+    #[test]
+    fn a_server_running_another_fork_tag_is_reported_stale() {
+        let mut server = running_server(Some(crate::build_info::version().as_str()), None);
+        let ServerRuntimeStatus::Running { identity: slot, .. } = &mut server else {
+            unreachable!()
+        };
+        slot.fork_tag = Some("v0.0.0-other".into());
+        assert_eq!(server_binary_stale_bool(&server), Some(true));
     }
 }

@@ -1,0 +1,14 @@
+# herdr-fork: mutant FV-M5: a starting server hashes its binary again. Unofficial stopgap; see FORK.md.
+diff --git a/src/build_info.rs b/src/build_info.rs
+index c86a9939..c92d3e0d 100644
+--- a/src/build_info.rs
++++ b/src/build_info.rs
+@@ -127,7 +127,7 @@ static BINARY_HASH_STARTED: std::sync::Once = std::sync::Once::new();
+ /// Fixes this executable's resolved path. A server calls it at start: one `current_exe` and
+ /// `canonicalize`, no file reads. Hashing waits for the first identity request.
+ pub fn on_server_start() {
+-    let _ = remember_binary_path();
++    start_binary_hash();
+ }
+ 
+ fn remember_binary_path() -> Option<std::path::PathBuf> {

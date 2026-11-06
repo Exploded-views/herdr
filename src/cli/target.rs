@@ -1,4 +1,4 @@
-// herdr-fork: --machine refuses access commands (they act on the local server only) and `--caller-token-file`; the caller token is attached to the local client only. Unofficial stopgap; see FORK.md.
+// herdr-fork: --machine refuses access commands (they act on the local server only) and `--caller-token-file`; the caller token is attached to the local client only. `server_status` says whether to ask for the server identity. Unofficial stopgap; see FORK.md.
 use std::cell::RefCell;
 use std::io;
 
@@ -119,13 +119,13 @@ fn base_client() -> io::Result<ApiClient> {
 
 pub(super) fn server_status(
     client: &ApiClient,
+    identity: bool,
 ) -> Result<crate::api::RuntimeStatus, crate::api::client::ApiClientError> {
-    let probe = || {
-        if is_remote() {
-            client.status_with_timeout(std::time::Duration::from_secs(15))
-        } else {
-            client.status()
-        }
+    let probe = || match (is_remote(), identity) {
+        (true, true) => client.status_with_identity(Some(std::time::Duration::from_secs(15))),
+        (true, false) => client.status_with_timeout(std::time::Duration::from_secs(15)),
+        (false, true) => client.status_with_identity(None),
+        (false, false) => client.status(),
     };
     let error = match probe() {
         Ok(status) => return Ok(status),

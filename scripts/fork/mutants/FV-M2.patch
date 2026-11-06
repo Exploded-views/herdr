@@ -1,0 +1,14 @@
+# herdr-fork: mutant FV-M2: status drops binary_sha256. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/status.rs b/src/cli/status.rs
+index 8fbe4adc..cf8259aa 100644
+--- a/src/cli/status.rs
++++ b/src/cli/status.rs
+@@ -352,7 +352,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
+             binary: identity.binary.clone(),
+             fork_tag: identity.fork_tag.clone(),
+             commit: identity.commit.clone(),
+-            binary_sha256: identity.binary_sha256.clone(),
++            binary_sha256: None,
+             protocol: *protocol,
+             capabilities: capabilities
+                 .as_ref()

@@ -810,7 +810,7 @@ async fn shell_endpoint_request_carries_its_clients_stored_caller() {
 
     let request = |id: &str| api::schema::Request {
         id: id.into(),
-        method: Method::Ping(api::schema::PingParams {}),
+        method: Method::Ping(api::schema::PingParams::default()),
     };
     let (respond_to, _rx) = std::sync::mpsc::channel();
     let remote = server
@@ -864,7 +864,7 @@ async fn a_client_with_no_lineage_is_never_a_trusted_local_caller() {
             73,
             api::schema::Request {
                 id: "a".into(),
-                method: Method::Ping(api::schema::PingParams {}),
+                method: Method::Ping(api::schema::PingParams::default()),
             },
             std::sync::mpsc::channel().0,
         )

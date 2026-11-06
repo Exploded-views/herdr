@@ -1,4 +1,4 @@
-// herdr-fork: the client can attach a caller token to every request (`caller_token` beside the request fields). Unofficial stopgap; see FORK.md.
+// herdr-fork: the client can attach a caller token to every request (`caller_token` beside the request fields); `status` reads the server identity. `status_with_identity` pings with the identity flag. Unofficial stopgap; see FORK.md.
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -93,23 +93,32 @@ impl ApiClient {
     }
 
     pub fn status(&self) -> Result<crate::api::RuntimeStatus, ApiClientError> {
-        self.read_status(None)
+        self.read_status(None, false)
+    }
+
+    /// `status` that also asks the server for its build identity (which starts its binary hash).
+    pub(crate) fn status_with_identity(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<crate::api::RuntimeStatus, ApiClientError> {
+        self.read_status(timeout, true)
     }
 
     pub(crate) fn status_with_timeout(
         &self,
         timeout: Duration,
     ) -> Result<crate::api::RuntimeStatus, ApiClientError> {
-        self.read_status(Some(timeout))
+        self.read_status(Some(timeout), false)
     }
 
     fn read_status(
         &self,
         timeout: Option<Duration>,
+        identity: bool,
     ) -> Result<crate::api::RuntimeStatus, ApiClientError> {
         let request = Request {
             id: "api-client:status".into(),
-            method: Method::Ping(PingParams::default()),
+            method: Method::Ping(PingParams { identity }),
         };
         let response = match timeout {
             Some(timeout) => {
@@ -129,10 +138,12 @@ impl ApiClient {
                 version,
                 protocol,
                 capabilities,
+                identity,
             } => Ok(crate::api::RuntimeStatus {
                 version: Some(version),
                 protocol: Some(protocol),
                 capabilities,
+                identity,
             }),
             result => Err(ApiClientError::UnexpectedResult(format!("{result:?}"))),
         }

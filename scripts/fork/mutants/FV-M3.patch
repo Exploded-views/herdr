@@ -1,0 +1,14 @@
+# herdr-fork: mutant FV-M3: the stale-server check ignores fork tags. Unofficial stopgap; see FORK.md.
+diff --git a/src/cli/status.rs b/src/cli/status.rs
+index 8fbe4adc..19554aae 100644
+--- a/src/cli/status.rs
++++ b/src/cli/status.rs
+@@ -445,7 +445,7 @@ fn server_differs_from_client(
+     client_version: &str,
+     client_tag: Option<&str>,
+ ) -> bool {
+-    server_version != client_version || server_tag != client_tag
++    server_version != client_version
+ }
+ 
+ fn print_json(value: &impl Serialize) -> std::io::Result<()> {

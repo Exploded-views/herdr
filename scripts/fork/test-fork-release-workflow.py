@@ -467,7 +467,14 @@ class ForkReleaseWorkflow(unittest.TestCase):
         lines = logical_lines(step_named(self.jobs["build"], "Check the binary's architecture and that it runs")["run"])
         strict_shell(lines, "binary check")
         self.assertEqual(lines.count('file "$bin" | grep -Eq "$FILE_EXPECT"'), 1)
-        self.assertEqual(lines.count('printf \'%s\' "$out" | grep -qF "$base"'), 1)
+        # `--version` stays upstream-identical: the whole line is exactly `herdr <base>`. The fork tag
+        # is checked separately, in the client status JSON, which carries what was baked in.
+        self.assertEqual(lines.count('printf \'%s\' "$out" | grep -qxF "herdr $base"'), 1)
+        self.assertEqual([l for l in lines if "grep -q" in l and "$out" in l], ['printf \'%s\' "$out" | grep -qxF "herdr $base"'])
+        self.assertEqual(lines.count('status="$(' + GUARDED_PREFIX + ' "$bin" status client --json)"'), 1)
+        self.assertEqual(lines.count('printf \'%s\' "$status" | grep -qF "\\"fork_tag\\":\\"$TAG\\""'), 1)
+        build = step_named(self.jobs["build"], "Build")
+        self.assertEqual((build.get("env") or {}).get("HERDR_FORK_TAG"), "${{ needs.prepare.outputs.tag }}")
         self.assertEqual([l for l in lines if "||" in l], [])
         # macOS's /bin/bash 3.2 treats an empty array as unbound under `set -u`, and the aarch64
         # darwin target has an empty RUN_PREFIX, so the prefix must be expanded in the guarded form.
@@ -690,6 +697,9 @@ MUTATIONS = [
     ("prepare checkout ref removed", _all("          ref: ${{ github.sha }}\n          fetch-depth: 0\n", "          fetch-depth: 0\n", 1)),
     ("triggering-commit equality check removed", _all('          if [ "$sha" != "$GITHUB_SHA" ]; then\n            echo "error: $TAG ($sha) is not the triggering commit $GITHUB_SHA" >&2\n            exit 1\n          fi\n', "", 1)),
     ("triggering-commit equality without exit 1", _all('triggering commit $GITHUB_SHA" >&2\n            exit 1', 'triggering commit $GITHUB_SHA" >&2', 1)),
+    ("version check loosened to a substring", _all('grep -qxF "herdr $base"', 'grep -qF "$base"')),
+    ("status tag check removed", _all('          printf \'%s\' "$status" | grep -qF "\\"fork_tag\\":\\"$TAG\\""\n', "")),
+    ("status tag check without the tag", _all('"\\"fork_tag\\":\\"$TAG\\""', '"fork_tag"')),
     ("architecture check removed", _all('          file "$bin" | grep -Eq "$FILE_EXPECT"\n', "")),
     ("tarball count check removed", _all("          test \"$(find dist -name '*.tar.gz' | wc -l)\" -eq 4\n", "")),
     ("checksum count check removed", _all("          test \"$(find dist -name '*.sha256' | wc -l)\" -eq 4\n", "")),

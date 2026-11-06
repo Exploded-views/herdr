@@ -3512,6 +3512,12 @@
           "type": "object"
         },
         "PingParams": {
+          "properties": {
+            "identity": {
+              "description": "Ask for the server's build identity, including its binary hash. The first such ping\nstarts the hash; any other ping reports only what is already known.",
+              "type": "boolean"
+            }
+          },
           "type": "object"
         },
         "PluginActionInvokeParams": {
@@ -9507,6 +9513,20 @@
           "oneOf": [
             {
               "properties": {
+                "binary": {
+                  "description": "The server's own executable path.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "binary_sha256": {
+                  "description": "The sha256 of the server's executable; absent until the server has hashed it.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "capabilities": {
                   "anyOf": [
                     {
@@ -9517,6 +9537,20 @@
                     }
                   ],
                   "default": null
+                },
+                "commit": {
+                  "description": "The git commit the build was made from; absent when the build had no git.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fork_tag": {
+                  "description": "The fork release tag baked into the build (`v0.9.5-ev.3`); absent for an untagged build.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "protocol": {
                   "format": "uint32",

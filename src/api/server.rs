@@ -1,4 +1,4 @@
-// herdr-fork: build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
+// herdr-fork: the `ping` result carries the server identity and the server hashes its binary on the first identity request; build a Caller (peer lineage, optional token, remote flag) per connection and hand it to every dispatch; each connection gets a number for the input log. Unofficial stopgap; see FORK.md.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,6 +161,8 @@ fn start_server_inner(
         }
     };
 
+    // Cheap: fixes the binary path. The hash waits for the first identity request.
+    crate::build_info::on_server_start();
     Ok(ServerHandle {
         _thread: thread,
         path,
@@ -624,13 +626,21 @@ fn handle_request(
     stop_caller: Option<String>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 ) -> String {
-    if matches!(&request.method, Method::Ping(_)) {
+    if let Method::Ping(params) = &request.method {
+        // Only an identity ping may start the binary hash; the checks that ping first (every
+        // CLI command, attach, autodetect) must not.
+        let identity = if params.identity {
+            crate::build_info::server_identity()
+        } else {
+            crate::build_info::server_identity_cached()
+        };
         return serde_json::to_string(&SuccessResponse {
             id: request.id,
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
                 capabilities,
+                identity,
             },
         })
         .unwrap_or_else(|_| {
@@ -1658,6 +1668,66 @@ mod tests {
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    fn ping(identity: bool) -> String {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        handle_request(
+            Request {
+                id: "req_id".into(),
+                method: Method::Ping(crate::api::schema::PingParams { identity }),
+            },
+            &Caller::test_outside(),
+            &tx,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_default_ping_does_not_start_the_hash_and_an_identity_ping_does() {
+        for _ in 0..3 {
+            let value: serde_json::Value = serde_json::from_str(&ping(false)).unwrap();
+            assert!(value["result"].get("binary_sha256").is_none());
+        }
+        assert_eq!(crate::build_info::hash_runs(), 0);
+        ping(true);
+        ping(true);
+        assert_eq!(crate::build_info::hash_runs(), 1);
+    }
+
+    #[test]
+    fn ping_response_reports_the_server_identity() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_id".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &Caller::test_outside(),
+            &tx,
+            None,
+            None,
+            None,
+            None,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let result = &value["result"];
+        assert_eq!(
+            result["binary"],
+            std::fs::canonicalize(std::env::current_exe().unwrap())
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            result["fork_tag"].as_str(),
+            crate::build_info::fork_tag(),
+            "{result}"
+        );
+        assert_eq!(result["commit"].as_str(), crate::build_info::commit());
     }
 
     #[test]

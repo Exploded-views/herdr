@@ -1,4 +1,4 @@
-// herdr-fork: adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy, with the pane's input mode), and the access.log result (AccessInputLog). Unofficial stopgap; see FORK.md.
+// herdr-fork: the `ping` result carries the server identity; adds the access.caller.* results (AccessCallerToken, AccessCallers) and the access.pane.* result (AccessPolicy, with the pane's input mode), and the access.log result (AccessInputLog). Unofficial stopgap; see FORK.md.
 use serde::{Deserialize, Serialize};
 
 use super::access::{AccessCallerInfo, AccessInputEvent, CallerToken};
@@ -17,7 +17,7 @@ use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
     PluginPaneInfo,
 };
-use super::server::ServerCapabilities;
+use super::server::{ServerCapabilities, ServerIdentity};
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
@@ -49,6 +49,8 @@ pub enum ResponseResult {
         protocol: u32,
         #[serde(default)]
         capabilities: Option<ServerCapabilities>,
+        #[serde(flatten)]
+        identity: ServerIdentity,
     },
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,

@@ -32,6 +32,16 @@ The full list, with each change marked *upstream candidate* or *fork-only*, is b
 
 ## Unreleased
 
+- `herdr --version` stays identical to upstream's (`herdr 0.9.5`). The fork identity is in
+  `herdr status` instead. The tagged line (`herdr 0.9.5 (fork v0.9.5-ev.3)`) is deferred until
+  crewkit accepts `herdr X.Y.Z (fork vTAG)`; it is one constant (`VERSION_LINE_NAMES_FORK`). *fork-only*
+- `herdr status server` (and `--json`; also the `server:` block of plain `herdr status` and
+  `.server` of `herdr status --json`) shows which build the running server is: its
+  resolved executable path (symlinks followed once, at server start; `binary`), fork tag, git commit and the sha256 of its binary, which the
+  server computes in the background on the first `herdr status` request (the ping carries an opt-in `identity` flag; other pings never start it), never at start. It is null until ready, and for the life of the server if the binary cannot be read (logged once). `herdr status client`
+  keeps its own `binary:` line and gains a `fork:` line (and `fork_tag` in `--json`). `herdr status` reports a server with a different fork tag
+  as stale, including a tagged client against an upstream server. The `ping` result gains the
+  four optional fields; no protocol bump. *fork-only*
 - Tests no longer touch the real macOS launchd domain. A `HERDR_NO_LAUNCHD` switch turns the
   launchd start off (the server is then spawned directly), unit tests refuse it, and the test
   harness sets it. Two unit tests that really use launchd, on `dev.herdr.test.` labels, run only in

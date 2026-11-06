@@ -1,4 +1,4 @@
-// herdr-fork: self-update and background update checks disabled (FORK_BUILD). Unofficial stopgap; see FORK.md.
+// herdr-fork: self-update and background update checks disabled (FORK_BUILD); test fixtures carry the server identity. Unofficial stopgap; see FORK.md.
 //! Self-update mechanism.
 //!
 //! Checks the hosted herdr.dev update manifest for newer versions.
@@ -3383,6 +3383,7 @@ mod tests {
                 health_check: true,
                 ssh_agent_registration: false,
             }),
+            identity: Default::default(),
         };
         let missing_baseline = crate::api::RuntimeStatus {
             capabilities: None,
@@ -3458,6 +3459,7 @@ mod tests {
                     health_check: true,
                     ssh_agent_registration: false,
                 }),
+                identity: Default::default(),
             },
         };
 
@@ -3642,6 +3644,7 @@ mod tests {
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: None,
+            identity: Default::default(),
         };
         let release = ReleaseInfo {
             version: Version::parse("0.5.6").unwrap(),
@@ -3717,6 +3720,7 @@ mod tests {
                     health_check: true,
                     ssh_agent_registration: false,
                 }),
+                identity: Default::default(),
             },
         };
         let decisions = confirm_running_server_update_action(

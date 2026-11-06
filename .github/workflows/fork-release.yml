@@ -219,6 +219,8 @@ jobs:
         run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
 
       - name: Build
+        env:
+          HERDR_FORK_TAG: ${{ needs.prepare.outputs.tag }}
         run: cargo build --locked --release --target "$TARGET"
 
       - name: Check the binary's architecture and that it runs
@@ -233,7 +235,10 @@ jobs:
           read -r -a prefix <<< "$RUN_PREFIX"
           out="$(${prefix[@]+"${prefix[@]}"} "$bin" --version)"
           echo "$out"
-          printf '%s' "$out" | grep -qF "$base"
+          printf '%s' "$out" | grep -qxF "herdr $base"
+          status="$(${prefix[@]+"${prefix[@]}"} "$bin" status client --json)"
+          echo "$status"
+          printf '%s' "$status" | grep -qF "\"fork_tag\":\"$TAG\""
 
       - name: Package
         shell: bash
